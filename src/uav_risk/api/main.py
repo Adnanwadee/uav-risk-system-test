@@ -1,11 +1,12 @@
+#api/main.py
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Any, Dict
 
 from uav_risk.stage1.loader import load_stage1_artifacts
 from uav_risk.stage1.infer import run_stage1_inference
-from uav_risk.stage2.schemas import Stage2Request, Stage2Response
-from uav_risk.stage2.pipeline import run_stage2_report
+
+
 from uav_risk.stage2.api import router as stage2_router
 
 app = FastAPI(title="UAV Risk System")
@@ -61,6 +62,3 @@ def stage1_expected_columns():
         "preprocessor_type": type(pre).__name__,
     }
 
-@app.post("/stage2/report", response_model=Stage2Response)
-def stage2_report(payload: Stage2Request):
-    return run_stage2_report(payload.scenario, artifacts_dir="artifacts")

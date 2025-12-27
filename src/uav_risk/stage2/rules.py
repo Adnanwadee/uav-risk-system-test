@@ -4,72 +4,37 @@ from typing import Any, Dict
 from .schemas import RulesResult, RuleHit
 
 
-def run_rules(
-    stage1_facts: Dict[str, Any],
-    inputs_snapshot: Dict[str, Any],
-) -> RulesResult:
-    """
-    Deterministic rules engine.
-    HARD rules => NO_GO
-    SOFT rules => CAUTION
-
-    This function MUST be:
-    - deterministic
-    - side-effect free
-    - unit-testable
-    """
-
-    # --------------------------------------------------
-    # IMPORTANT: initialize computed explicitly
-    # --------------------------------------------------
+def run_rules(stage1_facts: Dict[str, Any], inputs_snapshot: Dict[str, Any]) -> RulesResult:
     res = RulesResult(
         hard_violations=[],
         advisories=[],
-        computed={},   # 🔴 هذا هو الحل الجذري للمشكلة
-    )
+        computed={},)
+    # computed موجود تلقائياً default_factory
 
-    # --------------------------------------------------
-    # Extract Stage-1 facts safely
-    # --------------------------------------------------
     risk_score = stage1_facts.get("risk_score")
     predicted = str(stage1_facts.get("predicted_class", "")).lower()
     confidence = float(stage1_facts.get("confidence", 0.0) or 0.0)
 
-    # --------------------------------------------------
-    # HARD RULES
-    # --------------------------------------------------
-    # Model predicts High Risk with very high confidence
     if predicted.startswith("high") and confidence >= 0.95:
         res.hard_violations.append(
             RuleHit(
                 rule_id="HARD_MODEL_HIGH_CONF",
                 severity="HARD",
                 message="Model predicts High Risk with high confidence.",
-                evidence={
-                    "predicted_class": stage1_facts.get("predicted_class"),
-                    "confidence": confidence,
-                },
+                evidence={"predicted_class": stage1_facts.get("predicted_class"), "confidence": confidence},
             )
         )
 
-    # --------------------------------------------------
-    # SOFT RULES
-    # --------------------------------------------------
-    # Medium risk from model
     if predicted.startswith("medium"):
         res.advisories.append(
             RuleHit(
                 rule_id="SOFT_MODEL_MEDIUM",
                 severity="SOFT",
                 message="Model predicts Medium Risk; proceed with caution.",
-                evidence={
-                    "predicted_class": stage1_facts.get("predicted_class"),
-                    "confidence": confidence,
-                },
+                evidence={"predicted_class": stage1_facts.get("predicted_class"), "confidence": confidence},
             )
         )
 
-    # Weather-based advisories (only if data exists)
     wind = inputs_snapshot.get("environment.weather.wind_mps")
     gust = inputs_snapshot.get("environment.weather.gust_mps")
 
@@ -93,6 +58,7 @@ def run_rules(
             )
         )
 
+
     # --------------------------------------------------
     # COMPUTED FIELDS (ALWAYS SET)
     # --------------------------------------------------
@@ -100,5 +66,8 @@ def run_rules(
         len(res.hard_violations) + len(res.advisories)
     )
     res.computed["risk_score"] = risk_score
+
+    # 🔴 ASSERT قاتل – لو فشلت هنا نعرف فورًا
+    assert isinstance(res, RulesResult), "run_rules MUST return RulesResult"
 
     return res

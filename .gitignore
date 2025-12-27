@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+.env
+.venv/
+venv/
+env/
+
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Build / packaging
+dist/
+build/
+*.egg-info/
+
+# Large artifacts caches
+.cache/

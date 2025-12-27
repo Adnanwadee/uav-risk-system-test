@@ -5,15 +5,18 @@ requires-python = ">=3.10,<3.12"
 
 dependencies = [
     "numpy==1.24.4",
-    "pandas>=1.5,<2.1",
+    "pandas",
     "scikit-learn==1.2.2",
-    "xgboost>=1.7,<2.0",
-    "joblib>=1.1",
+    "xgboost==1.7.6",
+    "joblib",
     "pydantic>=2",
-    "fastapi>=0.100",
+    "fastapi",
     "uvicorn[standard]",
-    "python-multipart"
+    "python-multipart",
+    "requests",
+    "rank-bm25"
 ]
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

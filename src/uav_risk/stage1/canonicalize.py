@@ -1,3 +1,4 @@
+#canonicalize.py
 from typing import Dict, Any, List
 import pandas as pd
 import numpy as np
@@ -8,6 +9,7 @@ EXPECTED_COLUMNS = [
     "uav.mass_kg",
     "uav.max_speed_mps",
     "uav.battery_model.hover_power_W",
+    "airspace.altitude_agl_max_m",
 
     "environment.weather.wind_mps",
     "environment.weather.gust_mps",

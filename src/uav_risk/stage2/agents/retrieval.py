@@ -3,6 +3,26 @@ from typing import List
 from ..schemas import RiskDriver
 
 
+from typing import List
+from uav_risk.stage2.schemas import EvidenceSnippet
+from uav_risk.stage2.rag.loader import DocChunk
+
+
+def chunks_to_evidence(chunks: List[DocChunk], max_chars: int = 900) -> List[EvidenceSnippet]:
+    out: List[EvidenceSnippet] = []
+    for c in chunks:
+        text = (c.text or "").strip()
+        if len(text) > max_chars:
+            text = text[:max_chars].rstrip() + "..."
+        out.append(
+            EvidenceSnippet(
+                source=c.source,
+                citation=c.citation,
+                content=text,
+            )
+        )
+    return out
+
 def build_retrieval_queries(drivers: List[RiskDriver]) -> List[str]:
     qs: List[str] = []
     for d in drivers:

@@ -26,13 +26,14 @@ from uav_risk.stage2.llm.report_writer import write_llm_report
 
 
 # ============================
-# Stage-2 Decision Policy v3 (Product-grade)
+# Stage-2 Decision Policy v4 (Product-grade, Non-fragile)
 # ============================
 # Principles:
 # - Stage-2 is the authority.
-# - Stage-1 model is a signal (evidence), not a veto by itself.
-# - HARD violations come only from explicit constraints (rules engine), not the model alone.
-# - If safety inputs are missing => INSUFFICIENT_DATA (regulator-grade posture).
+# - Stage-1 model is a signal (NOT a veto).
+# - HARD violations come only from explicit constraints (rules engine).
+# - If safety inputs are missing => never return GO.
+# - Use aggregated risk scoring to support GO / CAUTION / NO_GO robustly.
 
 
 CRITICAL_KEYS = [
@@ -106,7 +107,7 @@ def _risk_driver_stats(drivers: List[RiskDriver]) -> Dict[str, Any]:
     Compute severity stats for operational drivers.
 
     IMPORTANT:
-    - Excludes meta drivers that must not trigger NO_GO:
+    - Excludes meta drivers that must not trigger decisions directly:
       MODEL_PREDICTION, RULES_TRIGGERED, MISSING_SAFETY_INPUTS
     - Correctly counts LOW / MEDIUM / HIGH / UNKNOWN.
     """
@@ -136,28 +137,61 @@ def _risk_driver_stats(drivers: List[RiskDriver]) -> Dict[str, Any]:
 
     return {"high": hi, "medium": med, "low": low, "unknown": unk, "drivers_used": used}
 
+
+def _model_points(predicted_class: str, confidence: float) -> int:
+    pred = str(predicted_class or "").lower().strip()
+
+    if pred.startswith("high"):
+        if confidence >= 0.98:
+            return 5
+        if confidence >= 0.90:
+            return 4
+        return 3
+
+    if pred.startswith("medium"):
+        return 3 if confidence >= 0.90 else 2
+
+    if pred.startswith("low"):
+        return 0 if confidence >= 0.90 else 1
+
+    # Unknown / missing
+    return 2
+
+
+def _risk_score_points(risk_score: float | None) -> int:
+    if risk_score is None:
+        return 1
+    try:
+        rs = float(risk_score)
+    except Exception:
+        return 1
+
+    if rs >= 2.7:
+        return 2
+    if rs >= 2.2:
+        return 1
+    return 0
+
+
 def _stage2_decision_policy(
     *,
-    base_decision: str,
     rules_dict: Dict[str, Any],
     contract: Dict[str, Any],
     inputs_snapshot: Dict[str, Any],
     stage1_facts: Dict[str, Any],
     risk_drivers: List[RiskDriver],
+    data_quality: Dict[str, Any],
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Returns (final_decision, policy_debug).
 
-    Product-grade policy:
-    1) Any HARD violation => NO_GO (explicit constraints only).
-    2) If safety_ready is False => never GO.
-    3) Operational drivers drive the decision; the model is a strong signal but not a veto.
-    4) >=2 HIGH operational drivers => at least CAUTION.
-       Escalate to NO_GO only if model_high_conf ALSO present (or if hard violations exist).
-    5) Model high-conf High Risk:
-       - Alone => CAUTION
-       - With >=1 HIGH operational driver => NO_GO (strong combined evidence)
-    6) Any advisories => at least CAUTION (unless already NO_GO / INSUFFICIENT_DATA)
+    Product-grade policy (stable, non-fragile):
+    1) HARD violations => NO_GO (explicit rules only).
+    2) safety_ready gate => never GO (=> CAUTION).
+    3) Operational HIGH drivers => NO_GO (they represent quantified/validated hazards).
+    4) Aggregate points decide CAUTION/GO.
+       - Model contributes points but never alone forces NO_GO.
+       - Model high-conf High Risk => at least CAUTION (signal).
     """
 
     policy_debug: Dict[str, Any] = {"notes": []}
@@ -166,72 +200,92 @@ def _stage2_decision_policy(
     adv = rules_dict.get("advisories") or []
     safety_ready = bool(contract.get("safety_ready", True))
 
-    # Stats from drivers (excludes MODEL_PREDICTION / RULES_TRIGGERED / MISSING_SAFETY_INPUTS)
-    stats = _risk_driver_stats(risk_drivers)
-    policy_debug["driver_stats"] = {k: stats[k] for k in ("high", "medium", "unknown")}
-
-    # Model signal
-    predicted = str(stage1_facts.get("predicted_class", "")).lower()
-    confidence = float(stage1_facts.get("confidence", 0.0) or 0.0)
-    model_high_conf = predicted.startswith("high") and confidence >= 0.95
-    policy_debug["model_high_conf"] = model_high_conf
-    policy_debug["model_confidence"] = confidence
-    policy_debug["model_predicted_class"] = stage1_facts.get("predicted_class")
-
     # 1) HARD constraints => NO_GO
     if isinstance(hard, list) and len(hard) > 0:
         policy_debug["notes"].append("HARD violations present => NO_GO.")
+        policy_debug["risk_points"] = 999
         return "NO_GO", policy_debug
 
-    # 2) Safety gate: if not safety_ready => never GO
+    # 2) Safety gate: never GO if safety inputs missing
     if not safety_ready:
-        policy_debug["notes"].append("Safety not ready => decision cannot be GO.")
-        if base_decision == "INSUFFICIENT_DATA":
-            return "INSUFFICIENT_DATA", policy_debug
+        policy_debug["notes"].append("Safety not ready (missing safety-critical inputs) => CAUTION.")
         return "CAUTION", policy_debug
 
-    # Start from base decision
-    decision = base_decision
+    # Stats from drivers (excludes meta drivers)
+    stats = _risk_driver_stats(risk_drivers)
+    policy_debug["driver_stats"] = {k: stats[k] for k in ("high", "medium", "low", "unknown")}
 
-    # Normalize: if base is NO_GO but only model caused it upstream, we still let policy decide.
-    # (We do not trust base_decision as an authority—Stage-2 is authority.)
-    if decision not in {"GO", "CAUTION", "NO_GO", "INSUFFICIENT_DATA"}:
-        decision = "INSUFFICIENT_DATA"
+    # 3) Operational HIGH drivers are authoritative hazards
+    if int(stats["high"]) >= 1:
+        policy_debug["notes"].append(">=1 HIGH operational driver => NO_GO (operational hazard).")
+        policy_debug["risk_points"] = 900
+        return "NO_GO", policy_debug
 
-    # 3) Operational escalation (product-grade)
-    # >=2 HIGH operational drivers => at least CAUTION (not automatic NO_GO)
-    if stats["high"] >= 2 and decision != "INSUFFICIENT_DATA":
-        policy_debug["notes"].append(">=2 HIGH operational drivers => at least CAUTION.")
-        decision = "CAUTION" if decision == "GO" else decision
+    # Model signal
+    predicted_class = stage1_facts.get("predicted_class", "UNKNOWN")
+    confidence = float(stage1_facts.get("confidence", 0.0) or 0.0)
+    risk_score = stage1_facts.get("risk_score", None)
 
-        # Escalate to NO_GO only if model_high_conf supports it
-        if model_high_conf:
-            policy_debug["notes"].append(">=2 HIGH operational drivers + model high-conf => NO_GO.")
-            decision = "NO_GO"
+    policy_debug["model_predicted_class"] = predicted_class
+    policy_debug["model_confidence"] = confidence
+    policy_debug["model_risk_score"] = risk_score
 
-    # 4) Model high-confidence High Risk handling
+    model_high_conf = str(predicted_class).lower().startswith("high") and confidence >= 0.95
+    policy_debug["model_high_conf"] = model_high_conf
+
+    # Data quality
+    completeness = float(data_quality.get("completeness_ratio", 0.0) or 0.0)
+    missing_keys = data_quality.get("missing_keys") or []
+    policy_debug["completeness_ratio"] = completeness
+    policy_debug["missing_key_count"] = len(missing_keys)
+
+    # dq flags
+    dq_comms_present = int(inputs_snapshot.get("dq_comms_present", 1) or 0)
+    dq_sensors_present_pct = float(inputs_snapshot.get("dq_sensors_present_pct", 1.0) or 0.0)
+
+    # 4) Aggregate risk points (NO direct NO_GO from model)
+    points = 0
+
+    # (A) Model contributes points (signal only)
+    points += _model_points(str(predicted_class), confidence)
+    points += _risk_score_points(risk_score)
+
+    # (B) Operational non-HIGH drivers
+    points += 1 * int(stats["medium"])
+    points += min(2, int(stats["unknown"]))  # cap unknown penalty
+
+    # (C) Data quality penalties
+    if completeness < 0.85:
+        points += 3
+    elif completeness < 0.95:
+        points += 1
+
+    if dq_comms_present == 0:
+        points += 1
+    if dq_sensors_present_pct < 0.5:
+        points += 1
+
+    # (D) Advisories (soft)
+    if isinstance(adv, list) and len(adv) > 0:
+        points += min(2, len(adv))
+
+    policy_debug["risk_points"] = points
+
+    # 5) Decision thresholds
+    # - Model high-conf High Risk => at least CAUTION (not NO_GO)
     if model_high_conf:
-        if decision == "GO":
-            policy_debug["notes"].append("Model High-Risk high-confidence => elevate GO to CAUTION (not veto).")
-            decision = "CAUTION"
+        policy_debug["notes"].append("Model high-confidence High Risk => minimum CAUTION (signal only).")
+        return "CAUTION", policy_debug
 
-        # If at least one HIGH operational driver exists, we accept combined evidence => NO_GO
-        if stats["high"] >= 1:
-            policy_debug["notes"].append("Model high-conf + >=1 HIGH operational driver => NO_GO.")
-            decision = "NO_GO"
+    # - Otherwise use points
+    if points >= 6:
+        policy_debug["notes"].append("Aggregate risk points >= 6 => CAUTION.")
+        return "CAUTION", policy_debug
 
-    # 5) Advisories ensure at least CAUTION (unless already NO_GO / INSUFFICIENT_DATA)
-    if isinstance(adv, list) and len(adv) > 0 and decision == "GO":
-        policy_debug["notes"].append("Advisories present and decision GO => CAUTION.")
-        decision = "CAUTION"
+    if points >= 3:
+        return "CAUTION", policy_debug
 
-    # 6) Extra guard: missing safety keys => cannot be GO
-    missing_safety = contract.get("missing_safety_keys") or []
-    if missing_safety and decision == "GO":
-        policy_debug["notes"].append("Missing safety keys => cannot be GO, forcing CAUTION.")
-        decision = "CAUTION"
-
-    return decision, policy_debug
+    return "GO", policy_debug
 
 
 def run_stage2_report(
@@ -336,16 +390,17 @@ def run_stage2_report(
     # --------------------------------------------------
     # 7) Stage-2 Final Decision (AVIATION-GRADE authority)
     # --------------------------------------------------
-    # Base decision is informational only (Stage-2 is the authority)
-    base_decision = str(s1.get("decision", "INSUFFICIENT_DATA"))
+    # IMPORTANT: We DO NOT take Stage-1 "decision" as base. Stage-1 is signal-only.
+    dq_summary = ep.data_quality.model_dump()
+    dq_summary = sanitize_for_json(dq_summary)
 
     decision, policy_debug = _stage2_decision_policy(
-        base_decision=base_decision,
         rules_dict=rules_dict,
         contract=contract,
         inputs_snapshot=inputs_snapshot,
         stage1_facts=s1,
         risk_drivers=rc_drivers,
+        data_quality=dq_summary,
     )
 
     policy_debug = sanitize_for_json(policy_debug)
@@ -383,7 +438,7 @@ def run_stage2_report(
         "stage1_facts": s1,
         "rules": rules_dict,
         "inputs_snapshot": inputs_snapshot,
-        "data_quality": ep.data_quality.model_dump(),
+        "data_quality": dq_summary,
         "risk_drivers": ep.risk_drivers,           # legacy (keep)
         "risk_context": risk_context_json,         # comprehensive context
         "evidence_snippets": rag_evidence,         # RAG evidence
@@ -410,7 +465,7 @@ def run_stage2_report(
         report_md=report_md,
         report_json={"sections": sections},
         evidence=ep.evidence_snippets,
-        quality={"data_quality": ep.data_quality.model_dump(), "input_contract": contract},
+        quality={"data_quality": dq_summary, "input_contract": contract},
     )
 
     payload = sanitize_for_json(resp.model_dump())

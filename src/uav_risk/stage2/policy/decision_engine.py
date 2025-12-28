@@ -10,37 +10,32 @@ def decide_from_risk_context(
     safety_ready: bool,
 ) -> str:
     """
-    Product-grade Stage-2 decision policy.
-    - Model output is informational (NOT a veto).
-    - Decision is based on operational drivers + safety readiness.
+    Lightweight decision helper (legacy).
+    NOTE: The authoritative policy is implemented in stage2/pipeline.py (_stage2_decision_policy).
+    This function remains for backward compatibility and simple calls.
     """
-
-    # Hard veto conditions derived from operational/safety drivers
-    hard_hits = []
-    caution_hits = []
-
-    for d in risk_drivers:
-        # HARD: clearly unsafe domains with HIGH severity
-        if d.driver_id in {
-            "WEATHER_GUST",
-            "GNSS_JAMMING",
-            "GNSS_MULTIPATH",
-            "EM_INTERFERENCE",
-        } and d.severity == "HIGH":
-            hard_hits.append(d.driver_id)
-
-        # CAUTION: medium severity drivers
-        if d.severity == "MEDIUM":
-            caution_hits.append(d.driver_id)
 
     # If safety isn't ready, never return GO
     if not safety_ready:
-        return "CAUTION" if not hard_hits else "NO_GO"
-
-    if hard_hits:
-        return "NO_GO"
-
-    if caution_hits:
         return "CAUTION"
 
+    hard_hits = 0
+    caution_hits = 0
+
+    for d in (risk_drivers or []):
+        sev = str(getattr(d, "severity", "UNKNOWN")).upper().strip()
+        did = str(getattr(d, "driver_id", "")).upper().strip()
+
+        # HARD: clearly unsafe domains with HIGH severity
+        if did in {"WEATHER_GUST", "GNSS_JAMMING"} and sev == "HIGH":
+            hard_hits += 1
+
+        # CAUTION: medium severity drivers
+        if sev == "MEDIUM":
+            caution_hits += 1
+
+    if hard_hits > 0:
+        return "NO_GO"
+    if caution_hits > 0:
+        return "CAUTION"
     return "GO"

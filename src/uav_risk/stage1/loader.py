@@ -7,15 +7,16 @@ import __main__
 
 def to_string_safe(x):
     """
-    Must match EXACTLY the function used in Stage-1 preprocessing
+    MUST match EXACTLY the function used during Stage-1 preprocessing.
+    This is required so legacy pickles can be loaded safely.
     """
     try:
         return x.astype(str)
     except Exception:
         return x
 
-# Inject into __main__ so pickle can find it
-__main__.to_string_safe = to_string_safe  # 🔴 THIS IS THE KEY LINE
+# Inject into __main__ so pickle can resolve the symbol
+__main__.to_string_safe = to_string_safe  # ✅ KEY LINE
 
 
 from dataclasses import dataclass
@@ -37,7 +38,9 @@ class Stage1Artifacts:
 def load_stage1_artifacts(artifacts_dir: str | Path = "artifacts") -> Stage1Artifacts:
     d = Path(artifacts_dir)
 
-    policy = json.loads((d / "stage1_policy_config_v2.json").read_text(encoding="utf-8"))
+    policy = json.loads(
+        (d / "stage1_policy_config_v2.json").read_text(encoding="utf-8")
+    )
 
     # These pickles REQUIRE __main__.to_string_safe
     preprocessor = joblib.load(d / "uav_stage1_preprocessor_v2.pkl")

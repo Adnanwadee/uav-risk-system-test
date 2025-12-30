@@ -24,6 +24,11 @@ jobs:
           pip install --upgrade pip
           pip install .
 
+      - name: Functional test (run system)
+        run: |
+          python run.py
+
+
       - name: Basic test (import check)
         run: |
           python - <<EOF

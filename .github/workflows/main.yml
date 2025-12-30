@@ -1,0 +1,41 @@
+name: CI/CD Pipeline - UAV Risk System
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-test-docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install .
+
+      - name: Basic test (import check)
+        run: |
+          python - <<EOF
+          import sys
+          print("Python OK:", sys.version)
+          import uav_risk
+          print("uav_risk imported successfully")
+          EOF
+
+      - name: Build Docker image
+        run: |
+          docker build -t uav-risk-system .
+
+      - name: CI/CD finished
+        run: echo "Pipeline completed successfully"

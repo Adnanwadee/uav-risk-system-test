@@ -1,10 +1,12 @@
 name: CI/CD Pipeline - UAV Risk System
 
 on:
+  workflow_dispatch:
   push:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+
 
 jobs:
   build-test-docker:
@@ -25,6 +27,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install .
+          
 
       
       - name: Functional test (run system)

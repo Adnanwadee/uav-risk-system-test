@@ -18,3 +18,6 @@ dependencies = [
     "streamlit",
     "matplotlib==3.7.3"
 ]
+[tool.ruff.per-file-ignores]
+"src/uav_risk/stage1/loader.py" = ["E402"]
+"ui/app.py" = ["E402"]

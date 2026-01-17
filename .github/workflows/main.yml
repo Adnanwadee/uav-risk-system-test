@@ -1,11 +1,7 @@
-name: CI/CD Pipeline - UAV Risk System
+name: CI/CD Pipeline - UAV Risk System (FAIL DEMO)
 
 on:
   workflow_dispatch:
-  push:
-    branches: ["main"]
-  pull_request:
-    branches: ["main"]
 
 jobs:
   build-test-docker:
@@ -25,32 +21,15 @@ jobs:
           pip install --upgrade pip
           pip install .
 
-      - name: Functional test (import check)
+      - name: Functional test (import check) ✅
         run: |
           python - <<EOF
           import uav_risk
           print("uav_risk imported successfully")
           EOF
 
-      - name: Non-functional test (code quality - flake8)
+      - name: Non-functional test (code quality - flake8) ❌ (will fail on purpose)
         run: |
           pip install flake8
-          flake8 src --count --select=E9,F63,F7,F82 --show-source --statistics
-
-      # ✅ Login to DockerHub using GitHub Secrets
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # ✅ Build & Push Docker Image to DockerHub
-      - name: Build and Push Docker Image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/uav-risk-system:latest
-
-      - name: CI/CD finished
-        run: echo "CI/CD pipeline completed successfully"
+          echo "This workflow is supposed to fail because of flake8 (non-functional test)"
+          flake8 src --count --select=F401 --show-source --statistics

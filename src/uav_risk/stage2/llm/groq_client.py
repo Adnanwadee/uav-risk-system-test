@@ -14,7 +14,7 @@ class GroqClient:
 
     @classmethod
     def from_env(cls) -> "GroqClient":
-        api_key = os.environ.get("GROQ_API_KEY", "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").strip()
+        api_key = os.environ.get("GROQ_API_KEY", "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").strip()
         if not api_key:
             raise RuntimeError("GROQ_API_KEY is missing.")
         base_url = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/")

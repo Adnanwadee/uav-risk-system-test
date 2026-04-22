@@ -1,0 +1,35 @@
+name: CI/CD Pipeline - UAV Risk System (FAIL DEMO)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-test-docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install .
+
+      - name: Functional test (import check) ✅
+        run: |
+          python - <<EOF
+          import uav_risk
+          print("uav_risk imported successfully")
+          EOF
+
+      - name: Non-functional test (code quality - flake8) ❌ (will fail on purpose)
+        run: |
+          pip install flake8
+          echo "This workflow is supposed to fail because of flake8 (non-functional test)"
+          flake8 src --count --select=F401 --show-source --statistics

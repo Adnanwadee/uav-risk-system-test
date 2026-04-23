@@ -1,14 +1,23 @@
 # src/uav_risk/stage2/tools/toolbox.py
 from __future__ import annotations
 from typing import Dict, Any, List
-import json
 import logging
 from langchain_core.tools import tool
 
 from uav_risk.stage1.infer import run_stage1_inference
-from uav_risk.stage2.schemas import MLResult, RegulationChunk
+from uav_risk.stage2.schemas import MLResult
+
+# 1. استدعاء محرك الـ RAG الذكي الخاص بصديقك
+from uav_risk.stage2.rag.rag_core import RAGCore 
 
 logger = logging.getLogger(__name__)
+
+# 2. تهيئة المحرك مرة واحدة فقط في الذاكرة (لتجنب بطء تحميل الموديلات مع كل استعلام)
+try:
+    rag_engine = RAGCore()
+except Exception as e:
+    logger.error(f"Failed to load FAISS RAG Engine: {e}")
+    rag_engine = None
 
 # ==========================================
 # 1. ML Oracle Tool (Type-Safe & Isolated)
@@ -17,19 +26,9 @@ logger = logging.getLogger(__name__)
 def get_ml_risk_prediction(scenario: Dict[str, Any]) -> Dict[str, Any]:
     """
     Calls the XGBoost Statistical ML Model to predict flight risk.
-    MUST only be used if DataQualityProfile.is_ml_reliable == True.
-    
-    Args:
-        scenario: Dictionary of UAVScenario parameters.
-        
-    Returns:
-        Dict containing predicted_class, risk_score, and confidence.
     """
     try:
-        # run_stage1_inference now returns a Pydantic MLResult
         ml_result: MLResult = run_stage1_inference(scenario)
-        
-        # Return plain dict for LangGraph compatibility
         return {
             "predicted_class": ml_result.predicted_class,
             "risk_score": ml_result.risk_score,
@@ -37,48 +36,47 @@ def get_ml_risk_prediction(scenario: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"[TOOL_ML_ERROR] Inference failed: {e}")
+        # تم تصحيح الثغرة الأمنية هنا: الرفض المباشر عند الفشل
         return {
-            "predicted_class": "UNKNOWN",
-            "risk_score": 0.5,
+            "predicted_class": "HIGH_RISK",
+            "risk_score": 1.0,
             "confidence": 0.0,
             "error": str(e)
         }
 
 # ==========================================
-# 2. Legal Oracle Tool (Hybrid RAG Interface)
+# 2. Legal Oracle Tool (The Real Hybrid RAG)
 # ==========================================
 @tool("search_aviation_regulations")
 def search_aviation_regulations(query: str, context_tags: List[str] | None = None) -> List[Dict[str, Any]]:
     """
-    Searches the Hybrid RAG database for aviation regulations & safety thresholds.
-    
-    Args:
-        query: The specific legal/safety question.
-        context_tags: Optional metadata tags (e.g., ["BVLOS", "DENSE", "CLASS_C"]) to filter results.
-        
-    Returns:
-        List of relevant regulation chunks with article_id and content.
+    Searches the FAISS Vector database for aviation regulations using Semantic Search & Re-ranking.
     """
+    if not rag_engine:
+        return [{"article_id": "SYS_ERROR", "content": "RAG Engine offline. Abort.", "relevance_score": 0.0}]
+
     try:
-        # ---------------------------------------------------------
-        # TODO: Replace mock with actual Hybrid RAG call
-        # Example: rag_service.hybrid_search(query, metadata=context_tags)
-        # ---------------------------------------------------------
+        logger.info(f"[RAG SEARCH] Query: {query}")
         
-        # Mock response structured to match RegulationChunk
-        mock_results = [
-            {
-                "article_id": "EASA-UAS-01",
-                "content": "For UAVs <25kg, max sustained wind must not exceed 10 m/s unless certified.",
-                "relevance_score": 0.95
-            },
-            {
-                "article_id": "MANUAL-SEC-4",
-                "content": "If GNSS jamming > -75 dBm, initiate immediate RTH or controlled landing.",
-                "relevance_score": 0.88
-            }
-        ]
-        return mock_results
+        # 3. استدعاء المحرك الذكي (البحث + إعادة الترتيب)
+        docs = rag_engine.retrieve_optimized_context(query)
+        
+        results = []
+        for doc in docs:
+            # 4. استخراج الميتاداتا بدقة كما صممها صديقك
+            source_file = doc.metadata.get('source', 'Unknown').split('/')[-1]
+            page_num = doc.metadata.get('page', 'N/A')
+            score = doc.metadata.get('rerank_score', 0.0)
+            
+            # 5. تحويلها للصيغة التي يقبلها Agent LangGraph (RegulationChunk)
+            # دمج اسم الملف والصفحة لتكوين معرف فريد (article_id)
+            results.append({
+                "article_id": f"[{source_file} - Pg:{page_num}]",
+                "content": doc.page_content,
+                "relevance_score": float(score)
+            })
+            
+        return results
         
     except Exception as e:
         logger.error(f"[TOOL_RAG_ERROR] Regulation search failed: {e}")

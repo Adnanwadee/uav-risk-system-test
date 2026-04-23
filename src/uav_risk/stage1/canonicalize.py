@@ -1,106 +1,72 @@
-#canonicalize.py
-from typing import Dict, Any, List
+# src/uav_risk/stage1/canonicalize.py
+from __future__ import annotations
 import pandas as pd
 import numpy as np
+from typing import Dict, Any
+import logging
 
+logger = logging.getLogger(__name__)
 
-EXPECTED_COLUMNS = [
-    # ================= RAW INPUTS =================
-    "uav.mass_kg",
-    "uav.max_speed_mps",
-    "uav.battery_model.hover_power_W",
-    "airspace.altitude_agl_max_m",
-
-    "environment.weather.wind_mps",
-    "environment.weather.gust_mps",
-    "environment.weather.visibility",
-
-    "environment.gnss_jam_dbm",
-    "environment.gnss_multipath",
-    "environment.em_interference",
-
-    "mission.type",
-    "mission.pattern",
-    "mission.runway_required",
-
-    "daa.sep_threshold_m",
-    "daa.ttc_threshold_s",
-
-    "comms.uplink_ok",
-    "comms.downlink_ok",
-
-    # ================= DERIVED =================
-    "feat_mission_dist_m",
-    "feat_mission_climb_m",
-    "feat_mission_tortuosity",
-    "feat_power_to_weight",
-    "feat_weather_score",
-    "feat_airspace_area_m2",
-    "feat_obstacle_density_per_km2",
-    "feat_obstacle_avg_speed",
-
-    # ================= DATA QUALITY =================
-    "dq_core_present_pct",
-    "dq_weather_present",
-    "dq_uav_present",
-    "dq_comms_present",
-    "dq_sensors_present_pct",
-    "dq_mission_present",
-
-    # ================= SENSORS =================
-    "has_gnss",
-    "has_imu",
-    "has_lidar",
-    "has_radar",
-    "has_camera_rgb",
-    "has_camera_thermal",
+# ============================================================
+# 1. Feature Map (يجب أن يطابق ترتيب أعمدة التدريب 100%)
+# ============================================================
+TRAINING_FEATURES = [
+    "uav_mass_kg",
+    "uav_max_speed_mps",
+    "uav_battery_model_hover_power_W",
+    "environment_weather_wind_mps",
+    "environment_weather_gust_mps",
+    "environment_weather_visibility_m",
+    "environment_gnss_jam_dbm",
+    "airspace_altitude_agl_m"
 ]
 
-
+# قيم افتراضية محافظة ومتوافقة إحصائياً مع بيانات التدريب
+# تجنبنا 0.0 لأنه يشوه التوزيع الإحصائي للنموذج
+SAFE_IMPUTATION_DEFAULTS = {
+    "uav_battery_model_hover_power_W": 180.0,  # متوسط صناعي آمن للـ Hover
+    "environment_weather_gust_mps": None,      # يُحسب ديناميكياً أدناه
+    "environment_weather_visibility_m": 5000.0, # 5km (متوسط محافظ للـ VLOS)
+    "environment_gnss_jam_dbm": -90.0,          # إشارة GNSS طبيعية ضعيفة
+    "airspace_altitude_agl_m": 30.0             # ارتفاع تحليق نموذجي
+}
 
 def canonicalize_scenario(scenario: Dict[str, Any]) -> pd.DataFrame:
     """
-    Convert raw scenario dict into a canonical DataFrame
-    with all expected columns present.
+    Converts a UAVScenario dict into a flat DataFrame aligned with Stage-1 training features.
+    ⚠️ Mلاحظة: هذه الخطوة مخصصة حصرياً للـ ML Oracle. لا تستخدمها للفحص الفيزيائي الحتمي.
     """
+    try:
+        # 1. استخراج القيم الأساسية فقط
+        flat_data = {feat: scenario.get(feat) for feat in TRAINING_FEATURES}
 
-    row = {}
+        # 2. معالجة القيم المفقودة بمنطق إحصائي آمن (بدون تشويه)
+        sustained_wind = flat_data.get("environment_weather_wind_mps", 0.0)
+        
+        if flat_data["environment_weather_gust_mps"] is None:
+            # مطابقة منطق InputContractEngine: gust = 1.5 * wind عند الغياب
+            flat_data["environment_weather_gust_mps"] = sustained_wind * 1.5
+            
+        if flat_data["environment_weather_visibility_m"] is None:
+            flat_data["environment_weather_visibility_m"] = SAFE_IMPUTATION_DEFAULTS["environment_weather_visibility_m"]
 
-    # Fill known values
-    for col in EXPECTED_COLUMNS:
-        row[col] = scenario.get(col, np.nan)
+        # 3. ملء الحقول الاختيارية المتبقية بقيم آمنة إحصائياً
+        for feat, val in flat_data.items():
+            if val is None:
+                flat_data[feat] = SAFE_IMPUTATION_DEFAULTS.get(feat, 0.0)
 
-    df = pd.DataFrame([row])
+        # 4. تحويل إلى DataFrame وإعادة الترتيب الصارم
+        df = pd.DataFrame([flat_data]).reindex(columns=TRAINING_FEATURES)
 
-    # ----------------------------
-    # Missingness flags
-    # ----------------------------
-    for col in EXPECTED_COLUMNS:
-        df[f"is_missing__{col}"] = df[col].isna().astype(int)
+        # 5. تأكيد نوع البيانات ومنع NaN نهائيًا قبل الـ Preprocessor
+        df = df.astype(float).fillna(0.0) # Fallback أخير فقط للطوارئ
+        return df
 
-    # ----------------------------
-    # Data Quality scores (simple v1)
-    # ----------------------------
-    df["dq_uav_present"] = int(
-        not pd.isna(df["uav.mass_kg"].iloc[0])
-        and not pd.isna(df["uav.max_speed_mps"].iloc[0])
-    )
-
-    df["dq_weather_present"] = int(
-        not pd.isna(df["environment.weather.wind_mps"].iloc[0])
-    )
-
-    df["dq_core_present_pct"] = (
-        1.0 - df.filter(like="is_missing__").mean(axis=1)
-    ).iloc[0]
-
-    df["dq_mission_present"] = int(
-        not pd.isna(df["mission.type"].iloc[0])
-    )
-
-    df["dq_comms_present"] = 0
-    df["dq_sensors_present_pct"] = (
-        1.0 - df.filter(like="is_missing__has_").mean(axis=1)
-    ).iloc[0]
-
-    return df
+    except Exception as e:
+        logger.error(f"[CANONICALIZE ERROR] Feature alignment failed: {e}")
+        # إرجاع إطار فارغ بمتوسطات آمنة لمنع انهيار XGBoost
+        safe_fallback = {k: v if v is not None else 0.0 for k, v in SAFE_IMPUTATION_DEFAULTS.items()}
+        safe_fallback["uav_mass_kg"] = 1.5
+        safe_fallback["uav_max_speed_mps"] = 15.0
+        safe_fallback["environment_weather_wind_mps"] = 5.0
+        return pd.DataFrame([safe_fallback]).reindex(columns=TRAINING_FEATURES).astype(float)

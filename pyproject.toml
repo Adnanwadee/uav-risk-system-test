@@ -1,23 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "uav-risk-system"
-version = "0.1.0"
-requires-python = ">=3.10,<3.12"
+version = "0.2.0" # رفعنا الإصدار استعداداً للجيل الجديد
+requires-python = ">=3.10,<3.13"
 
 dependencies = [
+    # --- 1. Legacy ML & Core Data (Do NOT change versions) ---
     "numpy==1.24.4",
     "pandas==2.0.3",
     "scikit-learn==1.2.2",
     "xgboost==1.7.6",
     "joblib",
-    "pydantic>=2",
+    
+    # --- 2. API & Infrastructure ---
+    "pydantic>=2.0",
     "fastapi",
     "uvicorn[standard]",
     "python-multipart",
-    "requests",
-    "rank-bm25",
+    "httpx",         # بديل requests المظلم (يدعم Async)
     "streamlit",
-    "matplotlib==3.7.3"
+    "matplotlib==3.7.3",
+    
+    # --- 3. The Agentic Brain (NEW) ---
+    "langgraph>=0.0.26",     # محرك الوكلاء والحلقات
+    "langchain-core",        # البنية الأساسية
+    "langchain-groq",        # للتواصل مع Groq
+    "instructor",            # لإجبار الـ LLM على إخراج JSON صارم
+    
+    # --- 4. Advanced RAG & Vector DB (NEW) ---
+    "chromadb",              # قاعدة البيانات المتجهة للبحث الدلالي
+    "sentence-transformers", # لفهم سياق القوانين
+    "flashrank",             # لإعادة الترتيب (Cross-Encoder Re-ranking)
+    
+    # --- 5. Observability (NEW) ---
+    "langsmith"              # الصندوق الأسود لتسجيل تفكير الوكيل
 ]
+
 [tool.ruff.per-file-ignores]
 "src/uav_risk/stage1/loader.py" = ["E402"]
 "ui/app.py" = ["E402"]

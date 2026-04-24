@@ -1,72 +1,59 @@
 # src/uav_risk/stage1/canonicalize.py
 from __future__ import annotations
 import pandas as pd
-import numpy as np
-from typing import Dict, Any
 import logging
+from typing import Dict, Any, Tuple
+from uav_risk.stage1.utils import calc_power_to_weight, calc_effective_wind_gust
 
 logger = logging.getLogger(__name__)
 
-# ============================================================
-# 1. Feature Map (يجب أن يطابق ترتيب أعمدة التدريب 100%)
-# ============================================================
-TRAINING_FEATURES = [
-    "uav_mass_kg",
-    "uav_max_speed_mps",
-    "uav_battery_model_hover_power_W",
-    "environment_weather_wind_mps",
-    "environment_weather_gust_mps",
-    "environment_weather_visibility_m",
-    "environment_gnss_jam_dbm",
-    "airspace_altitude_agl_m"
-]
-
-# قيم افتراضية محافظة ومتوافقة إحصائياً مع بيانات التدريب
-# تجنبنا 0.0 لأنه يشوه التوزيع الإحصائي للنموذج
-SAFE_IMPUTATION_DEFAULTS = {
-    "uav_battery_model_hover_power_W": 180.0,  # متوسط صناعي آمن للـ Hover
-    "environment_weather_gust_mps": None,      # يُحسب ديناميكياً أدناه
-    "environment_weather_visibility_m": 5000.0, # 5km (متوسط محافظ للـ VLOS)
-    "environment_gnss_jam_dbm": -90.0,          # إشارة GNSS طبيعية ضعيفة
-    "airspace_altitude_agl_m": 30.0             # ارتفاع تحليق نموذجي
+# الحدود الفيزيائية للطيران (Safety Envelopes)
+PHYSICAL_LIMITS = {
+    "uav_mass_kg": (0.1, 150.0),             # من درون صغير إلى درون شحن كبير
+    "environment_weather_wind_mps": (0.0, 45.0), # إعصار مدمر = رفض فوري
+    "environment_gnss_jam_dbm": (-140.0, 0.0), 
+    "airspace_altitude_agl_m": (0.0, 500.0)  # حدود الـ EASA والـ FAA
 }
 
-def canonicalize_scenario(scenario: Dict[str, Any]) -> pd.DataFrame:
-    """
-    Converts a UAVScenario dict into a flat DataFrame aligned with Stage-1 training features.
-    ⚠️ Mلاحظة: هذه الخطوة مخصصة حصرياً للـ ML Oracle. لا تستخدمها للفحص الفيزيائي الحتمي.
-    """
+def validate_physical_bounds(data: Dict[str, Any]) -> bool:
+    """يتحقق من منطقية الأرقام قبل معالجتها."""
+    for key, (low, high) in PHYSICAL_LIMITS.items():
+        val = data.get(key)
+        if val is not None:
+            if not (low <= float(val) <= high):
+                logger.error(f"[PHYSICS VIOLATION] {key}={val} is outside safe envelope ({low}-{high})")
+                return False
+    return True
+
+def canonicalize_scenario(flat_data: Dict[str, Any], policy: Dict[str, Any], expected_columns: list) -> Tuple[pd.DataFrame | None, str]:
     try:
-        # 1. استخراج القيم الأساسية فقط
-        flat_data = {feat: scenario.get(feat) for feat in TRAINING_FEATURES}
+        # 1. التدقيق الفيزيائي (Physics Sanity Check)
+        if not validate_physical_bounds(flat_data):
+            return None, "OUT_OF_BOUNDS"
 
-        # 2. معالجة القيم المفقودة بمنطق إحصائي آمن (بدون تشويه)
-        sustained_wind = flat_data.get("environment_weather_wind_mps", 0.0)
-        
-        if flat_data["environment_weather_gust_mps"] is None:
-            # مطابقة منطق InputContractEngine: gust = 1.5 * wind عند الغياب
-            flat_data["environment_weather_gust_mps"] = sustained_wind * 1.5
-            
-        if flat_data["environment_weather_visibility_m"] is None:
-            flat_data["environment_weather_visibility_m"] = SAFE_IMPUTATION_DEFAULTS["environment_weather_visibility_m"]
+        # 2. فحص جودة البيانات (Data Quality)
+        core_sensors = ["uav_mass_kg", "environment_weather_wind_mps", "environment_gnss_jam_dbm"]
+        present_count = sum(1 for k in core_sensors if flat_data.get(k) is not None)
+        if (present_count / len(core_sensors)) < policy.get("min_dq_core_present", 0.75):
+            return None, "DATA_INSUFFICIENT"
 
-        # 3. ملء الحقول الاختيارية المتبقية بقيم آمنة إحصائياً
-        for feat, val in flat_data.items():
-            if val is None:
-                flat_data[feat] = SAFE_IMPUTATION_DEFAULTS.get(feat, 0.0)
+        # 3. هندسة الميزات مع القص (Feature Engineering with Clipping)
+        engineered_row = {
+            "uav.mass_kg": flat_data.get("uav_mass_kg", 2.0),
+            "environment.weather.wind_mps": flat_data.get("environment_weather_wind_mps", 0.0),
+            "feat_power_to_weight": calc_power_to_weight(
+                flat_data.get("uav_battery_model_hover_power_W"), 
+                flat_data.get("uav_mass_kg")
+            ),
+            "environment.weather.gust_mps": calc_effective_wind_gust(
+                flat_data.get("environment_weather_wind_mps"),
+                flat_data.get("environment_weather_gust_mps")
+            )
+        }
 
-        # 4. تحويل إلى DataFrame وإعادة الترتيب الصارم
-        df = pd.DataFrame([flat_data]).reindex(columns=TRAINING_FEATURES)
-
-        # 5. تأكيد نوع البيانات ومنع NaN نهائيًا قبل الـ Preprocessor
-        df = df.astype(float).fillna(0.0) # Fallback أخير فقط للطوارئ
-        return df
+        final_row = {col: engineered_row.get(col, 0.0) for col in expected_columns}
+        return pd.DataFrame([final_row]), "OK"
 
     except Exception as e:
-        logger.error(f"[CANONICALIZE ERROR] Feature alignment failed: {e}")
-        # إرجاع إطار فارغ بمتوسطات آمنة لمنع انهيار XGBoost
-        safe_fallback = {k: v if v is not None else 0.0 for k, v in SAFE_IMPUTATION_DEFAULTS.items()}
-        safe_fallback["uav_mass_kg"] = 1.5
-        safe_fallback["uav_max_speed_mps"] = 15.0
-        safe_fallback["environment_weather_wind_mps"] = 5.0
-        return pd.DataFrame([safe_fallback]).reindex(columns=TRAINING_FEATURES).astype(float)
+        logger.error(f"[CANONICALIZE FATAL] {e}")
+        return None, "SYSTEM_ERROR"

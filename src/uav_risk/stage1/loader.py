@@ -19,54 +19,49 @@ def to_string_safe(x):
 __main__.to_string_safe = to_string_safe  # ✅ KEY LINE
 
 # src/uav_risk/stage1/loader.py
-
+from __future__ import annotations
 import os
+import json
 import joblib
 import logging
-from typing import NamedTuple, Any
+from typing import NamedTuple, Any, Dict
+import __main__
+from uav_risk.stage1.utils import to_string_safe
 
+__main__.to_string_safe = to_string_safe
 logger = logging.getLogger(__name__)
 
 class Stage1Artifacts(NamedTuple):
-    """Container for immutable Stage-1 ML models and processors."""
-    clf_model: Any
     reg_model: Any
+    calibrator_model: Any
     preprocessor: Any
     label_encoder: Any
+    policy_config: Dict[str, Any]
+    training_stats: Dict[str, Any] # لإحصائيات Drift Detection
 
 def load_stage1_artifacts(artifacts_dir: str = "artifacts") -> Stage1Artifacts:
-    """
-    Loads ML artifacts from disk. 
-    Designed to be called via lru_cache for high-performance inference.
-    """
-    logger.info(f"🚀 Loading Stage-1 ML Artifacts from: {artifacts_dir}")
+    logger.info(f"🚀 Loading Stage-1 Aviation Artifacts from: {artifacts_dir}")
     
-    # 1. التحقق من وجود المجلد
-    if not os.path.exists(artifacts_dir):
-        raise FileNotFoundError(f"Artifacts directory '{artifacts_dir}' not found. Cannot start ML Tool.")
-
     def _load(name: str):
         path = os.path.join(artifacts_dir, name)
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"Required artifact missing: {path}")
         return joblib.load(path)
 
-    try:
-        # 2. تحميل النماذج والمعالجات
-        # تأكد أن هذه الأسماء تطابق تماماً ما هو موجود في مجلد artifacts لديك
-        clf = _load("xgb_clf_stage1_v2.joblib")
-        reg = _load("xgb_reg_stage1_v2.joblib")
-        pre = _load("preprocessor.joblib")
-        enc = _load("label_encoder.joblib")
+    # تحميل السياسات والإحصائيات
+    with open(os.path.join(artifacts_dir, "stage1_policy_config_v2.json"), 'r') as f:
+        policy = json.load(f)
+    
+    # سنفترض وجود قيم إحصائية مرجعية داخل الـ JSON أو ملف منفصل
+    # إذا لم توجد، سنستخدم قيم افتراضية آمنة
+    stats = policy.get("training_stats", {
+        "uav.mass_kg": {"mean": 5.0, "std": 2.0},
+        "environment.weather.wind_mps": {"mean": 4.0, "std": 3.5}
+    })
 
-        logger.info("✅ ML Artifacts loaded successfully.")
-        return Stage1Artifacts(
-            clf_model=clf,
-            reg_model=reg,
-            preprocessor=pre,
-            label_encoder=enc
-        )
-
-    except Exception as e:
-        logger.error(f"❌ Failed to load artifacts: {e}")
-        raise
+    return Stage1Artifacts(
+        reg_model=_load("xgb_reg_stage1_v2.pkl"),
+        calibrator_model=_load("clf_calibrator_stage1_v2.pkl"),
+        preprocessor=_load("uav_stage1_preprocessor_v2.pkl"),
+        label_encoder=_load("label_encoder_stage1_v2.pkl"),
+        policy_config=policy,
+        training_stats=stats
+    )

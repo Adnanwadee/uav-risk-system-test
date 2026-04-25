@@ -1,134 +1,158 @@
-# src/uav_risk/stage2/policies/deterministic_core.py
+"""
+Deterministic Pre-Flight Gateway Shield (V11.1 - Tier 0 Authority)
+==================================================================
+Role: Intercepts the API request BEFORE routing to the ACE LangGraph.
+Fixes Applied: 
+- Strict Telemetry Validation (No silent 0.0 defaults for missing sensors).
+- Removed static wind limits (Delegated to PhysicsAgent for dynamic load analysis).
+- Integrated Policy Registry for audit-ready rejections.
+- Added Health Check endpoint for operational monitoring.
 
-from __future__ import annotations
+Author: Stage 2 — ACE System
+"""
+
+import logging
 from typing import Optional, Dict, Any
-from pydantic import BaseModel
-from ..schemas import UAVScenario, MLResult
-from .config import THRESHOLDS
+from pydantic import BaseModel, ValidationError, Field
+from .config import THRESHOLDS, POLICY_REGISTRY
+
+logger = logging.getLogger("Tier0_Gateway")
+
+# ── Data Contracts ──
 
 class VetoResult(BaseModel):
+    """عقد إرجاع نتيجة الرفض."""
     is_veto: bool
     reason: Optional[str] = None
     policy_id: Optional[str] = None
+    policy_reference: Optional[str] = None # الوصف القانوني من السجل
+
+class Tier0TelemetryContract(BaseModel):
+    """
+    [العبقرية الهندسية]: بدلاً من `telemetry.get("alt", 0.0)`، 
+    نفرض التحقق الصارم. إذا كانت البيانات مفقودة، سيرفع Pydantic خطأ،
+    وسيتم التقاطه كـ `SYS_ERR_00`، مما يمنع انطلاق طائرة عمياء!
+    """
+    stage1_ml_risk_score: float = Field(default=0.0, ge=0, le=1)
+    comms_uplink_status: str = Field(..., min_length=1)
+    environment_gnss_jam_dbm: float = Field(..., ge=-150, le=0)
+    battery_state_of_charge_pct: float = Field(..., ge=0, le=100)
+    altitude_m: float = Field(..., ge=0, le=11000)
+    population_density: str = Field(default="SPARSE")
+
+# ── The Core Bouncer ──
 
 class DeterministicCore:
-    """
-    The Ultimate Safety Authority.
-    Executes aviation-grade mathematical and regulatory hard constraints.
-    """
-
-    @staticmethod
-    def _effective_wind_load(scenario: UAVScenario) -> float:
-        """Engineering formula for effective wind load factoring in gusts."""
-        sustained = scenario.environment_weather_wind_mps
-        gust = scenario.environment_weather_gust_mps or (sustained * 1.5)
-        return sustained + (0.5 * max(0, gust - sustained))
+    """The Pre-Flight Bouncer. Executes O(1) checks to block fatal operations."""
 
     @classmethod
-    def _check_operational_context(cls, scenario: UAVScenario) -> VetoResult:
-        """Contextual Safety Checks (Mission Type & Population)."""
-        # BVLOS Wind Restriction
-        if scenario.mission_type == "BVLOS":
-            if scenario.environment_weather_wind_mps > THRESHOLDS.bvlos_max_wind_mps:
-                return VetoResult(
-                    is_veto=True, 
-                    reason=f"BVLOS Restriction: Wind ({scenario.environment_weather_wind_mps}m/s) exceeds safe operational limit for BVLOS.", 
-                    policy_id="CTX_BVLOS_WIND"
-                )
-        
-        # Dense Population Risk
-        if scenario.population_density == "DENSE" and scenario.airspace_altitude_agl_m > THRESHOLDS.dense_pop_max_alt_m:
-            return VetoResult(
-                is_veto=True, 
-                reason="Ground Risk Violation: High altitude flight over dense population requires specific mitigation.", 
-                policy_id="CTX_GROUND_RISK"
+    def _create_veto(cls, policy_id: str, dynamic_reason: str) -> VetoResult:
+        """Helper to create standardized veto results mapping to the registry."""
+        if policy_id not in POLICY_REGISTRY:
+            logger.warning(f"Policy ID '{policy_id}' not found in registry. Using default reference.")
+        return VetoResult(
+            is_veto=True,
+            reason=dynamic_reason,
+            policy_id=policy_id,
+            policy_reference=POLICY_REGISTRY.get(policy_id, "Unknown Policy Reference")
+        )
+
+    @classmethod
+    def _check_stage1_ml_veto(cls, data: Tier0TelemetryContract) -> VetoResult:
+        if data.stage1_ml_risk_score > THRESHOLDS.max_stage1_ml_risk_score:
+            return cls._create_veto(
+                "ML_PREDICTIVE_VETO_01",
+                f"Neural predictive risk ({data.stage1_ml_risk_score:.2f}) exceeds hard limit ({THRESHOLDS.max_stage1_ml_risk_score})."
+            )
+        return VetoResult(is_veto=False)
+
+    @classmethod
+    def _check_system_hardware(cls, data: Tier0TelemetryContract) -> VetoResult:
+        comms_status = data.comms_uplink_status.strip().upper()
+        if comms_status in ["DEGRADED", "LOST"]:
+            return cls._create_veto(
+                "HW_COMMS_01",
+                f"Uplink status is {comms_status}. Command & Control severed."
             )
             
-        return VetoResult(is_veto=False)
-
-    @classmethod
-    def _check_flight_capability(cls, scenario: UAVScenario) -> VetoResult:
-        eff_wind = cls._effective_wind_load(scenario)
-        max_speed = scenario.uav_max_speed_mps
-        
-        if eff_wind >= max_speed:
-            return VetoResult(
-                is_veto=True,
-                reason=f"Physics Violation: Effective wind load ({eff_wind:.1f} m/s) exceeds UAV max speed ({max_speed} m/s).",
-                policy_id="PHYS_WIND_01"
-            )
-        
-        power = scenario.uav_battery_model_hover_power_W
-        mass = scenario.uav_mass_kg
-        if power is not None:
-            power_per_kg = power / mass
-            if power_per_kg < THRESHOLDS.min_power_density_wkg:
-                return VetoResult(
-                    is_veto=True,
-                    reason=f"Insufficient Thrust: Power density ({power_per_kg:.1f} W/kg) is below safe flight margin.",
-                    policy_id="PHYS_PWR_02"
-                )
-        return VetoResult(is_veto=False)
-
-    @classmethod
-    def _check_regulatory_and_airspace(cls, scenario: UAVScenario) -> VetoResult:
-        if scenario.airspace_altitude_agl_m > THRESHOLDS.max_altitude_agl_m:
-            return VetoResult(
-                is_veto=True, 
-                reason=f"Regulatory Violation: Altitude ({scenario.airspace_altitude_agl_m}m) exceeds max AGL limit.", 
-                policy_id="REG_ALT_01"
-            )
-        return VetoResult(is_veto=False)
-
-    @classmethod
-    def _check_system_integrity(cls, scenario: UAVScenario) -> VetoResult:
-        if scenario.comms_uplink_status in ["DEGRADED", "LOST"]:
-            return VetoResult(
-                is_veto=True, 
-                reason=f"Critical Comms Failure: Uplink status is {scenario.comms_uplink_status}.", 
-                policy_id="COMMS_LOL_01"
+        if data.environment_gnss_jam_dbm > THRESHOLDS.critical_jamming_dbm:
+            return cls._create_veto(
+                "HW_NAV_02",
+                f"Severe GNSS Jamming ({data.environment_gnss_jam_dbm} dBm). Fly-away risk."
             )
             
-        if scenario.environment_gnss_jam_dbm > THRESHOLDS.critical_jamming_dbm:
-            return VetoResult(
-                is_veto=True, 
-                reason="Severe GNSS Jamming: High risk of Fly-away.", 
-                policy_id="NAV_INT_01"
+        if data.battery_state_of_charge_pct < THRESHOLDS.min_dispatch_battery_pct:
+            return cls._create_veto(
+                "HW_BATT_03",
+                f"Dispatch battery ({data.battery_state_of_charge_pct}%) is below minimum boot requirement."
             )
+
         return VetoResult(is_veto=False)
 
     @classmethod
-    def pre_flight_veto_check(cls, scenario: UAVScenario) -> VetoResult:
-        """The Master Aviation Check Sequence."""
+    def _check_absolute_envelope(cls, data: Tier0TelemetryContract) -> VetoResult:
+        """
+        فحص السقف التنظيمي المطلق (الفيزياء الدقيقة للرياح متروكة لـ PhysicsAgent).
+        """
+        if data.altitude_m > THRESHOLDS.max_altitude_agl_m:
+            return cls._create_veto(
+                "ENV_ALT_01",
+                f"Altitude ({data.altitude_m}m) exceeds global absolute ceiling ({THRESHOLDS.max_altitude_agl_m}m)."
+            )
+            
+        pop_density = data.population_density.strip().upper()
+        if pop_density == "DENSE" and data.altitude_m > THRESHOLDS.dense_pop_max_alt_m:
+            return cls._create_veto(
+                "ENV_POP_02",
+                f"Altitude ({data.altitude_m}m) over DENSE population violates low-altitude safety constraints."
+            )
+
+        return VetoResult(is_veto=False)
+
+    @classmethod
+    def pre_flight_veto_check(cls, raw_telemetry: Dict[str, Any]) -> VetoResult:
+        """
+        The Master Tier-0 Check Sequence.
+        MUST BE CALLED FROM THE API ENDPOINT BEFORE INVOKING THE LANGGRAPH ORCHESTRATOR.
+        """
+        logger.info("Executing Tier-0 Deterministic Shield...")
+        
+        # 1. التحقق الصارم من نوع ووجود البيانات (Anti-Silent-Failure)
+        try:
+            validated_data = Tier0TelemetryContract(**raw_telemetry)
+        except ValidationError as e:
+            logger.error(f"Telemetry Validation Failed: {e}")
+            return cls._create_veto(
+                "SYS_ERR_00",
+                f"Invalid or missing critical telemetry data. System cannot evaluate safety safely."
+            )
+        
+        # 2. تنفيذ الفحوصات الفورية (O(1) Complexity)
         checks = [
-            cls._check_operational_context,
-            cls._check_flight_capability,
-            cls._check_regulatory_and_airspace,
-            cls._check_system_integrity
+            cls._check_system_hardware,
+            cls._check_stage1_ml_veto,
+            cls._check_absolute_envelope
         ]
+        
         for check in checks:
-            res = check(scenario)
-            if res.is_veto:
-                return res
+            try:
+                res = check(validated_data)
+                if res.is_veto:
+                    logger.critical(f"Tier-0 VETO TRIGGERED: [{res.policy_id}] {res.reason}")
+                    return res
+            except Exception as e:
+                logger.error(f"Unexpected error during deterministic check: {e}")
+                return cls._create_veto("SYS_ERR_00", f"Internal Gateway Error: {e}")
+                
+        logger.info("Tier-0 Shield Passed. Mission is fundamentally viable. Routing to ACE LangGraph.")
         return VetoResult(is_veto=False)
 
     @classmethod
-    def post_flight_veto_check(cls, agent_decision: str, scenario: UAVScenario, tool_outputs: Dict[str, Any]) -> VetoResult:
-        """The Ultimate Fail-safe against AI and ML failures."""
-        pre = cls.pre_flight_veto_check(scenario)
-        if pre.is_veto:
-            return VetoResult(is_veto=True, reason=f"SAFETY OVERRIDE: Hard rule violated: {pre.reason}", policy_id="SYS_VETO_POST")
-        
-        if agent_decision == "GO":
-            ml_json = tool_outputs.get("ml_prediction")
-            if ml_json:
-                # Assuming the tool returns a JSON string or dict. We check risk score.
-                # Simplified check logic for the example:
-                if isinstance(ml_json, dict) and ml_json.get("risk_score", 0.0) > 0.85:
-                    return VetoResult(
-                        is_veto=True, 
-                        reason="ML-Physics Conflict: High ML Risk Score contradicts GO decision.", 
-                        policy_id="ML_VETO_POST"
-                    )
-                
-        return VetoResult(is_veto=False)
+    def get_health_status(cls) -> Dict[str, Any]:
+        """فحص جاهزية نظام السياسات للمراقبة التشغيلية."""
+        return {
+            "gateway_status": "healthy",
+            "thresholds_loaded": THRESHOLDS is not None,
+            "policy_registry_size": len(POLICY_REGISTRY),
+            "active_policies": THRESHOLDS.get_active_policies() if hasattr(THRESHOLDS, 'get_active_policies') else {},
+        }

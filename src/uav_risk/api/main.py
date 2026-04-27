@@ -1,110 +1,172 @@
-# src/uav_risk/api/main.py
-from __future__ import annotations
+"""
+ACE System - Main API Entry Point (V4.1 - The Unbreakable Core)
+===============================================================
+Fixes applied from SRE Audit:
+- Concurrency Shield: Integrated `asyncio.Semaphore` to cap max parallel requests and prevent Resource Exhaustion (OOM/CPU locks).
+- Consistent Lifecycle Tracing: Fixed the shutdown trace ID to prevent disconnected log trails.
+
+Author: Stage 2 — ACE System
+"""
 
 import os
-import logging
 import uuid
+import logging
+import asyncio
+from contextvars import ContextVar
 from contextlib import asynccontextmanager
-from typing import Any, Dict
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from fastapi.middleware.cors import CORSMiddleware
 
-# استيراد المكونات الأساسية
 from uav_risk.stage1.loader import load_stage1_artifacts
-from uav_risk.stage1.infer import run_stage1_inference
-from uav_risk.utils.json_sanitize import sanitize_for_json
-
-# إعداد السجلات المهيكلة
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] - %(message)s')
-logger = logging.getLogger("UAV_CORE_API")
+from uav_risk.stage2.llm.groq_client import GroqAsyncClient
+from uav_risk.stage2.llm.report_writer import SafetyReportWriter
 
 # ============================================================
-# 1. إدارة دورة حياة التطبيق (Lifespan Management)
+# 1. Advanced Logging & Concurrency Setup
+# ============================================================
+request_id_context_var: ContextVar[str] = ContextVar("request_id", default="SYSTEM")
+
+class RequestIdFilter(logging.Filter):
+    def filter(self, record):
+        record.request_id = request_id_context_var.get()
+        return True
+
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - [%(request_id)s] - %(name)s - %(levelname)s - %(message)s'
+)
+for handler in logging.root.handlers:
+    handler.addFilter(RequestIdFilter())
+
+logger = logging.getLogger("ACE_CORE_API")
+
+# [FIX] Semaphore لحماية النظام من الانهيار تحت الضغط العالي (Max 100 concurrent risk evaluations)
+MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "100"))
+global_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+
+# ============================================================
+# 2. Application Lifespan (Resource Management)
 # ============================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """إدارة الإقلاع والإغلاق لضمان تحميل النماذج مرة واحدة وبشكل آمن."""
-    request_id = str(uuid.uuid4())
-    logger.info("Initializing UAV Risk Engine artifacts...", extra={"request_id": request_id})
+    # [FIX] توحيد بصمة التشغيل لسهولة التتبع
+    request_id_context_var.set("SYS-BOOT")
+    logger.info("Initializing ACE System Engines (V4.1)...")
     
     try:
         artifacts_dir = os.getenv("UAV_ARTIFACTS_DIR", "artifacts")
-        # تحميل النماذج في حالة التطبيق (App State) لضمان الوصول العالمي
         app.state.artifacts = load_stage1_artifacts(artifacts_dir)
-        logger.info("Aviation artifacts loaded successfully.", extra={"request_id": request_id})
-    except Exception as e:
-        logger.critical(f"FAILED TO LOAD AVIATION ARTIFACTS: {e}", extra={"request_id": request_id})
-        raise SystemExit("Application cannot start without ML Artifacts.")
+        logger.info("Stage 1 ML Artifacts loaded successfully.")
+        
+        model_name = os.getenv("LLM_MODEL_NAME", "llama3-70b-8192")
+        app.state.llm_client = GroqAsyncClient(model_name=model_name, temperature=0.0)
+        app.state.report_writer = SafetyReportWriter(llm_client=app.state.llm_client)
+        logger.info(f"Stage 2 Cognitive Engine ({model_name}) instantiated.")
+        
+    except Exception as e: 
+        logger.critical(f"FATAL BOOT ERROR: Failed to load system engines: {e}", exc_info=True)
+        raise  
+        
+    logger.info("ACE System is FLIGHT-READY.")
     
-    yield
-    # عمليات التنظيف عند الإغلاق (إن وجدت)
-    logger.info("Shutting down UAV Risk Engine...", extra={"request_id": request_id})
+    try:
+        yield
+    except asyncio.CancelledError:
+        logger.warning("Lifespan task cancelled. Cleaning up...")
+    finally:
+        # [FIX] بصمة صريحة للإغلاق بدلاً من توليد UUID جديد يضيع السياق
+        request_id_context_var.set("SYS-SHUTDOWN")
+        logger.info("Initiating ACE System graceful shutdown...")
+        if hasattr(app.state, 'llm_client') and app.state.llm_client:
+            try:
+                close_method = getattr(app.state.llm_client, 'close', getattr(app.state.llm_client, 'shutdown', None))
+                if close_method:
+                    if asyncio.iscoroutinefunction(close_method):
+                        await close_method()
+                    else:
+                        close_method()
+                    logger.info("LLM Client session closed successfully.")
+            except Exception as e:
+                logger.warning(f"Error closing LLM Client: {e}")
+
 
 # ============================================================
-# 2. إعداد التطبيق والتحقق من المدخلات
+# 3. Application Setup & Security Middleware
 # ============================================================
 app = FastAPI(
-    title="UAV Risk System (Generation 2)",
-    version="2.2.0",
+    title="ACE (Autonomous Control Engine) API",
+    version="4.1.0",
     lifespan=lifespan
 )
 
-class FlightScenario(BaseModel):
-    uav_mass_kg: float = Field(..., ge=0.1, le=150.0)
-    environment_weather_wind_mps: float = Field(..., ge=0.0, le=50.0)
-    environment_gnss_jam_dbm: float = Field(default=-100.0, ge=-140.0, le=0.0)
-    uav_battery_model_hover_power_W: float | None = Field(None, ge=0.0)
-    environment_weather_gust_mps: float | None = Field(None, ge=0.0)
-    airspace_altitude_agl_m: float = Field(default=30.0, ge=0.0, le=500.0)
+_origins_raw = os.getenv("ALLOWED_ORIGINS", "").split(",") if os.getenv("ALLOWED_ORIGINS") else ["*"]
+allowed_origins = list(set([o.strip() for o in _origins_raw if o.strip()]))
+is_production = os.getenv("ENVIRONMENT", "development").lower() == "production"
 
-class ScenarioPayload(BaseModel):
-    scenario: FlightScenario
+if "*" in allowed_origins and is_production:
+    logger.warning("SECURITY ALERT: Wildcard CORS origin (*) detected in PRODUCTION.")
 
-# حماية استيراد المرحلة الثانية لتجنب الاعتمادية الدائرية
-try:
-    from uav_risk.stage2.api import router as stage2_router
-    app.include_router(stage2_router, prefix="/v2", tags=["Stage 2 Agent"])
-except ImportError as e:
-    logger.warning(f"Stage 2 Router not loaded: {e}", extra={"request_id": "INIT"})
-
-# ============================================================
-# 3. نقاط النهاية (Endpoints)
-# ============================================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
 @app.middleware("http")
-async def add_process_id_header(request: Request, call_next):
-    """إضافة ID فريد لكل طلب لتسهيل تتبع الأخطاء (Observability)."""
-    request_id = str(uuid.uuid4())
+async def security_and_trace_middleware(request: Request, call_next):
+    # 1. DoS Protection (Size Limit)
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > 10_000_000:
+                logger.warning(f"DoS Protection: Rejected oversized payload ({content_length} bytes).")
+                return JSONResponse(status_code=413, content={"detail": "Payload too large."})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length."})
+
+    # 2. Trace Injection
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
     request.state.request_id = request_id
-    response = await call_next(request)
+    request_id_context_var.set(request_id)
+    
+    # 3. [FIX] Concurrency Shield (Semaphore)
+    try:
+        async with global_semaphore:
+            response = await call_next(request)
+    except Exception as e:
+        # If the queue itself fails, fallback gracefully
+        logger.error(f"Middleware Error: {e}")
+        return JSONResponse(status_code=500, content={"detail": "Internal Server Overload."})
+
     response.headers["X-Request-ID"] = request_id
     return response
 
+# ============================================================
+# 4. Routing & Health Checks
+# ============================================================
+
+from uav_risk.stage2.api import router as stage2_router
+app.include_router(stage2_router, prefix="/v2")
+
 @app.get("/health", tags=["Infrastructure"])
 async def health_check():
-    is_ready = hasattr(app.state, "artifacts")
-    return {"status": "online" if is_ready else "initializing", "build": "Aviation-Ready-V2"}
-
-@app.post("/stage1/infer", tags=["Stage 1"])
-async def stage1_inference(payload: ScenarioPayload, request: Request):
-    """نقطة التقييم الإحصائي والمعايرة."""
-    request_id = getattr(request.state, "request_id", "unknown")
-    logger.info(f"Processing inference for scenario...", extra={"request_id": request_id})
+    artifacts_ok = hasattr(app.state, "artifacts") and app.state.artifacts is not None
+    llm_ok = hasattr(app.state, "llm_client") and app.state.llm_client is not None
     
-    # استخدام model_dump لضمان التوافق مع Pydantic V2
-    scenario_dict = payload.scenario.model_dump(mode='python')
+    is_healthy = artifacts_ok and llm_ok
     
-    # تمرير النماذج المحملة مسبقاً (مباشرة أو عبر Cache)
-    result = run_stage1_inference(scenario_dict)
-    
-    # تعقيم المخرجات لضمان JSON سليم
-    return sanitize_for_json(result.model_dump(mode='python'))
-
-@app.get("/stage1/expected-columns", tags=["Stage 1"])
-async def get_expected_features():
-    """يرجع الميزات التي يتوقعها الـ Preprocessor فعلياً."""
-    art = app.state.artifacts
-    cols = getattr(art.preprocessor, "feature_names_in_", [])
-    return {"count": len(cols), "columns": list(cols)}
+    return {
+        "status": "ONLINE" if is_healthy else "DEGRADED",
+        "version": "4.1.0",
+        "components": {
+            "ml_artifacts": "OK" if artifacts_ok else "OFFLINE",
+            "llm_client": "OK" if llm_ok else "OFFLINE"
+        },
+        # Monitoring current load
+        "active_requests": MAX_CONCURRENT_REQUESTS - global_semaphore._value 
+    }

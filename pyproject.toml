@@ -24,6 +24,8 @@ dependencies = [
     "httpx",                 # بديل requests المظلم (يدعم Async)
     "streamlit",
     "matplotlib==3.7.3",
+    "plotly",                # [إضافة] للمخططات التفاعلية في الواجهة
+    "tenacity",              # [إضافة] لمحرك إعادة المحاولة (Retry Logic) في الـ Pipeline
     
     # --- 3. The Agentic Brain (LangGraph Core) ---
     "langgraph>=0.0.26",     # محرك الوكلاء

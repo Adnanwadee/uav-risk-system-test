@@ -19,7 +19,6 @@ def to_string_safe(x):
 __main__.to_string_safe = to_string_safe  # ✅ KEY LINE
 
 # src/uav_risk/stage1/loader.py
-from __future__ import annotations
 import os
 import json
 import joblib

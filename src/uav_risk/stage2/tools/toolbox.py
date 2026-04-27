@@ -1,88 +1,193 @@
-# src/uav_risk/stage2/tools/toolbox.py
-from __future__ import annotations
-from typing import Dict, Any, List
+"""
+Aviation Toolbox (V15 - Flight-Ready Deterministic Core)
+========================================================
+ARCHITECTURAL PIVOT:
+LangChain autonomous `@tool` functions have been DEPRECATED in the ACE System.
+
+Fixes in V15 (Aviation Grade Runtime Hardening):
+- Runtime NaN Shield: Explicit fail-fast input validation prevents NaN propagation.
+- Unified Sentinel Semantics: `math.nan` replaces `-1.0` for all invalid/critical states.
+- The "None" String Trap: Fixed handling of `None` values to prevent "NONE" string bugs.
+- Performance: Hot-path mathematical functions optimized for Real-Time loops.
+- Semantic Typing: `NewType` strictly guides developers, backed by runtime validation.
+
+Author: Stage 2 — ACE System
+"""
+
+import math
 import logging
-from langchain_core.tools import tool
+from typing import Dict, Any, Set, NewType
 
 from uav_risk.stage1.infer import run_stage1_inference
 from uav_risk.stage2.schemas import MLResult
 
-# 1. استدعاء محرك الـ RAG الذكي الخاص بصديقك
-from uav_risk.stage2.rag.rag_core import RAGCore 
+# Note for Production: In a real-time flight control system, configure this logger
+# with a `logging.handlers.QueueHandler` to move I/O operations to a background thread.
+logger = logging.getLogger("AviationToolbox")
 
-logger = logging.getLogger(__name__)
+# ---------------------------------------------------------------------------
+# Semantic Physical Types (Static Analysis Guidance)
+# ---------------------------------------------------------------------------
+MetersPerSecond = NewType('MetersPerSecond', float)
+Meters = NewType('Meters', float)
+Degrees = NewType('Degrees', float)
+Percentage = NewType('Percentage', float)
 
-# 2. تهيئة المحرك مرة واحدة فقط في الذاكرة (لتجنب بطء تحميل الموديلات مع كل استعلام)
-try:
-    rag_engine = RAGCore()
-except Exception as e:
-    logger.error(f"Failed to load FAISS RAG Engine: {e}")
-    rag_engine = None
+# ---------------------------------------------------------------------------
+# Core Libraries
+# ---------------------------------------------------------------------------
 
-# ==========================================
-# 1. ML Oracle Tool (Type-Safe & Isolated)
-# ==========================================
-@tool("get_ml_risk_prediction")
-def get_ml_risk_prediction(scenario: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Calls the XGBoost Statistical ML Model to predict flight risk.
-    """
-    try:
-        ml_result: MLResult = run_stage1_inference(scenario)
-        return {
-            "predicted_class": ml_result.predicted_class,
-            "risk_score": ml_result.risk_score,
-            "confidence": ml_result.confidence
-        }
-    except Exception as e:
-        logger.error(f"[TOOL_ML_ERROR] Inference failed: {e}")
-        # تم تصحيح الثغرة الأمنية هنا: الرفض المباشر عند الفشل
-        return {
-            "predicted_class": "HIGH_RISK",
-            "risk_score": 1.0,
-            "confidence": 0.0,
-            "error": str(e)
-        }
+class AviationMath:
+    """مكتبة حسابات فيزيائية قطعية (Stateless). مصممة للأداء العالي في الحلقات."""
+    
+    # القيمة الحارسة الموحدة (Unified Sentinel Value) الدالة على حالة غير صالحة
+    INVALID_STATE_SENTINEL = math.nan
+    
+    @staticmethod
+    def _are_inputs_finite(*args: float) -> bool:
+        """[FIX] حارس وقت التشغيل (Runtime Guard): يمنع انتشار الـ NaN والـ Infinity."""
+        return all(math.isfinite(arg) for arg in args)
 
-# ==========================================
-# 2. Legal Oracle Tool (The Real Hybrid RAG)
-# ==========================================
-@tool("search_aviation_regulations")
-def search_aviation_regulations(query: str, context_tags: List[str] | None = None) -> List[Dict[str, Any]]:
-    """
-    Searches the FAISS Vector database for aviation regulations using Semantic Search & Re-ranking.
-    """
-    if not rag_engine:
-        return [{"article_id": "SYS_ERROR", "content": "RAG Engine offline. Abort.", "relevance_score": 0.0}]
-
-    try:
-        logger.info(f"[RAG SEARCH] Query: {query}")
-        
-        # 3. استدعاء المحرك الذكي (البحث + إعادة الترتيب)
-        docs = rag_engine.retrieve_optimized_context(query)
-        
-        results = []
-        for doc in docs:
-            # 4. استخراج الميتاداتا بدقة كما صممها صديقك
-            source_file = doc.metadata.get('source', 'Unknown').split('/')[-1]
-            page_num = doc.metadata.get('page', 'N/A')
-            score = doc.metadata.get('rerank_score', 0.0)
+    @staticmethod
+    def calculate_crosswind_component(
+        wind_speed: MetersPerSecond, 
+        wind_direction: Degrees, 
+        uav_heading: Degrees
+    ) -> float: 
+        """
+        حساب مركبة الرياح الجانبية.
+        يعيد math.nan إذا كانت المدخلات فاسدة.
+        """
+        if not AviationMath._are_inputs_finite(wind_speed, wind_direction, uav_heading):
+            return AviationMath.INVALID_STATE_SENTINEL
             
-            # 5. تحويلها للصيغة التي يقبلها Agent LangGraph (RegulationChunk)
-            # دمج اسم الملف والصفحة لتكوين معرف فريد (article_id)
-            results.append({
-                "article_id": f"[{source_file} - Pg:{page_num}]",
-                "content": doc.page_content,
-                "relevance_score": float(score)
-            })
-            
-        return results
+        angle_diff = math.radians(wind_direction - uav_heading)
+        crosswind = abs(wind_speed * math.sin(angle_diff))
         
-    except Exception as e:
-        logger.error(f"[TOOL_RAG_ERROR] Regulation search failed: {e}")
-        return []
+        return max(0.0, crosswind)
 
-# ==========================================
-# Tool Registry
-# ==========================================
-AGENT_TOOLS = [get_ml_risk_prediction, search_aviation_regulations]
+    @staticmethod
+    def project_battery_survival(
+        current_pct: Percentage, 
+        drain_rate_pct_per_min: float, 
+        distance_remaining: Meters, 
+        speed: MetersPerSecond
+    ) -> float:
+        """
+        توقع نسبة البطارية عند الوصول للهدف.
+        [FIX] يعيد math.nan في الحالات الحرجة (سقوط الطائرة أو مدخلات فاسدة).
+        """
+        # 1. منع انتشار الـ NaN من البداية
+        if not AviationMath._are_inputs_finite(current_pct, drain_rate_pct_per_min, distance_remaining, speed):
+            return AviationMath.INVALID_STATE_SENTINEL
+
+        # 2. حماية فيزيائية من القسمة على صفر أو الوقوف التام في الجو
+        if speed <= 0.1: 
+            return AviationMath.INVALID_STATE_SENTINEL
+            
+        time_to_target_min = (distance_remaining / speed) / 60.0
+        
+        # 3. منع الشحن السحري (Negative Drain Rate)
+        effective_drain_rate = max(0.0, drain_rate_pct_per_min)
+        
+        battery_consumed = time_to_target_min * effective_drain_rate
+        battery_remaining = current_pct - battery_consumed
+        
+        # 4. تصحيح الحدود
+        if battery_remaining > 100.0:
+            return 100.0
+            
+        if battery_remaining < 0.0:
+            # البطارية ستنفد قبل الوصول (سقوط الطائرة)
+            return AviationMath.INVALID_STATE_SENTINEL
+            
+        return battery_remaining
+
+
+class Stage1Bridge:
+    """جسر العبور للمرحلة الأولى. آمن ومعزول."""
+    
+    @staticmethod
+    def extract_ml_risk(scenario_data: Dict[str, Any]) -> float:
+        try:
+            ml_result: MLResult = run_stage1_inference(scenario_data)
+            risk_score = float(ml_result.risk_score)
+            
+            if not math.isfinite(risk_score):
+                return 1.0 # خطورة قصوى (Fail-Safe)
+                
+            return max(0.0, min(1.0, risk_score))
+        except Exception as e:
+            logger.error(f"Stage 1 Bridge Error. Forcing MAX RISK. Details: {e}")
+            return 1.0 
+
+
+class TelemetryFormatter:
+    """
+    بوابة الجحيم للبيانات (The Telemetry Gatekeeper).
+    لا تسمح بمرور أي قيمة غير معرفة أو فاسدة إلى داخل النظام.
+    """
+    
+    NUMERIC_KEYS: Set[str] = {
+        "battery_state_of_charge_pct", "altitude_m", "wind_speed_mps",
+        "wind_direction_deg", "uav_heading_deg", "distance_remaining_m", 
+        "speed_mps", "environment_gnss_jam_dbm", "stage1_ml_risk_score",
+        "uav_max_speed_mps", "uav_mass_kg", "uav_max_thrust_n"
+    }
+    
+    STRING_KEYS: Set[str] = {
+        "comms_uplink_status", "population_density", "mission_type"
+    }
+    
+    # المفاتيح التي سيؤدي غيابها لرفض الرحلة فوراً
+    REQUIRED_KEYS: Set[str] = {
+        "battery_state_of_charge_pct", "altitude_m", "wind_speed_mps",
+        "comms_uplink_status", "environment_gnss_jam_dbm"
+    }
+    
+    @staticmethod
+    def _safe_float(value: Any) -> float:
+        """يحول الأرقام بأمان، ويرد NaN في حال الفشل."""
+        try:
+            val = float(value)
+            return val if math.isfinite(val) else math.nan
+        except (ValueError, TypeError):
+            return math.nan
+    
+    @staticmethod
+    def sanitize_and_normalize(raw_data: Dict[str, Any], strict: bool = True) -> Dict[str, Any]:
+        """
+        تأمين البيانات. strict=True يضمن عدم إقلاع الطائرة إذا كانت الحساسات معطلة.
+        """
+        clean_data = {}
+        
+        for key, value in raw_data.items():
+            if key in TelemetryFormatter.NUMERIC_KEYS:
+                val = TelemetryFormatter._safe_float(value)
+                clean_data[key] = val
+                
+            elif key in TelemetryFormatter.STRING_KEYS:
+                # [FIX] The "None" String Trap Avoidance
+                if value is None:
+                    clean_data[key] = "UNKNOWN"
+                else:
+                    clean_str = str(value).strip().upper()
+                    if len(clean_str) > 200:
+                        logger.warning(f"Truncated overly long string for telemetry key: {key}")
+                    clean_data[key] = clean_str[:200] if clean_str else "UNKNOWN"
+                    
+        # الفحص الإلزامي (Fail-Fast)
+        if strict:
+            missing = TelemetryFormatter.REQUIRED_KEYS - set(clean_data.keys())
+            if missing:
+                raise ValueError(f"CRITICAL: Missing mandatory telemetry keys: {missing}")
+                
+            for req_key in TelemetryFormatter.REQUIRED_KEYS.intersection(TelemetryFormatter.NUMERIC_KEYS):
+                if math.isnan(clean_data.get(req_key, math.nan)):
+                    raise ValueError(f"CRITICAL: Sensor failure (NaN) detected on critical key '{req_key}'")
+
+        # التطبيع الفيزيائي الإضافي (Clamping)
+        if "battery_state_of_charge_pct" in clean_data and not math.isnan(clean_data["battery_state_of_charge_pct"]):
+            clean_data["battery_state_of_charge_pct"] = max(0.0, min(100.0, clean_data["battery_state_of_charge_pct"]))
+            
+        return clean_data

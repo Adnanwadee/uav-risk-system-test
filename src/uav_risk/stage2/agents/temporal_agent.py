@@ -1,14 +1,12 @@
 """
 Temporal Agent — Predictive Safety via Kalman Filtering
 =========================================================
-Version 3 — All critical bugs fixed:
+Version 4 — Aviation Grade Hardening (NaN Shields):
   FIX-T1: Tautology in wind projection warning replaced with meaningful comparison.
-  FIX-T2: Scipy removed as dependency. t-distribution p-value computed via
-           Hill (1970) series approximation (error < 1.5e-5). Hard failure
-           replaced by deterministic math — no fallback branches in safety code.
-  FIX-T3: OU process variance now uses the exact steady-state formula
-           σ²_∞ = Q_eff / (2θ) instead of the diverging constant-velocity
-           propagation, eliminating artificially wide CIs at long horizons.
+  FIX-T2: Scipy removed as dependency. t-distribution computed via Hill (1970).
+  FIX-T3: OU process variance now uses exact steady-state formula.
+  [NEW] FIX-V4: Runtime NaN Guards injected to prevent Kalman Filter Matrix poisoning 
+                and logical black holes in safety comparisons.
 
 Author: Stage 2 — ACE System
 """
@@ -20,7 +18,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 import numpy as np
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data Contracts
@@ -61,23 +58,21 @@ class TemporalStateEstimate:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIX-T2: Self-contained t-distribution p-value (no scipy dependency)
+# Self-contained t-distribution p-value (no scipy dependency)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _regularized_incomplete_beta(x: float, a: float, b: float, max_iter: int = 300) -> float:
     """
     Regularized incomplete beta function I_x(a, b) via series expansion.
-    Converges for x < (a+1)/(a+b+2). For x > threshold, use symmetry:
-    I_x(a,b) = 1 - I_{1-x}(b,a).
-
-    Reference: Abramowitz & Stegun 26.5.4
     """
+    if not (math.isfinite(x) and math.isfinite(a) and math.isfinite(b)):
+        return 1.0 # Fail-safe fallback for NaN inputs
+        
     if x <= 0.0:
         return 0.0
     if x >= 1.0:
         return 1.0
 
-    # Use symmetry for better convergence
     if x > (a + 1.0) / (a + b + 2.0):
         return 1.0 - _regularized_incomplete_beta(1.0 - x, b, a, max_iter)
 
@@ -98,18 +93,10 @@ def _regularized_incomplete_beta(x: float, a: float, b: float, max_iter: int = 3
 def t_distribution_p_value(t_stat: float, df: int) -> float:
     """
     Two-tailed p-value for Student's t-test.
-
-    Uses exact relationship: p = I_x(df/2, 1/2)
-    where x = df / (df + t²)
-
-    Hill (1970) series, error < 1.5e-5 for all df ≥ 2.
-    No external dependencies — deterministic, auditable.
-
-    This replaces the previous scipy try/except which silently returned
-    p=0.04 on ImportError — a fabricated p-value in safety-critical code.
     """
-    if df < 1:
-        return 1.0   # Undefined — conservative
+    if not math.isfinite(t_stat) or df < 1:
+        return 1.0   # Undefined / NaN input — conservative
+
     if t_stat == 0.0:
         return 1.0
 
@@ -122,14 +109,7 @@ def t_distribution_p_value(t_stat: float, df: int) -> float:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class KalmanFilter1D:
-    """
-    Standard 1D Kalman Filter. State: x = [value, rate]ᵀ
-
-    System model:
-        x_k = F × x_{k-1} + w_k    (w ~ N(0, Q))
-        z_k = H × x_k  + v_k        (v ~ N(0, R))
-    F = [[1,dt],[0,1]]   H = [1,0]
-    """
+    """Standard 1D Kalman Filter. State: x = [value, rate]ᵀ"""
 
     def __init__(
         self,
@@ -146,7 +126,6 @@ class KalmanFilter1D:
         self.Q_base = process_noise_var
 
     def predict(self, dt: float) -> None:
-        """x̂_{k|k-1} = F·x̂ ;  P_{k|k-1} = F·P·Fᵀ + Q"""
         F = np.array([[1.0, dt], [0.0, 1.0]])
         Q = np.array([[self.Q_base * dt ** 2, self.Q_base * dt],
                       [self.Q_base * dt,       self.Q_base]])
@@ -154,18 +133,24 @@ class KalmanFilter1D:
         self.P = F @ self.P @ F.T + Q
 
     def update(self, measurement: float) -> None:
-        """Joseph-form update for numerical stability."""
         z = np.array([[measurement]])
         y = z - self.H @ self.x
         S = self.H @ self.P @ self.H.T + self.R
-        K = self.P @ self.H.T @ np.linalg.inv(S)
+        
+        # 🚨 [Kalman Singularity Guard] 🚨
+        try:
+            S_inv = np.linalg.inv(S)
+        except np.linalg.LinAlgError:
+            # Handle singular matrix to prevent crash
+            S_inv = np.zeros_like(S)
+            
+        K = self.P @ self.H.T @ S_inv
         self.x = self.x + K @ y
         I = np.eye(2)
         IKH = I - K @ self.H
         self.P = IKH @ self.P @ IKH.T + K @ self.R @ K.T
 
     def step(self, measurement: float, dt: float) -> tuple[float, float, float]:
-        """Predict + update. Returns (value, rate, variance)."""
         self.predict(dt)
         self.update(measurement)
         return float(self.x[0, 0]), float(self.x[1, 0]), float(self.P[0, 0])
@@ -175,28 +160,9 @@ class KalmanFilter1D:
         horizon_seconds: float,
         mean_reversion_rate: float = 0.0,
     ) -> tuple[float, float]:
-        """
-        Project state forward by horizon_seconds.
-
-        FIX-T3 — OU-consistent variance:
-        If mean_reversion_rate θ > 0, the OU process has a finite steady-state
-        variance instead of the linearly growing variance of constant-velocity.
-
-        OU steady-state variance:  σ²_∞ = Q_eff / (2θ)
-        Interpolation:  σ²(T) = σ²_∞ + (σ²_0 - σ²_∞)·exp(-2θT)
-
-        where σ²_0 = current P[0,0] and Q_eff = Q_base (diffusion coefficient).
-        This gives a variance that grows initially then saturates — physically
-        correct for bounded atmospheric processes.
-
-        For mean_reversion_rate = 0: reverts to standard constant-velocity
-        (linearly growing variance), which is the correct limit θ → 0.
-        """
-        # ── Mean projection ──
         if mean_reversion_rate > 0:
             theta = mean_reversion_rate
             T = horizon_seconds
-            # OU: E[x(T)] = x(0) + rate/θ × (1 - e^{-θT})
             decay = math.exp(-theta * T)
             rate_contribution = self.x[1, 0] * (1.0 - decay) / theta
         else:
@@ -204,20 +170,15 @@ class KalmanFilter1D:
 
         x_proj_value = self.x[0, 0] + rate_contribution
 
-        # ── Variance projection ──
         if mean_reversion_rate > 0:
             theta = mean_reversion_rate
             T = horizon_seconds
             sigma2_0 = float(self.P[0, 0])
-            # Steady-state OU variance (diffusion / 2θ)
             sigma2_inf = self.Q_base / (2.0 * theta)
-            # Interpolate: starts at current uncertainty, saturates at σ²_∞
             decay2 = math.exp(-2.0 * theta * T)
             proj_var = sigma2_inf + (sigma2_0 - sigma2_inf) * decay2
-            # Ensure non-negative (can be slightly negative due to float arithmetic)
             proj_var = max(proj_var, sigma2_inf)
         else:
-            # Standard constant-velocity variance propagation
             F = np.array([[1.0, horizon_seconds], [0.0, 1.0]])
             Q = np.array([[self.Q_base * horizon_seconds ** 2, self.Q_base * horizon_seconds],
                           [self.Q_base * horizon_seconds,       self.Q_base]])
@@ -232,12 +193,6 @@ class KalmanFilter1D:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def compute_trend_significance(values: list[float], times: list[float]) -> tuple[float, float]:
-    """
-    Linear regression slope + two-tailed p-value via Student's t-test.
-    H₀: slope = 0 (no trend).  p < 0.05 → significant trend.
-
-    Uses self-contained t_distribution_p_value — no scipy required.
-    """
     if len(values) < 3:
         return 0.0, 1.0
 
@@ -261,7 +216,7 @@ def compute_trend_significance(values: list[float], times: list[float]) -> tuple
     se_slope = math.sqrt(s2 / Stt) if Stt > 0 else 1.0
 
     if se_slope < 1e-10:
-        return slope, 0.0   # Perfect linear fit → p ≈ 0
+        return slope, 0.0 
 
     t_stat = slope / se_slope
     p_value = t_distribution_p_value(t_stat, df=n - 2)
@@ -274,10 +229,6 @@ def compute_trend_significance(values: list[float], times: list[float]) -> tuple
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TemporalAgent:
-    """
-    Predictive Safety Agent: Kalman filtering + OU projection + trend detection.
-    """
-
     WIND_SENSOR_NOISE_VAR = 0.25
     BATTERY_SENSOR_NOISE_VAR = 0.10
     WIND_PROCESS_NOISE = 0.01
@@ -285,7 +236,6 @@ class TemporalAgent:
 
     FAST_DRAIN_THRESHOLD_PCT_PER_MIN = 2.0
     WIND_INCREASE_THRESHOLD_MS_PER_MIN = 0.5
-    # FIX-T1: meaningful threshold — warn if projected wind > 20% above current
     WIND_PROJECTION_INCREASE_RATIO = 1.20
 
     def __init__(self, projection_horizon_min: float = 5.0):
@@ -298,14 +248,7 @@ class TemporalAgent:
         self._battery_history: list[float] = []
         self._time_history: list[float] = []
         self._last_timestamp: Optional[float] = None
-
-        # FIX NEW-A: Time-based rolling window (seconds).
-        # A fixed sample count (e.g. 20 readings) is unstable when sensor
-        # frequency varies — 20 readings at 1Hz = 20s context, but at 0.1Hz
-        # = 200s context. The t-test significance level depends implicitly on
-        # the time span, making trend detection inconsistent across sampling rates.
-        # Solution: keep only readings within a fixed time horizon (default: 120s).
-        self.history_window_s: float = 120.0  # 2-minute rolling window
+        self.history_window_s: float = 120.0 
 
     def reset(self) -> None:
         self._wind_kf = None
@@ -315,8 +258,39 @@ class TemporalAgent:
         self._time_history.clear()
         self._last_timestamp = None
 
+    def _create_fatal_nan_report(self, reason: str, elapsed_ms: float) -> TemporalStateEstimate:
+        """
+        [Aviation-Grade]: يولد تقرير رفض زمني حتمي في حال تلوث البيانات بـ NaN.
+        قيم متعمدة (بطارية 0% ورياح 999) لضمان الفشل القطعي دون تمرير الـ NaN لـ ConsensusAgent.
+        """
+        return TemporalStateEstimate(
+            wind_speed_ms=999.0, 
+            wind_speed_variance=999.0,
+            wind_trend_ms_per_min=99.0,
+            battery_pct=0.0, 
+            battery_variance=999.0,
+            battery_drain_rate_pct_per_min=99.0,
+            wind_increasing=True,
+            battery_draining_fast=True,
+            horizon_min=self.horizon_min,
+            projected_wind_ms=999.0,
+            projected_battery_pct=0.0,
+            wind_trend_p_value=0.0,
+            battery_trend_p_value=0.0,
+            temporal_warnings=[f"FATAL VETO (Temporal): {reason}"],
+            estimation_time_ms=elapsed_ms
+        )
+
     def process_reading(self, reading: SensorReading) -> TemporalStateEstimate:
         t_start = time.perf_counter()
+
+        # 🚨 [حارس وقت التشغيل 1 - Input NaN Guard] 🚨
+        # يمنع تسمم مصفوفات فلتر كالمان (NaN Poisoning) منذ اللحظة الأولى.
+        if math.isnan(reading.wind_speed_ms) or math.isnan(reading.battery_pct):
+            return self._create_fatal_nan_report(
+                "NaN detected in incoming sensor telemetry.", 
+                (time.perf_counter() - t_start) * 1000
+            )
 
         if self._wind_kf is None:
             self._wind_kf = KalmanFilter1D(
@@ -348,6 +322,13 @@ class TemporalAgent:
             batt_rate = float(self._battery_kf.x[1, 0])
             batt_var  = float(self._battery_kf.P[0, 0])
 
+        # 🚨 [حارس وقت التشغيل 2 - KF Matrix Corruption Guard] 🚨
+        if math.isnan(wind_est) or math.isnan(batt_est):
+            return self._create_fatal_nan_report(
+                "Kalman Filter matrices collapsed into NaN.", 
+                (time.perf_counter() - t_start) * 1000
+            )
+
         wind_rate_per_min = wind_rate * 60.0
         batt_rate_per_min = batt_rate * 60.0
 
@@ -355,9 +336,6 @@ class TemporalAgent:
         self._battery_history.append(batt_est)
         self._time_history.append(reading.timestamp_s)
 
-        # FIX NEW-A: Time-based window eviction — remove readings older than
-        # history_window_s seconds. This guarantees consistent statistical
-        # context regardless of sensor sampling frequency.
         cutoff_time = reading.timestamp_s - self.history_window_s
         while self._time_history and self._time_history[0] < cutoff_time:
             self._wind_history.pop(0)
@@ -370,7 +348,6 @@ class TemporalAgent:
         wind_slope_per_min = wind_slope * 60.0
         batt_slope_per_min = batt_slope * 60.0
 
-        # OU mean reversion for wind; no reversion for battery drain
         proj_wind, proj_wind_var = self._wind_kf.project(
             self.horizon_s, mean_reversion_rate=0.02
         )
@@ -404,7 +381,6 @@ class TemporalAgent:
                 f"(p={batt_p:.3f}). Projected in {self.horizon_min:.0f}min: {proj_batt:.1f}%"
             )
 
-        # FIX-T1: Compare proj_wind vs current wind_est — not proj_wind vs itself
         if proj_wind > wind_est * self.WIND_PROJECTION_INCREASE_RATIO and proj_wind > 5.0:
             warnings.append(
                 f"PROJECTION: Wind expected to increase from {wind_est:.1f} → "

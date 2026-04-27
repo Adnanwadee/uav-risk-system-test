@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 import numpy as np
-
+from uav_risk.stage2.tools.toolbox import AviationMath
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data Contracts
@@ -424,10 +424,34 @@ class PhysicsAgent:
         "CRITICAL": 1.0,    # > 15% → NO-GO
     }
 
+
+
     def __init__(self, spec: DronePhysicalSpec, n_mc_samples: int = 10_000):
         self.spec = spec
         self.engine = PhysicsEngine()
         self.mc = MonteCarloSimulator(n_samples=n_mc_samples)
+
+    def _create_fatal_nan_report(self, fail_reason: str) -> PhysicsRiskReport:
+        """
+        [Aviation-Grade]: يولد تقرير رفض حتمي إذا تم اكتشاف انهيار رياضي (NaN).
+        يمنع القيم الفاسدة من تضليل قرار الإجماع.
+        """
+        return PhysicsRiskReport(
+            risk_level="CRITICAL",
+            go_no_go="NO-GO",
+            thrust_margin_ratio=0.0,         
+            structural_load_ratio=2.0,
+            battery_margin_pct=-100.0,
+            wind_tolerance_ratio=2.0,
+            mc_failure_probability=1.0,
+            mc_confidence_interval=(0.99, 1.0),
+            mc_samples=0,
+            projected_risk_level="CRITICAL",
+            projected_failure_probability=1.0,
+            calculation_time_ms=0.0,
+            warnings=[f"FATAL VETO: {fail_reason}"],
+            equations_used=["RUNTIME_NaN_GUARD_INTERCEPT"]
+        )
 
     def analyze(self, data: RuntimeFlightData) -> PhysicsRiskReport:
         """
@@ -450,7 +474,6 @@ class PhysicsAgent:
             data.wind_speed_ms, data.wind_direction_deg, self.spec, air_ρ
         )
         equations_used.append(
-            # C4b: A_eff matches aerodynamic_drag() — angle-dependent projected area
             f"Drag: F_d = ½ρv²·Cd·A_eff = {drag_n:.2f} N "
             f"(v={data.wind_speed_ms:.2f} m/s, Cd={self.spec.drag_coefficient}, "
             f"A_eff={self.spec.frontal_area_m2 * abs(math.cos(math.radians(data.wind_direction_deg % 360))) + self.spec.frontal_area_m2 * 1.2 * abs(math.sin(math.radians(data.wind_direction_deg % 360))):.4f} m², "
@@ -460,8 +483,12 @@ class PhysicsAgent:
         # ── Step 3: Required Thrust ──
         req_thrust = self.engine.required_thrust(self.spec.mass_kg, drag_n, air_ρ)
         thrust_margin = self.spec.max_thrust_n / (req_thrust * SAFETY_FACTOR)
+        
+        # 🚨 [حارس وقت التشغيل - NaN Guard 1] 🚨
+        if math.isnan(req_thrust) or math.isnan(thrust_margin):
+            return self._create_fatal_nan_report("Thrust calculation resulted in NaN (Check mass, drag, or density).")
+
         equations_used.append(
-            # C4a: Text matches the actual vector formula used in the code
             f"Thrust: T_req = sqrt((mg)² + F_drag²) = {req_thrust:.2f} N, "
             f"Margin = {thrust_margin:.2f}× (limit w/ SF={SAFETY_FACTOR})"
         )
@@ -476,6 +503,11 @@ class PhysicsAgent:
         battery_margin = battery_life_min - data.estimated_flight_time_min
         hover_thrust = self.spec.mass_kg * G
         power_multiplier = (req_thrust / hover_thrust) ** 1.5
+        
+        # 🚨 [حارس وقت التشغيل - NaN Guard 2] 🚨
+        if math.isnan(battery_margin) or math.isnan(power_w):
+            return self._create_fatal_nan_report("Battery projection resulted in NaN (Check current percentage or drain variables).")
+
         equations_used.append(
             f"Power (Actuator Disk): P=P_hover/FM*(T/T_hover)^1.5 = "
             f"{self.spec.hover_power_w}/0.75*{power_multiplier:.3f} = {power_w:.1f}W"
@@ -493,6 +525,10 @@ class PhysicsAgent:
 
         # ── Step 6: Wind Tolerance ──
         wind_ratio = data.wind_speed_ms / self.spec.max_wind_tolerance_ms
+
+        # 🚨 [حارس وقت التشغيل - NaN Guard 3] 🚨
+        if math.isnan(wind_ratio) or math.isnan(structural_ratio):
+            return self._create_fatal_nan_report("Wind or Structural limits resulted in NaN (Check max limits in specs).")
 
         # ── Step 7: Warning Flags ──
         if thrust_margin < 1.2:
@@ -529,30 +565,32 @@ class PhysicsAgent:
             )
             proj_mc = self.mc.run(projected_data, self.spec)
             projected_failure_prob = proj_mc["failure_probability"]
+            
             # ── حساب هوامش المستقبل الحقيقية ديناميكياً ──
-            # 1. حساب السحب والدفع المستقبلي
             proj_drag = self.engine.aerodynamic_drag(
                 data.projected_wind_ms, data.wind_direction_deg, self.spec, air_ρ
             )
             proj_thrust = self.engine.required_thrust(self.spec.mass_kg, proj_drag, air_ρ)
-            
-            # 2. حساب استهلاك الطاقة المستقبلي
             proj_power = self.engine.power_consumption(self.spec.hover_power_w, self.spec.mass_kg, proj_thrust)
             
-            # 3. حساب عمر البطارية المتبقي تحت ظروف المستقبل
             proj_batt_life = self.engine.battery_life_remaining(
                 data.projected_battery_pct, self.spec.battery_capacity_wh, proj_power
             )
             proj_batt_margin = proj_batt_life - data.estimated_flight_time_min
 
-            # 4. الآن نصنف الخطر باستخدام القيم المستقبلية الصحيحة
+            # 🚨 [حارس وقت التشغيل - NaN Guard 4] 🚨
+            if any(math.isnan(x) for x in [projected_failure_prob, proj_thrust, proj_batt_margin, proj_drag]):
+                return self._create_fatal_nan_report("Projected Future State calculations collapsed into NaN. Target unreachable safely.")
+
+            # 4. تصنيف الخطر باستخدام القيم المستقبلية
             projected_risk = self._classify_risk(
                 projected_failure_prob,
                 self.spec.max_thrust_n / (proj_thrust * SAFETY_FACTOR),
-                proj_batt_margin,               # ← هنا استخدام الهامش المستقبلي
+                proj_batt_margin,
                 data.projected_wind_ms / self.spec.max_wind_tolerance_ms,
                 proj_drag / self.spec.structural_load_limit_n
             )
+            
             if projected_risk in ("HIGH", "CRITICAL") and risk_level not in ("HIGH", "CRITICAL"):
                 warnings.append(
                     f"FUTURE RISK: Conditions projected to deteriorate to {projected_risk} "
@@ -577,49 +615,3 @@ class PhysicsAgent:
             warnings=warnings,
             equations_used=equations_used,
         )
-
-    def _classify_risk(
-        self,
-        failure_prob: float,
-        thrust_margin: float,
-        battery_margin: float,
-        wind_ratio: float,
-        structural_ratio: float = 0.0,
-    ) -> str:
-        """
-        Risk classification using both probabilistic AND deterministic criteria.
-        Worst-case across all metrics wins (conservative by design).
-        """
-        # Probabilistic classification
-        if failure_prob < self.RISK_THRESHOLDS["LOW"]:
-            prob_risk = "LOW"
-        elif failure_prob < self.RISK_THRESHOLDS["MODERATE"]:
-            prob_risk = "MODERATE"
-        elif failure_prob < self.RISK_THRESHOLDS["HIGH"]:
-            prob_risk = "HIGH"
-        else:
-            prob_risk = "CRITICAL"
-
-        # Deterministic overrides (hard physical limits)
-        if thrust_margin < 1.0:   return "CRITICAL"  # Cannot sustain flight
-        if wind_ratio > 1.0:      return "CRITICAL"  # Exceeds rated tolerance
-        if battery_margin < 0:    return "CRITICAL"  # Cannot complete mission
-        if structural_ratio > 1.0: return "CRITICAL" # Frame failure risk
-        # (structural_ratio computed above but passed via closure — use direct check)
-
-        return prob_risk
-
-    def _decision(self, risk_level: str, warnings: list[str]) -> str:
-        """Maps risk level to operational decision."""
-        mapping = {
-            "LOW":      "GO",
-            "MODERATE": "CAUTION",
-            "HIGH":     "CAUTION",
-            "CRITICAL": "NO-GO",
-        }
-        decision = mapping[risk_level]
-        # Escalate CAUTION to consideration if multiple warnings
-        if decision == "CAUTION" and len(warnings) >= 3:
-            # Still CAUTION, but flag for human review
-            pass
-        return decision

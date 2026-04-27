@@ -340,3 +340,40 @@ class ACESafetyGraph:
             checkpointer=checkpointer,
             interrupt_before=["node_human_review"]
         )
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. App Instantiation (تفعيل المحرك بناءً على DronePhysicalSpec)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# [FIX] استيراد الأسماء الصحيحة من الملف المرفق
+from uav_risk.stage2.agents.physics_agent import PhysicsAgent, DronePhysicalSpec
+
+# [FIX] إنشاء المواصفات مع تزويد كافة الحقول الإلزامية المطلوبة في dataclass
+_default_spec = DronePhysicalSpec(
+    mass_kg=1.3,                    #
+    max_thrust_n=45.0,              #
+    rotor_area_m2=0.25,             #
+    drag_coefficient=0.8,           #
+    frontal_area_m2=0.05,           #
+    max_wind_tolerance_ms=12.0,     #
+    battery_capacity_wh=50.0,       #
+    hover_power_w=220.0,            #
+    structural_load_limit_n=100.0   #
+)
+
+# تهيئة الوكلاء
+_physics_agent = PhysicsAgent(spec=_default_spec) # تم تمرير الحجة المطلوبة 'spec'
+
+_temporal_agent = TemporalAgent()
+_legal_agent = LegalAgent()
+_consensus_agent = ConsensusAgent()
+
+# إنشاء المنسق (Orchestrator)
+orchestrator = ACESafetyGraph(
+    physics_agent=_physics_agent,
+    temporal_agent=_temporal_agent,
+    legal_agent=_legal_agent,
+    consensus_agent=_consensus_agent
+)
+
+# تجميع الـ Graph وتصديره
+safety_agent_app = orchestrator.compile()

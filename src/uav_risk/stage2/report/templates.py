@@ -1,163 +1,105 @@
-from __future__ import annotations
+"""
+ACE Safety Report Writer (V4.1.1 - Apex Certified)
+=================================================
+الدور: ربط البيانات بالذكاء الاصطناعي مع ضمان الموثوقية.
+المميزات: إعادة محاولة تلقائية (Tenacity)، قياس أداء كل مرحلة، وتحقق مسبق.
+"""
 
-from typing import Any, Dict, List
+import logging
+import time
+from typing import Dict, Any, Optional
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
+from .prompts import SYSTEM_PROMPT, build_agentic_report_prompt
+from .verifier import ReportVerifier
+from uav_risk.stage2.evidence import EvidenceBuilder
+from uav_risk.stage2.schemas import ConsensusReport
 
-def _fmt(x: Any, nd: int = 2) -> str:
-    if x is None:
-        return "N/A"
-    if isinstance(x, (int, float)):
-        return f"{x:.{nd}f}"
-    return str(x)
+logger = logging.getLogger("ReportWriter")
 
+class SafetyReportWriter:
+    def __init__(self, llm_client: Any):
+        self.llm = llm_client
 
-def render_report_md(ep: Dict[str, Any]) -> str:
-    # --------------------------------------------------
-    # Canonical inputs (defensive reads)
-    # --------------------------------------------------
-    decision = ep.get("decision", "INSUFFICIENT_DATA")
-
-    s1 = ep.get("stage1_facts", {}) or {}
-    dq = ep.get("data_quality", {}) or {}
-    drivers = ep.get("risk_drivers", []) or []
-    rules = ep.get("rules", {}) or {}
-    ev = ep.get("evidence_snippets", []) or []
-    contract = ep.get("input_contract", {}) or {}
-
-    present_count = dq.get("present_count")
-    total_count = dq.get("total_count")
-    completeness = dq.get("completeness_ratio")
-
-    # --------------------------------------------------
-    # Report body
-    # --------------------------------------------------
-    lines: List[str] = []
-
-    # ===============================
-    # Header
-    # ===============================
-    lines.append("# UAV Flight Risk Assessment Report")
-    lines.append("")
-
-    # ===============================
-    # 1) Executive Summary
-    # ===============================
-    lines.append("## 1) Executive Summary")
-    lines.append(f"- **Final Operational Decision (Stage-2):** {decision}")
-    lines.append(
-        f"- **Model Assessment (Stage-1):** "
-        f"{s1.get('predicted_class', 'N/A')} "
-        f"(model decision: {s1.get('decision', 'N/A')})"
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((TimeoutError, ConnectionError, Exception)),
+        reraise=True
     )
-    lines.append(f"- **Risk Score (Regression):** {_fmt(s1.get('risk_score'), 4)}")
-    lines.append(f"- **Model Confidence:** {_fmt(s1.get('confidence'), 4)}")
-    lines.append(
-        f"- **Input Completeness:** {_fmt(completeness, 2)} "
-        f"({present_count if present_count is not None else 'N/A'} / "
-        f"{total_count if total_count is not None else 'N/A'})"
-    )
-    lines.append("")
-
-    # ===============================
-    # 2) Input Contract & Readiness
-    # ===============================
-    if contract:
-        lines.append("## 2) Input Contract & Readiness")
-        lines.append(f"- **Model-Ready:** {contract.get('model_ready', 'N/A')}")
-        lines.append(f"- **Safety-Ready:** {contract.get('safety_ready', 'N/A')}")
-
-        mmk = contract.get("missing_model_keys", []) or []
-        msk = contract.get("missing_safety_keys", []) or []
-
-        if mmk:
-            lines.append("- **Missing mandatory model inputs:**")
-            for k in mmk:
-                lines.append(f"  - `{k}`")
-
-        if msk:
-            lines.append("- **Missing safety-critical inputs:**")
-            for k in msk:
-                lines.append(f"  - `{k}`")
-
-        lines.append("")
-
-    # ===============================
-    # 3) Key Risk Drivers
-    # ===============================
-    lines.append("## 3) Key Risk Drivers")
-    if drivers:
-        for d in drivers[:10]:
-            lines.append(
-                f"- **{d.get('driver', 'N/A')}**: "
-                f"{d.get('value', 'N/A')} — {d.get('note', '')}"
+    async def _safe_generate(self, user_prompt: str) -> str:
+        """توليد التقرير مع حماية ضد أخطاء الشبكة العابرة."""
+        start_time = time.perf_counter()
+        try:
+            return await self.llm.generate(
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                temperature=0.0
             )
-    else:
-        lines.append("- No explicit risk drivers identified from available data.")
-    lines.append("")
+        finally:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(f"LLM Generation Phase completed in {duration_ms:.1f}ms")
 
-    # ===============================
-    # 4) Rules & Compliance Analysis
-    # ===============================
-    lines.append("## 4) Rules & Compliance Analysis")
+    async def generate_comprehensive_report(
+        self, 
+        flight_id: str, 
+        payload: Any, 
+        consensus: ConsensusReport, 
+        total_pipeline_time_ms: float
+    ) -> Dict[str, Any]:
+        t_start = time.perf_counter()
+        stage_times = {}
 
-    hard = rules.get("hard_violations", []) or []
-    adv = rules.get("advisories", []) or []
-
-    if hard:
-        lines.append("### HARD Violations (Operational NO-GO)")
-        for r in hard:
-            lines.append(
-                f"- [{r.get('rule_id')}] {r.get('message')} "
-                f"| evidence={r.get('evidence')}"
-            )
-    else:
-        lines.append("- No hard safety violations detected.")
-
-    lines.append("")
-
-    if adv:
-        lines.append("### Advisories & Mitigation Flags")
-        for r in adv:
-            lines.append(
-                f"- [{r.get('rule_id')}] {r.get('message')} "
-                f"| evidence={r.get('evidence')}"
-            )
-    else:
-        lines.append("- No advisory conditions raised.")
-
-    lines.append("")
-
-    # ===============================
-    # 5) Evidence & References
-    lines.append("## 5) Evidence & Citations")
-    if ev:
-        for i, e in enumerate(ev[:12], start=1):
-            cit = e.get("citation") or e.get("evidence_id") or "N/A"
-            lines.append(f"- **E{i}**: {cit}")
-    else:
-        lines.append("- No external evidence retrieved for this assessment.")
-    lines.append("")
-
-
-    lines.append("")
-
-    # ===============================
-    # 6) Data Quality & LimitationsJ
-    # ===============================
-    lines.append("## 6) Data Quality & Limitations")
-
-    missing = dq.get("missing_keys", []) or []
-    if missing:
-        lines.append(
-            f"- {len(missing)} input fields are missing or undefined. "
-            "This may limit the reliability of the assessment."
+        # 1. بناء حزمة الأدلة الجنائية
+        builder = EvidenceBuilder()
+        evidence_pack = builder.build_final_pack(
+            flight_id=flight_id,
+            payload=payload,
+            consensus_report=consensus,
+            processing_time_ms=total_pipeline_time_ms
         )
-        for k in missing[:14]:
-            lines.append(f"  - `{k}`")
-        if len(missing) > 14:
-            lines.append(f"  - ... and {len(missing) - 14} additional fields")
-    else:
-        lines.append("- All required inputs were provided.")
+        stage_times["evidence_building_ms"] = (time.perf_counter() - t_start) * 1000
 
-    lines.append("")
-    return "\n".join(lines)
+        # [FIX] تحقق مسبق من كفاية الأدلة
+        if not evidence_pack.forensic_drivers and evidence_pack.decision != "DATA_INSUFFICIENT":
+            logger.warning(f"[{flight_id}] Critical warning: Minimal forensic data available.")
+
+        # 2. التوليد عبر الـ LLM مع Retry
+        evidence_json = evidence_pack.model_dump_json(indent=2)
+        report_md = "REPORT_GENERATION_FAILED"
+        is_valid = False
+        
+        try:
+            user_prompt = build_agentic_report_prompt(evidence_json)
+            gen_start = time.perf_counter()
+            report_md = await self._safe_generate(user_prompt)
+            stage_times["llm_generation_ms"] = (time.perf_counter() - gen_start) * 1000
+            
+            # 3. التحقق العميق (Deep Grounding Guard)
+            ver_start = time.perf_counter()
+            is_valid, audit_errors = ReportVerifier.verify_grounding(report_md, evidence_pack)
+            stage_times["verification_ms"] = (time.perf_counter() - ver_start) * 1000
+            
+            if not is_valid:
+                logger.error(f"Audit Fail for {flight_id}: {audit_errors}")
+                report_md += f"\n\n---\n⚠️ **INTEGRITY NOTICE:** This report failed automated grounding check: {audit_errors}"
+
+        except ValueError as ve:
+            logger.error(f"[{flight_id}] Logic Error: {ve}")
+            report_md = f"# VALIDATION ERROR\nData validation failed during report generation: {str(ve)}"
+        except Exception as e:
+            logger.critical(f"Report Generation Crash: {e}", exc_info=True)
+            report_md = f"# EMERGENCY FALLBACK\nVerdict: {consensus.final_decision}\nStatus: Cognitive Engine Offline."
+
+        total_gen_time = (time.perf_counter() - t_start) * 1000
+        
+        return {
+            "markdown": report_md,
+            "structured_data": evidence_pack.model_dump(),
+            "metadata": {
+                "audit_passed": is_valid,
+                "generation_time_ms": round(total_gen_time, 1),
+                "stage_breakdown": stage_times,
+                "request_id": flight_id
+            }
+        }

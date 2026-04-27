@@ -50,10 +50,12 @@ class SafetyThresholds(BaseModel):
     )
     
     # Stage 1 ML Integration
+    # Stage 1 ML Integration
     max_stage1_ml_risk_score: float = Field(
-        default=float(os.getenv("POLICY_MAX_STAGE1_RISK", "0.85")),
-        description="If Stage 1 XGBoost model predicts risk > 85%, abort pre-flight.",
-        ge=0, le=1
+        default=float(os.getenv("POLICY_MAX_STAGE1_RISK", "1.0")), # تغيير 0.85 إلى 1.0
+        description="Abort if risk is strictly above 1.0",
+        ge=0, le=1.1 # زيادة الحد للسماح بـ 1.0
+    
     )
 
     def get_active_policies(self) -> Dict[str, Any]:

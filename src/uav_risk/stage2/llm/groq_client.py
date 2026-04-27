@@ -119,7 +119,7 @@ class GroqAsyncClient(AsyncLLMClientInterface):
     def __init__(self, model_name: str = "llama3-70b-8192", temperature: float = 0.0, 
                  max_retries: int = 3, base_timeout: float = 10.0, 
                  circuit_breaker: Optional[CircuitBreaker] = None):
-        self.api_key = os.getenv("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")
+        self.api_key = os.getenv("GROQ_API_KEY")
         if not self.api_key: raise ValueError("CRITICAL: GROQ_API_KEY environment variable is missing.")
         self.client = AsyncGroq(api_key=self.api_key)
         self.model_name = model_name

@@ -129,8 +129,8 @@ class TelemetryFormatter:
     """
     
     NUMERIC_KEYS: Set[str] = {
-        "battery_state_of_charge_pct", "altitude_m", "wind_speed_mps",
-        "wind_direction_deg", "uav_heading_deg", "distance_remaining_m", 
+        "battery_level_pct", "altitude_m", "wind_speed_ms", # تم التوحيد
+        "wind_direction_deg", "uav_heading_deg", "planned_distance_m", 
         "speed_mps", "environment_gnss_jam_dbm", "stage1_ml_risk_score",
         "uav_max_speed_mps", "uav_mass_kg", "uav_max_thrust_n"
     }
@@ -141,7 +141,7 @@ class TelemetryFormatter:
     
     # المفاتيح التي سيؤدي غيابها لرفض الرحلة فوراً
     REQUIRED_KEYS: Set[str] = {
-        "battery_state_of_charge_pct", "altitude_m", "wind_speed_mps",
+        "battery_level_pct", "altitude_m", "wind_speed_ms", # تم التوحيد
         "comms_uplink_status", "environment_gnss_jam_dbm"
     }
     

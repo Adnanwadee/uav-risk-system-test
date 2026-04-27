@@ -41,15 +41,16 @@ class MLResult(BaseModel):
     risk_score: float = Field(..., ge=0.0, le=1.0)
     confidence: float = Field(..., ge=0.0, le=1.0)
 
-class RuntimeFlightData(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True) 
 
-    battery_level_pct: float = Field(..., ge=0.0, le=100.0)
-    # [FIX] إزالة `ge=0.0` للسماح بالشحن (Regenerative / Solar)
+class RuntimeFlightData(BaseModel):
+    # [تعديل] تغيير forbid إلى ignore لضمان عدم الانهيار عند وجود حقول إضافية
+    model_config = ConfigDict(extra="ignore", frozen=True) 
+
+    battery_level_pct: float = Field(..., ge=0.0, le=100.0) # المسمى الموحد
     battery_drain_rate_pct_per_min: float = Field(...) 
     altitude_m: float = Field(..., ge=0.0, le=20000.0)
     temperature_c: float = Field(..., ge=-80.0, le=80.0)
-    wind_speed_ms: float = Field(..., ge=0.0, le=150.0)
+    wind_speed_ms: float = Field(..., ge=0.0, le=150.0) # المسمى الموحد
     wind_direction_deg: float = Field(..., ge=0.0, le=360.0)
     uav_heading_deg: float = Field(..., ge=0.0, le=360.0)
     planned_distance_m: float = Field(..., ge=0.0)
@@ -58,9 +59,7 @@ class RuntimeFlightData(BaseModel):
     
     projected_wind_ms: Optional[float] = Field(None, ge=0.0)
     projected_battery_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
-    
     stage1_ml_risk_score: float = Field(0.0, ge=0.0, le=1.0)
-
 # ---------------------------------------------------------------------------
 # 3. Agent Output Contracts
 # ---------------------------------------------------------------------------

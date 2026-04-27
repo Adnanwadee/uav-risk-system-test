@@ -1,14 +1,13 @@
 """
-ACE System Master Pipeline (V14 - Absolute Apex / Mission Critical)
+ACE System Master Pipeline (V15 - Absolute Apex / Mission Critical)
 ===================================================================
 Role: The Central Mission Control orchestrating the End-to-End flow.
 
-Genius Integrations & SRE Upgrades (V14):
-- Pervasive Traceability: `thread_id` is generated instantly to track failures at ANY stage.
-- Universal Resource Cleanup: Advanced async/sync `finally` block for robust LLM client shutdown.
-- Runtime Protocol Validation: `@runtime_checkable` added for strict, dynamic dependency injection safety.
-- Python Version Agnostic: Graceful fallbacks for `typing.Protocol` to support older environments.
-- Deep Operational Probes: Component-level health checks instead of hardcoded strings.
+Genius Integrations & SRE Upgrades (V15):
+- Dependency Injection: Graph app is now injected from the API lifespan to prevent boot crashes.
+- Pervasive Traceability: `thread_id` tracks failures at ANY stage.
+- Universal Resource Cleanup: Robust LLM client shutdown logic.
+- Zero-Import-Halt: Removed global safety_agent_app import to support dynamic orchestration.
 
 Author: Stage 2 — ACE System
 """
@@ -36,10 +35,10 @@ from uav_risk.stage2.schemas import RuntimeFlightData, AgentState, ConsensusRepo
 from uav_risk.stage2.policies.deterministic_core import DeterministicCore
 from uav_risk.stage2.tools.toolbox import Stage1Bridge, TelemetryFormatter
 
-# ─── 2. Stage 2 LangGraph ───
-from uav_risk.stage2.graph.safety_agent import safety_agent_app 
+# [REMOVED] from uav_risk.stage2.graph.safety_agent import safety_agent_app 
+# تم حذف السطر أعلاه لمنع ImportError أثناء الإقلاع. الـ Graph يتم حقنه ديناميكياً الآن.
 
-# ─── 3. Final Report Writer ───
+# ─── 2. Final Report Writer ───
 from uav_risk.stage2.llm.groq_client import GroqAsyncClient
 from uav_risk.stage2.llm.report_writer import SafetyReportWriter
 
@@ -65,9 +64,10 @@ class ReportWriterProtocol(Protocol):
         f"after error: {retry_state.outcome.exception()}"
     )
 )
-async def _invoke_graph_with_retry(state: AgentState, config: dict, timeout: float) -> dict:
+async def _invoke_graph_with_retry(graph_app: Any, state: AgentState, config: dict, timeout: float) -> dict:
+    """[FIX] يستقبل الآن كائن الـ Graph كمعطى محقون لضمان استمرارية الخدمة."""
     return await asyncio.wait_for(
-        safety_agent_app.ainvoke(state, config=config),
+        graph_app.ainvoke(state, config=config),
         timeout=timeout
     )
 
@@ -75,12 +75,13 @@ async def _invoke_graph_with_retry(state: AgentState, config: dict, timeout: flo
 async def run_ace_pipeline(
     flight_id: str, 
     payload: MasterFlightPayload,
+    graph_app: Any, # [FIX] نمرر الـ Graph الجاهز من الـ API لمنع الانهيار
     report_writer: Optional[ReportWriterProtocol] = None
 ) -> Dict[str, Any]:
     
     pipeline_start_time = time.perf_counter()
     
-    # [FIX] Pervasive Traceability: Generate thread_id immediately for observability at ANY stage
+    # [FIX] Pervasive Traceability: Generate thread_id immediately for observability
     thread_id = f"flight_{flight_id}_{uuid.uuid4().hex[:8]}"
     
     logger.info(f"=== ACE Pipeline Initiated | Flight ID: {flight_id} | Trace: {thread_id} ===")
@@ -121,18 +122,23 @@ async def run_ace_pipeline(
         # =====================================================================
         # STEP 4: Telemetry Formatting & NaN Shielding
         # =====================================================================
-        raw_telemetry = (payload.telemetry or DynamicTelemetryInput()).model_dump()
-        raw_telemetry["stage1_ml_risk_score"] = stage1_risk_score
-        raw_telemetry["uav_max_thrust_n"] = payload.uav.max_thrust_n
-        raw_telemetry["uav_mass_kg"] = payload.uav.mass_kg
-        raw_telemetry["uav_max_speed_mps"] = payload.uav.max_speed_mps
+        
+        # [FIX]: بدلاً من بناء القاموس يدوياً ونسيان الحقول، استخدم الـ tier0_dict الجاهز والمكتمل
+        # STEP 4: Telemetry Formatting
+        # [FIX] ندمج بيانات البيئة مع التيليمتري لضمان عدم فقدان أي حقل مطلوب
+        raw_telemetry = tier0_dict.copy()
+        raw_telemetry.update({
+            "uav_max_thrust_n": payload.uav.max_thrust_n,
+            "uav_mass_kg": payload.uav.mass_kg,
+            "uav_max_speed_mps": payload.uav.max_speed_mps
+        })
         
         try:
             safe_telemetry_dict = TelemetryFormatter.sanitize_and_normalize(raw_telemetry, strict=True)
             runtime_data = RuntimeFlightData(**safe_telemetry_dict)
-        except ValueError as ve:
-            logger.error(f"[TELEMETRY ERROR] Flight {flight_id} failed strict formatting: {ve}")
-            return _build_veto_response(flight_id, "SYS_TELEMETRY_CORRUPTION", str(ve), thread_id)
+        except Exception as ve:
+            logger.error(f"Formatting Error: {ve}")
+            return _build_veto_response(flight_id, "SYS_ERR", str(ve), thread_id)
 
         # =====================================================================
         # STEP 5: Stage 2 LangGraph Orchestration
@@ -155,7 +161,8 @@ async def run_ace_pipeline(
         config = {"configurable": {"thread_id": thread_id}}
         
         graph_start_timer = time.perf_counter()
-        final_state = await _invoke_graph_with_retry(initial_state, config, GRAPH_TIMEOUT_SECONDS)
+        # [FIX] تمرير الـ graph_app المحقون بدلاً من النسخة العالمية
+        final_state = await _invoke_graph_with_retry(graph_app, initial_state, config, GRAPH_TIMEOUT_SECONDS)
         graph_duration_ms = (time.perf_counter() - graph_start_timer) * 1000
 
         consensus_report: ConsensusReport = final_state.get("consensus_report")
@@ -165,7 +172,6 @@ async def run_ace_pipeline(
         # =====================================================================
         # STEP 6: Final Report Generation
         # =====================================================================
-        # [FIX] Runtime Protocol Verification
         if report_writer is not None and not isinstance(report_writer, ReportWriterProtocol):
             logger.warning("[DI WARNING] Injected report_writer invalid. Instantiating fallback writer.")
             report_writer = None
@@ -209,14 +215,10 @@ async def run_ace_pipeline(
         # [FIX] Advanced Resource Leak Prevention
         if local_llm_client:
             try:
-                if hasattr(local_llm_client, 'close'):
-                    close_method = local_llm_client.close
-                    if asyncio.iscoroutinefunction(close_method):
-                        await close_method()
-                    else:
-                        close_method()
-                elif hasattr(local_llm_client, 'shutdown'):
-                    local_llm_client.shutdown()
+                close_method = getattr(local_llm_client, 'close', getattr(local_llm_client, 'shutdown', None))
+                if close_method:
+                    if asyncio.iscoroutinefunction(close_method): await close_method()
+                    else: close_method()
                 logger.debug(f"[{flight_id}] Closed ephemeral GroqAsyncClient session.")
             except Exception as cleanup_err:
                 logger.warning(f"[{flight_id}] Error during client cleanup: {cleanup_err}")
@@ -248,22 +250,21 @@ def _build_error_response(flight_id: str, error_msg: str, thread_id: Optional[st
             "flight_id": flight_id,
             "decision": "NO-GO",
             "disqualifying_conditions": ["ACE System Failure"],
-            "observability_thread": thread_id # [FIX] Add for traceability
+            "observability_thread": thread_id
         }
     }
 
 # ─── Deep Pipeline Health Check ───
 
-async def pipeline_health_check() -> Dict[str, Any]:
+async def pipeline_health_check(graph_app_status: bool = False) -> Dict[str, Any]:
     """Deep Operational Health Check for K8s Probes."""
     is_groq_configured = bool(os.environ.get("GROQ_API_KEY"))
     
-    # [FIX] Actual component verification
+    # [FIX] التحقق من المكونات أصبح يعتمد على ما تم حقنه فعلياً
     stage1_ok = Stage1Bridge is not None
     tier0_ok = DeterministicCore is not None
-    langgraph_ok = safety_agent_app is not None
     
-    is_healthy = is_groq_configured and stage1_ok and tier0_ok and langgraph_ok
+    is_healthy = is_groq_configured and stage1_ok and tier0_ok and graph_app_status
     
     return {
         "status": "HEALTHY" if is_healthy else "DEGRADED",
@@ -271,7 +272,7 @@ async def pipeline_health_check() -> Dict[str, Any]:
             "stage1_ml_bridge": "ONLINE" if stage1_ok else "OFFLINE",
             "tier0_gateway": "ONLINE" if tier0_ok else "OFFLINE",
             "telemetry_formatter": "ONLINE", 
-            "langgraph_orchestrator": "ONLINE" if langgraph_ok else "OFFLINE",
+            "langgraph_orchestrator": "ONLINE" if graph_app_status else "OFFLINE",
             "llm_provider_configured": is_groq_configured
         },
         "config": {

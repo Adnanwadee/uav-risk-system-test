@@ -36,7 +36,7 @@ class Tier0TelemetryContract(BaseModel):
     stage1_ml_risk_score: float = Field(default=0.0, ge=0, le=1)
     comms_uplink_status: str = Field(..., min_length=1)
     environment_gnss_jam_dbm: float = Field(..., ge=-150, le=0)
-    battery_state_of_charge_pct: float = Field(..., ge=0, le=100)
+    battery_level_pct: float = Field(..., ge=0, le=100) # تم التوحيد
     altitude_m: float = Field(..., ge=0, le=11000)
     population_density: str = Field(default="SPARSE")
 

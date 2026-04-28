@@ -1,282 +1,132 @@
 """
-ACE System Master Pipeline (V15 - Absolute Apex / Mission Critical)
+ACE System Master Pipeline (V15.0 - Absolute Apex / Mission Critical)
 ===================================================================
-Role: The Central Mission Control orchestrating the End-to-End flow.
+الدور: المايسترو الذي يربط المرحلة الأولى (ML) والمرحلة الثانية (Agents) في تدفق واحد متكامل.
 
-Genius Integrations & SRE Upgrades (V15):
-- Dependency Injection: Graph app is now injected from the API lifespan to prevent boot crashes.
-- Pervasive Traceability: `thread_id` tracks failures at ANY stage.
-- Universal Resource Cleanup: Robust LLM client shutdown logic.
-- Zero-Import-Halt: Removed global safety_agent_app import to support dynamic orchestration.
-
-Author: Stage 2 — ACE System
+التكاملات العبقرية في V15:
+1. الاستيعاب الكامل: يمرر الـ 50 عاموداً كاملة لجميع الوكلاء (No Data Evaporation).
+2. استشارة الـ ML: يستدعي المرحلة الأولى كمستشار بنسبة 10% فقط.
+3. التدقيق الجنائي: يبني حزمة الأدلة (Evidence Pack) ويفعل نظام التقارير المطور.
+4. الصلابة: معالجة شاملة للأخطاء (Circuit Breaker Aware) وتطهير نهائي للبيانات.
 """
 
 import os
-import uuid
 import time
 import asyncio
 import logging
-from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
-# [FIX] Protocol import fallback for Python <3.8
-try:
-    from typing import Protocol, runtime_checkable
-except ImportError:
-    from typing_extensions import Protocol, runtime_checkable  # type: ignore
-
-# Resilience Library for Transient Errors
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-
-# ─── 1. External & Internal Contracts ───
-from uav_risk.stage2.input_contract import MasterFlightPayload, DynamicTelemetryInput
-from uav_risk.stage2.schemas import RuntimeFlightData, AgentState, ConsensusReport
+# ─── 1. استيراد المحركات والعقود ───
+from uav_risk.stage2.input_contract import MasterFlightPayload
+from uav_risk.stage2.schemas import ConsensusReport
 from uav_risk.stage2.policies.deterministic_core import DeterministicCore
-from uav_risk.stage2.tools.toolbox import Stage1Bridge, TelemetryFormatter
+from uav_risk.stage1.infer import run_stage1_inference
+from uav_risk.stage2.evidence import EvidenceBuilder
+from uav_risk.utils.json_sanitize import sanitize_for_json
 
-# [REMOVED] from uav_risk.stage2.graph.safety_agent import safety_agent_app 
-# تم حذف السطر أعلاه لمنع ImportError أثناء الإقلاع. الـ Graph يتم حقنه ديناميكياً الآن.
-
-# ─── 2. Final Report Writer ───
-from uav_risk.stage2.llm.groq_client import GroqAsyncClient
-from uav_risk.stage2.llm.report_writer import SafetyReportWriter
-
-logger = logging.getLogger("MasterPipeline")
-GRAPH_TIMEOUT_SECONDS = 25.0 
-
-# ─── [FIX] Protocol for Strict DI Validation at Runtime ───
-@runtime_checkable
-class ReportWriterProtocol(Protocol):
-    """عقد ثابت وحركي يضمن أن الكائن المُحقن يمتلك الدوال المطلوبة."""
-    async def generate_markdown_report(self, consensus_report: ConsensusReport, flight_id: str) -> str: ...
-    async def generate_json_report(self, consensus_report: ConsensusReport, flight_id: str) -> Dict[str, Any]: ...
-
-
-# ─── Smart Retry Wrapper for LangGraph ───
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=8),
-    retry=retry_if_exception_type((TimeoutError, ConnectionError, asyncio.TimeoutError)),
-    reraise=True,
-    before_sleep=lambda retry_state: logger.warning(
-        f"[RESILIENCE] Retrying LangGraph (Attempt {retry_state.attempt_number}/3) "
-        f"after error: {retry_state.outcome.exception()}"
-    )
-)
-async def _invoke_graph_with_retry(graph_app: Any, state: AgentState, config: dict, timeout: float) -> dict:
-    """[FIX] يستقبل الآن كائن الـ Graph كمعطى محقون لضمان استمرارية الخدمة."""
-    return await asyncio.wait_for(
-        graph_app.ainvoke(state, config=config),
-        timeout=timeout
-    )
-
+logger = logging.getLogger("ACE_Master_Pipeline")
 
 async def run_ace_pipeline(
-    flight_id: str, 
+    flight_id: str,
     payload: MasterFlightPayload,
-    graph_app: Any, # [FIX] نمرر الـ Graph الجاهز من الـ API لمنع الانهيار
-    report_writer: Optional[ReportWriterProtocol] = None
+    full_telemetry: Dict[str, Any], # القاموس الكامل للـ 50 عاموداً
+    graph_app: Any,                # LangGraph Compiled App
+    report_writer: Any             # SafetyReportWriter
 ) -> Dict[str, Any]:
+    """
+    تشغيل السلسلة الكاملة لتقييم المخاطر (End-to-End).
+    """
+    t_start = time.perf_counter()
     
-    pipeline_start_time = time.perf_counter()
-    
-    # [FIX] Pervasive Traceability: Generate thread_id immediately for observability
-    thread_id = f"flight_{flight_id}_{uuid.uuid4().hex[:8]}"
-    
-    logger.info(f"=== ACE Pipeline Initiated | Flight ID: {flight_id} | Trace: {thread_id} ===")
-
-    local_llm_client: Optional[GroqAsyncClient] = None
-
     try:
-        # =====================================================================
-        # STEP 1: Pre-Flight Physical Integrity Check
-        # =====================================================================
-        missing_physics = []
-        if payload.uav.mass_kg is None: missing_physics.append("mass_kg")
-        if payload.uav.max_thrust_n is None: missing_physics.append("max_thrust_n")
-        if payload.uav.max_speed_mps is None: missing_physics.append("max_speed_mps")
-        
-        if missing_physics:
-            logger.warning(f"[PRE-FLIGHT VETO] Missing physical limits: {missing_physics}")
-            return _build_veto_response(
-                flight_id, "SYS_MISSING_SPECS", f"Missing core UAV specs: {missing_physics}", thread_id
-            )
+        # ── الخطوة 1: البوابة الحتمية (Tier-0 Gateway) ──
+        # التحقق من سلامة هيكل البيانات فقط (Schema Validation)
+        veto_check = DeterministicCore.pre_flight_veto_check(full_telemetry)
+        if veto_check.is_veto:
+            logger.warning(f"[{flight_id}] Tier-0 Veto Triggered: {veto_check.reason}")
+            return _build_veto_response(flight_id, veto_check)
 
-        # =====================================================================
-        # STEP 2: Stage 1 Machine Learning Inference
-        # =====================================================================
-        ml_features = payload.flatten_for_ml()
-        stage1_risk_score = Stage1Bridge.extract_ml_risk(ml_features)
+        # ── الخطوة 2: استشارة الـ ML (Stage 1 Inference) ──
+        # تشغيل الموديل الإحصائي كمستشار بنسبة 10%
+        # نقوم بحقن النتيجة داخل القاموس لكي يراها وكيل الإجماع (Consensus Agent)
+        ml_consultant_result = run_stage1_inference(full_telemetry)
+        full_telemetry["stage1_ml_risk_score"] = ml_consultant_result.risk_score
+        full_telemetry["stage1_ml_confidence"] = ml_consultant_result.confidence
 
-        # =====================================================================
-        # STEP 3: Tier-0 Deterministic Shield
-        # =====================================================================
-        tier0_dict = payload.to_tier0_dict()
-        tier0_dict["stage1_ml_risk_score"] = stage1_risk_score 
-        
-        veto_result = DeterministicCore.pre_flight_veto_check(tier0_dict)
-        if veto_result.is_veto:
-            return _build_veto_response(flight_id, veto_result.policy_reference, veto_result.reason, thread_id)
-
-        # =====================================================================
-        # STEP 4: Telemetry Formatting & NaN Shielding
-        # =====================================================================
-        
-        # [FIX]: بدلاً من بناء القاموس يدوياً ونسيان الحقول، استخدم الـ tier0_dict الجاهز والمكتمل
-        # STEP 4: Telemetry Formatting
-        # [FIX] ندمج بيانات البيئة مع التيليمتري لضمان عدم فقدان أي حقل مطلوب
-        raw_telemetry = tier0_dict.copy()
-        raw_telemetry.update({
-            "uav_max_thrust_n": payload.uav.max_thrust_n,
-            "uav_mass_kg": payload.uav.mass_kg,
-            "uav_max_speed_mps": payload.uav.max_speed_mps
-        })
-        
-        try:
-            safe_telemetry_dict = TelemetryFormatter.sanitize_and_normalize(raw_telemetry, strict=True)
-            runtime_data = RuntimeFlightData(**safe_telemetry_dict)
-        except Exception as ve:
-            logger.error(f"Formatting Error: {ve}")
-            return _build_veto_response(flight_id, "SYS_ERR", str(ve), thread_id)
-
-        # =====================================================================
-        # STEP 5: Stage 2 LangGraph Orchestration
-        # =====================================================================
-        initial_state: AgentState = {
+        # ── الخطوة 3: تشغيل مجلس الوكلاء (ACE LangGraph) ──
+        # إدخال الـ 50 عاموداً في "عروق" النظام (AgentState)
+        initial_state = {
             "flight_id": flight_id,
-            "telemetry": runtime_data,
+            "telemetry": full_telemetry,
             "messages": [],
-            "physics_report": None,
-            "temporal_report": None,
-            "legal_report": None,
-            "consensus_report": None,
             "iteration_count": 0,
-            "graph_start_time_ms": time.perf_counter() * 1000
+            "graph_start_time_ms": t_start * 1000
         }
 
-        if not isinstance(initial_state["telemetry"], RuntimeFlightData):
-            raise TypeError("AgentState telemetry must be explicitly typed as RuntimeFlightData.")
-
-        config = {"configurable": {"thread_id": thread_id}}
+        # تشغيل الغراف مع نظام الـ Thread ID لمنع تداخل الرحلات
+        config = {"configurable": {"thread_id": flight_id}}
+        final_graph_state = await graph_app.ainvoke(initial_state, config=config)
         
-        graph_start_timer = time.perf_counter()
-        # [FIX] تمرير الـ graph_app المحقون بدلاً من النسخة العالمية
-        final_state = await _invoke_graph_with_retry(graph_app, initial_state, config, GRAPH_TIMEOUT_SECONDS)
-        graph_duration_ms = (time.perf_counter() - graph_start_timer) * 1000
+        consensus: ConsensusReport = final_graph_state.get("consensus_report")
+        if not consensus:
+            raise RuntimeError("Council failed to reach a consensus report.")
 
-        consensus_report: ConsensusReport = final_state.get("consensus_report")
-        if not consensus_report:
-            raise RuntimeError("LangGraph completed but yielded no ConsensusReport.")
-
-        # =====================================================================
-        # STEP 6: Final Report Generation
-        # =====================================================================
-        if report_writer is not None and not isinstance(report_writer, ReportWriterProtocol):
-            logger.warning("[DI WARNING] Injected report_writer invalid. Instantiating fallback writer.")
-            report_writer = None
-            
-        if report_writer is None:
-            local_llm_client = GroqAsyncClient(model_name="llama3-70b-8192", temperature=0.0)
-            report_writer = SafetyReportWriter(llm_client=local_llm_client)
+        # ── الخطوة 4: بناء حزمة الأدلة والتقرير الاحترافي ──
+        pipeline_time_ms = (time.perf_counter() - t_start) * 1000
         
-        markdown_report = await report_writer.generate_markdown_report(consensus_report, flight_id)
-        json_payload = await report_writer.generate_json_report(consensus_report, flight_id)
-        
-        total_time_ms = (time.perf_counter() - pipeline_start_time) * 1000
-        logger.info(f"=== ACE Pipeline Completed successfully in {total_time_ms:.1f}ms ===")
+        # بناء الأدلة الجنائية (Evidence Pack) التي طلبناها
+        evidence_pack = EvidenceBuilder.build_final_pack(
+            flight_id=flight_id,
+            payload=payload,
+            consensus_report=consensus,
+            full_telemetry=full_telemetry,
+            processing_time_ms=pipeline_time_ms
+        )
 
-        return {
-            "status": "OK",
+        # توليد التقارير الملحمية (Markdown & JSON)
+        report_md = await report_writer.generate_comprehensive_report(
+            report=consensus,
+            flight_id=flight_id,
+            full_telemetry=full_telemetry
+        )
+
+        # ── الخطوة 5: تجميع النتيجة النهائية المطهرة ──
+        final_output = {
+            "status": "SUCCESS",
             "flight_id": flight_id,
-            "decision": str(consensus_report.final_decision.value),
-            "report_markdown": markdown_report,
-            "data": json_payload,
-            "observability_thread": thread_id,
+            "decision": consensus.final_decision.value,
+            "report_markdown": report_md,
+            "structured_data": evidence_pack.model_dump(),
             "metrics": {
-                "total_pipeline_ms": round(total_time_ms, 1),
-                "langgraph_orchestration_ms": round(graph_duration_ms, 1)
+                "total_time_ms": pipeline_time_ms,
+                "confidence": consensus.calibrated_confidence_score,
+                "ml_consultant_contribution": "10%"
             }
         }
 
-    except asyncio.CancelledError:
-        logger.warning(f"[CANCELLED] Flight {flight_id} processing was cancelled.")
-        raise 
+        # التطهير الأخير لضمان سلامة الـ JSON
+        return sanitize_for_json(final_output)
 
-    except asyncio.TimeoutError:
-        logger.critical(f"[TIMEOUT] Flight {flight_id} exceeded graph limits.")
-        return _build_error_response(flight_id, "SYSTEM HALTED: Multi-Agent Orchestrator Timeout.", thread_id)
-        
     except Exception as e:
-        logger.critical(f"[CRASH] Flight {flight_id} encountered fatal pipeline error: {e}", exc_info=True)
-        return _build_error_response(flight_id, f"SYSTEM CRASH: Internal Logic Failure. Error: {str(e)}", thread_id)
+        logger.critical(f"[{flight_id}] Pipeline Catastrophic Failure: {e}", exc_info=True)
+        return _build_error_fallback(flight_id, str(e))
 
-    finally:
-        # [FIX] Advanced Resource Leak Prevention
-        if local_llm_client:
-            try:
-                close_method = getattr(local_llm_client, 'close', getattr(local_llm_client, 'shutdown', None))
-                if close_method:
-                    if asyncio.iscoroutinefunction(close_method): await close_method()
-                    else: close_method()
-                logger.debug(f"[{flight_id}] Closed ephemeral GroqAsyncClient session.")
-            except Exception as cleanup_err:
-                logger.warning(f"[{flight_id}] Error during client cleanup: {cleanup_err}")
-
-
-# ─── Helper Functions ───
-
-def _build_veto_response(flight_id: str, policy_ref: str, reason: str, thread_id: Optional[str] = None) -> Dict[str, Any]:
+def _build_veto_response(flight_id: str, veto: Any) -> Dict[str, Any]:
+    """بناء رد سريع في حالة فشل البوابة الأولية."""
     return {
-        "status": "TIER_0_VETO",
+        "status": "VETO",
         "flight_id": flight_id,
         "decision": "NO-GO",
-        "report_markdown": f"# ⛔ FLIGHT REJECTED (Gateway)\n**Policy Violated:** `{policy_ref}`\n\n**Reason:** {reason}",
-        "data": {
-            "flight_id": flight_id,
-            "decision": "NO-GO",
-            "disqualifying_conditions": [reason],
-            "observability_thread": thread_id
-        }
+        "reason": veto.reason,
+        "policy_reference": veto.policy_reference
     }
 
-def _build_error_response(flight_id: str, error_msg: str, thread_id: Optional[str] = None) -> Dict[str, Any]:
+def _build_error_fallback(flight_id: str, error_msg: str) -> Dict[str, Any]:
+    """رد الطوارئ في حالة حدوث خطأ غير متوقع في النظام."""
     return {
-        "status": "ERROR_FALLBACK",
+        "status": "SYSTEM_ERROR",
         "flight_id": flight_id,
         "decision": "NO-GO",
-        "report_markdown": f"# ⚠️ SYSTEM FAILURE\n**Critical Alert:** ACE System Error.\n\n**Details:** `{error_msg}`",
-        "data": {
-            "flight_id": flight_id,
-            "decision": "NO-GO",
-            "disqualifying_conditions": ["ACE System Failure"],
-            "observability_thread": thread_id
-        }
-    }
-
-# ─── Deep Pipeline Health Check ───
-
-async def pipeline_health_check(graph_app_status: bool = False) -> Dict[str, Any]:
-    """Deep Operational Health Check for K8s Probes."""
-    is_groq_configured = bool(os.environ.get("GROQ_API_KEY"))
-    
-    # [FIX] التحقق من المكونات أصبح يعتمد على ما تم حقنه فعلياً
-    stage1_ok = Stage1Bridge is not None
-    tier0_ok = DeterministicCore is not None
-    
-    is_healthy = is_groq_configured and stage1_ok and tier0_ok and graph_app_status
-    
-    return {
-        "status": "HEALTHY" if is_healthy else "DEGRADED",
-        "components": {
-            "stage1_ml_bridge": "ONLINE" if stage1_ok else "OFFLINE",
-            "tier0_gateway": "ONLINE" if tier0_ok else "OFFLINE",
-            "telemetry_formatter": "ONLINE", 
-            "langgraph_orchestrator": "ONLINE" if graph_app_status else "OFFLINE",
-            "llm_provider_configured": is_groq_configured
-        },
-        "config": {
-            "graph_timeout_sec": GRAPH_TIMEOUT_SECONDS
-        },
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "error_details": error_msg,
+        "instructions": "Manual override required. Check ACE logs."
     }

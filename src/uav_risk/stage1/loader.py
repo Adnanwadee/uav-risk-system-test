@@ -40,7 +40,18 @@ class Stage1Artifacts(NamedTuple):
 
 def load_stage1_artifacts(artifacts_dir: str = "artifacts") -> Stage1Artifacts:
     logger.info(f"🚀 Loading Stage-1 Aviation Artifacts from: {artifacts_dir}")
-    
+    # أضف هذا التعديل داخل دالة load_stage1_artifacts في ملف loader.py
+    def load_stage1_artifacts(artifacts_dir: str = "artifacts") -> Stage1Artifacts:
+        # ... الكود الحالي ...
+        reg_model = joblib.load(os.path.join(artifacts_dir, "xgb_reg_stage1_v2.pkl"))
+        
+        # [FIX] رقعة إصلاح XGBoost للعمل على CPU فقط
+        if not hasattr(reg_model, 'gpu_id'):
+            reg_model.gpu_id = -1
+        if hasattr(reg_model, 'get_metadata'): # لضمان توافق النسخ الأحدث
+            reg_model.set_params(predictor="cpu_predictor")
+        
+        # ... باقي الكود ...
     def _load(name: str):
         path = os.path.join(artifacts_dir, name)
         return joblib.load(path)

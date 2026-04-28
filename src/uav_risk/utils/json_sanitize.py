@@ -1,43 +1,28 @@
 """
-Aviation-Grade JSON Sanitizer (V5.1 - Bulletproof RFC-8259)
+Aviation-Grade JSON Sanitizer (V14.0 - ACE Master Integration)
 ===========================================================
-Role: Recursively cleans complex objects for strict JSON compliance.
-Fixes in V5.1: 
-- Explicit Bytes Handling: Decodes bytes to UTF-8 to prevent Serialization errors.
-- Decimal Precision: Safely converts Decimal to float for verifier compatibility.
-- Optimized Recursion Guard: Uses memory-efficient tracking to prevent stack overflows.
-- Unified NumPy Support: Full conversion of ML-related numeric types.
-
-Author: Stage 2 — ACE System
+الدور: التطهير النهائي للبيانات قبل إرسالها للـ UI أو حفظها في قاعدة البيانات.
+التحديثات لـ V14.0:
+1. دعم NaN/Inf الشامل: التعامل مع sentinels المفقودة في الـ 50 عاموداً.
+2. تطهير عودي عميق: حماية ضد الدوران اللا نهائي في حزم الأدلة الضخمة.
+3. دعم ML & NumPy: تحويل أنواع بيانات الوكلاء (Physics/ML) إلى أنواع JSON قياسية.
 """
 
 from __future__ import annotations
-
 import math
 import decimal
 import datetime
 import uuid
 import logging
-from enum import Enum
 from typing import Any
-
 import numpy as np
 
 logger = logging.getLogger("DataSanitizer")
 
-def _is_invalid_float(x: Any) -> bool:
-    """التحقق من أن الرقم ليس NaN أو Infinity لمنع انهيار JSON."""
-    try:
-        f = float(x)
-        return not math.isfinite(f)
-    except (ValueError, TypeError):
-        return True
-
 def sanitize_for_json(obj: Any, _seen: set[int] | None = None) -> Any:
     """
-    تطهير البيانات بشكل عودي لضمان سلامة الـ JSON بنسبة 100% وفق RFC-8259.
-    
-    [Circular Protection]: يستخدم _seen لمنع الدوران اللا نهائي في الكائنات المعقدة.
+    تطهير البيانات بشكل عودي لضمان سلامة الـ JSON بنسبة 100% وفق معيار RFC-8259.
+    يضمن عدم حدوث كراش (TypeError) عند إرسال الـ 50 عاموداً.
     """
     if _seen is None:
         _seen = set()
@@ -45,27 +30,22 @@ def sanitize_for_json(obj: Any, _seen: set[int] | None = None) -> Any:
     if obj is None:
         return None
 
-    # حماية من الدوران (Recursion Guard)
+    # 1. حماية من الدوران اللا نهائي (Recursion Guard)
+    # ضروري جداً لأن حزمة الأدلة (Evidence Pack) أصبحت ضخمة جداً
     obj_id = id(obj)
-    if isinstance(obj, (dict, list, set)):
-        if obj_id in _seen:
-            logger.warning(f"Circular reference detected at object {obj_id}. Returning placeholder.")
-            return "[CIRCULAR_REFERENCE]"
+    if obj_id in _seen:
+        return "[CIRCULAR_REFERENCE_REDACTED]"
+    
+    # نضيف الكائنات القابلة للتكرار فقط إلى set الحماية
+    if isinstance(obj, (dict, list, set, tuple)):
         _seen.add(obj_id)
 
-    # 1. دعم Enums ونماذج Pydantic (أساس نظام ACE)
-    if isinstance(obj, Enum):
-        return obj.value
-    if hasattr(obj, "model_dump"):
-        return sanitize_for_json(obj.model_dump(), _seen)
-
-    # 2. التعامل مع الأرقام (Native, NumPy, Decimal)
+    # 2. معالجة الأرقام (الفيزياء والـ ML)
     if isinstance(obj, (float, np.floating)):
-        return None if _is_invalid_float(obj) else float(obj)
-    
-    if isinstance(obj, decimal.Decimal):
-        # [FIX]: الحفاظ على الدقة عبر التحويل لـ float (متوافق مع verifier.py)
-        return float(obj) 
+        # [تعديل حاسم]: تحويل NaN الناتج عن البيانات المفقودة في toolbox إلى null
+        if not math.isfinite(obj):
+            return None 
+        return float(obj)
 
     if isinstance(obj, (int, np.integer)):
         return int(obj)
@@ -73,41 +53,38 @@ def sanitize_for_json(obj: Any, _seen: set[int] | None = None) -> Any:
     if isinstance(obj, (bool, np.bool_)):
         return bool(obj)
 
-    # 3. المصفوفات والقوائم (Iterables)
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
+
+    # 3. معالجة النصوص والبيانات الخام
+    if isinstance(obj, str):
+        return obj
+
+    if isinstance(obj, bytes):
+        # فك تشفير البيانات الخام لضمان عدم كسر الـ API
+        return obj.decode("utf-8", errors="replace")
+
+    # 4. المصفوفات والقوائم (نتائج Monte Carlo والـ RAG)
     if isinstance(obj, np.ndarray):
-        return sanitize_for_json(obj.tolist(), _seen)
+        return [sanitize_for_json(v, _seen) for v in obj.tolist()]
         
     if isinstance(obj, (list, tuple, set)):
         return [sanitize_for_json(v, _seen) for v in obj]
 
-    # 4. القواميس (Dicts) - إجبار المفاتيح لتكون نصوصاً حسب معيار RFC-8259
+    # 5. القواميس (التدقيق الكامل للـ 50 عاموداً)
     if isinstance(obj, dict):
         return {str(k): sanitize_for_json(v, _seen) for k, v in obj.items()}
 
-    # 5. الكائنات الزمنية والمعرفات (Temporal & Identity)
+    # 6. الكائنات الزمنية (Report Timestamps)
     if isinstance(obj, (datetime.datetime, datetime.date)):
         return obj.isoformat()
         
     if isinstance(obj, uuid.UUID):
         return str(obj)
 
-    # 6. النصوص والبيانات الخام (Strings & Bytes)
-    if isinstance(obj, bytes):
-        # [FIX]: معالجة البيانات الخام لمنع TypeError: Object of type bytes is not JSON serializable
-        return obj.decode("utf-8", errors="replace")
-        
-    if isinstance(obj, str):
-        return obj
-
-    # 7. التراجع النهائي (Fallback)
-    # تحويل أي كائن غير معروف إلى نص بدلاً من رمي استثناء
-    return str(obj)
-
-def validate_json_safety(data: Any) -> bool:
-    """فحص استباقي للتأكد من أن البيانات لن تسبب انهياراً عند تحويلها لنص JSON."""
+    # 7. التراجع الآمن (Fallback)
+    # بدلاً من الانهيار، نحول الكائن المجهول إلى نص للتدقيق
     try:
-        import json
-        json.dumps(data, allow_nan=False, default=str)
-        return True
-    except (ValueError, TypeError):
-        return False
+        return str(obj)
+    except:
+        return "[UNSERIALIZABLE_DATA]"

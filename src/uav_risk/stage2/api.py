@@ -1,112 +1,84 @@
 """
-Stage 2 API Router (ACE Pipeline Gateway V4.2)
+Stage 2 API Router (ACE Pipeline Gateway V14.0)
 ==============================================
-Fixes applied:
-- Dependency Injection: Extracts the compiled safety graph and report writer 
-  from the app state and injects them into the pipeline.
-- Custom NaN Handling: Maintains the SafeNaNJSONResponse for telemetry safety.
-
-Author: Stage 2 — ACE System
+التعديلات الجوهرية:
+1. توحيد التطهير: استخدام sanitize_for_json المركزي لضمان سلامة الـ JSON.
+2. ضخ البيانات الكاملة: استخدام flatten_for_ml لضمان وصول الـ 50 عاموداً للوكلاء دون نقص.
+3. حقن التبعيات: استخراج الـ Graph و ReportWriter مباشرة من حالة التطبيق (App State).
 """
 
-import json
 import time
 import uuid
-import math
-import asyncio
 import logging
-from typing import Any
+import asyncio
+from typing import Dict, Any
 from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
+# استيراد العقود والأدوات المحدثة
 from uav_risk.stage2.input_contract import MasterFlightPayload
 from uav_risk.stage2.pipeline import run_ace_pipeline
+from uav_risk.utils.json_sanitize import sanitize_for_json
 
 logger = logging.getLogger("ACE_API_Router")
 
+# تعريف الرواتر ببادئة /stage2
 router = APIRouter(prefix="/stage2", tags=["ACE Stage 2"])
 
-# ============================================================
-# 1. Architectural Safeguards (The NaN Defuser)
-# ============================================================
-class SafeNaNJSONResponse(JSONResponse):
-    """استجابة مخصصة تمنع انهيار JSON بسبب قيم NaN المتداخلة."""
-    @staticmethod
-    def _sanitize_nan(obj: Any) -> Any:
-        if isinstance(obj, dict):
-            return {k: SafeNaNJSONResponse._sanitize_nan(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [SafeNaNJSONResponse._sanitize_nan(i) for i in obj]
-        elif isinstance(obj, float) and not math.isfinite(obj):
-            return None
-        return obj
+def get_flight_id() -> str:
+    """توليد معرف فريد لكل عملية تدقيق لضمان التتبع الجنائي."""
+    return f"FLIGHT-{uuid.uuid4().hex[:8].upper()}"
 
-    def render(self, content: Any) -> bytes:
-        sanitized = self._sanitize_nan(content)
-        return json.dumps(
-            sanitized,
-            ensure_ascii=False,
-            allow_nan=False,
-            indent=None,
-            separators=(",", ":"),
-        ).encode("utf-8")
-
-# ============================================================
-# 2. Main Evaluation Endpoint (The Bridge)
-# ============================================================
-
-@router.post("/evaluate", response_class=SafeNaNJSONResponse)
-async def evaluate_flight(request: Request, payload: MasterFlightPayload):
+@router.post("/evaluate")
+async def evaluate_flight(
+    payload: MasterFlightPayload,
+    request: Request,
+    flight_id: str = Depends(get_flight_id)
+):
     """
-    نقطة النهاية الرئيسية: تربط حالة التطبيق (App State) بالـ Pipeline المحصن.
+    نقطة الدخول الرئيسية لتقييم مخاطر الرحلة.
+    تستلم الـ 50 عاموداً وتشغل الوكلاء.
     """
-    flight_id = getattr(request.state, "request_id", str(uuid.uuid4()))
-    
-    # [FIX]: استخراج المحركات التي تم بناؤها في lifespan بملف main.py
-    graph_app = request.app.state.safety_agent_app
-    report_writer = request.app.state.report_writer
-    
-    if not graph_app:
-        logger.error(f"[{flight_id}] Critical: Safety Agent Graph not found in App State.")
-        raise HTTPException(status_code=500, detail="ACE System Engine not initialized.")
+    # 1. استخراج المحركات من حالة التطبيق لضمان استمرارية الذاكرة
+    graph_app = getattr(request.app.state, "safety_graph", None)
+    report_writer = getattr(request.app.state, "report_writer", None)
+
+    if not graph_app or not report_writer:
+        logger.critical("ACE Engine components missing in App State.")
+        raise HTTPException(status_code=500, detail="ACE System Engines are offline.")
 
     try:
         t0 = time.perf_counter()
-        logger.info(f"[{flight_id}] Route received evaluation request.")
+        logger.info(f"[{flight_id}] Received evaluation request for {payload.uav.mass_kg}kg UAV.")
 
-        # [FIX]: تمرير الـ graph_app والـ report_writer للـ Pipeline
+        # 2. تفعيل الـ 50 عاموداً عبر التسطيح (Flattening)
+        full_telemetry = payload.flatten_for_ml()
+
+        # 3. تشغيل الـ Pipeline المطور الذي يربط الوكلاء الأربعة
         result = await run_ace_pipeline(
             flight_id=flight_id,
-            payload=payload,
+            payload=payload,            
+            full_telemetry=full_telemetry, 
             graph_app=graph_app, 
             report_writer=report_writer
         )
 
+        # 4. التطهير النهائي لحماية الـ API من قيم NaN
+        sanitized_result = sanitize_for_json(result)
+
         latency_ms = (time.perf_counter() - t0) * 1000
-        logger.info(f"[{flight_id}] Route processing completed in {latency_ms:.1f}ms.")
+        logger.info(f"[{flight_id}] Risk Assessment completed in {latency_ms:.1f}ms.")
         
-        return result
+        return JSONResponse(content=sanitized_result)
 
     except ValueError as ve:
-        logger.warning(f"[{flight_id}] Validation Failure: {ve}")
-        raise HTTPException(
-            status_code=400, 
-            detail={"error": "Telemetry Validation Failed", "reason": str(ve)},
-            headers={"X-Request-ID": flight_id}
-        )
+        logger.warning(f"[{flight_id}] Data Integrity Error: {ve}")
+        raise HTTPException(status_code=400, detail=str(ve))
             
     except asyncio.TimeoutError:
-        logger.error(f"[{flight_id}] Gateway Timeout during agents consensus.")
-        raise HTTPException(
-            status_code=504, 
-            detail="Timeout: The agents took too long to reach consensus.",
-            headers={"X-Request-ID": flight_id}
-        )
+        logger.error(f"[{flight_id}] Consensus Timeout - Agents took too long.")
+        raise HTTPException(status_code=504, detail="Agents consensus timeout.")
         
     except Exception as e:
         logger.critical(f"[{flight_id}] UNHANDLED SYSTEM CRASH: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500, 
-            detail="ACE Internal System Failure. Incident has been logged.",
-            headers={"X-Request-ID": flight_id}
-        )
+        raise HTTPException(status_code=500, detail="Internal ACE Engine Failure.")

@@ -1,95 +1,118 @@
+"""
+ACE Mission Control UI (V5.3 - Mission Ready)
+=============================================
+التعديلات:
+1. حل الـ 404: تحديث رابط الـ API ليشمل البادئة الموحدة /v2/stage2/evaluate.
+2. إصلاح التحذيرات: استبدال use_container_width بـ width='stretch' حسب تنبيهات Streamlit الأخيرة.
+"""
+
 import streamlit as st
 import json
 import httpx
 import asyncio
 import plotly.graph_objects as go
+import pandas as pd
+from datetime import datetime
 
-# 1. Page Configuration
-st.set_page_config(page_title="ACE Mission Control | V5.1", layout="wide", page_icon="🛡️")
+# 1. إعدادات الصفحة والهوية البصرية
+st.set_page_config(page_title="ACE Mission Control", layout="wide", page_icon="🛡️")
 
-# تهيئة البيانات الافتراضية كاملة بدون أي اختصارات
-DEFAULT_PAYLOAD = {
-    "uav": {
-        "mass_kg": 1.3,
-        "max_speed_mps": 18.0,
-        "max_thrust_n": 95.0,
-        "sensors": {"lidar": True, "radar": True, "gnss": True, "imu": True}
-    },
-    "environment": {
-        "weather": {"wind_mps": 2.5}, 
-        "gnss_jam_dbm": -105.0
-    },
-    "telemetry": {
-        "battery_level_pct": 95.0,
-        "battery_drain_rate_pct_per_min": 0.5,
-        "altitude_m": 45.0,
-        "temperature_c": 22.0,
-        "wind_speed_ms": 3.0,
-        "wind_direction_deg": 45.0,
-        "uav_heading_deg": 90.0,
-        "planned_distance_m": 800.0,
-        "speed_mps": 8.0,
-        "estimated_flight_time_min": 10.0,
-        "population_density": "SPARSE",
-        "comms_uplink_status": "EXCELLENT",
-        "environment_gnss_jam_dbm": -105.0
-    }
-}
-
-# [FIX] يجب أن تكون التهيئة قبل أي استدعاء للسلايدر
-if 'payload' not in st.session_state:
-    st.session_state.payload = DEFAULT_PAYLOAD
-
-# Professional CSS
 st.markdown("""
     <style>
-    .main { background-color: #0d1117; }
-    .report-container { background-color: #161b22; padding: 20px; border-radius: 12px; border: 1px solid #30363d; }
+    .main { background-color: #0e1117; }
+    .stMetric { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
+# البيانات الافتراضية (الـ 50 عاموداً)
+DEFAULT_PAYLOAD = {
+    "uav": {
+        "mass_kg": 45.0,
+        "max_thrust_n": 150.0,
+        "sensors": {"lidar": True, "radar": True, "gnss": True, "imu": True}
+    },
+    "environment": {
+        "weather": {"wind_mps": 5.5, "temp_c": 35.0}, 
+        "gnss_jam_dbm": -105.0
+    },
+    "telemetry": {
+        "battery_level_pct": 88.0,
+        "altitude_m": 120.0,
+        "population_density": "HIGH_DENSE"
+    }
+}
+
+def create_risk_gauge(score: float, title: str):
+    """رسم عداد المخاطر الاحترافي."""
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = score * 100,
+        title = {'text': title, 'font': {'size': 18}},
+        gauge = {
+            'axis': {'range': [0, 100]},
+            'bar': {'color': "#ff4b4b" if score > 0.7 else "#238636"},
+            'steps': [{'range': [0, 100], 'color': "rgba(255,255,255,0.1)"}]
+        }
+    ))
+    fig.update_layout(height=250, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor='rgba(0,0,0,0)', font={'color': "white"})
+    return fig
+
 st.title("🛡️ ACE Mission Control")
 
-# 2. Layout
-col_input, col_results = st.columns([1, 1.2], gap="large")
+tab_config, tab_analysis, tab_audit = st.tabs(["⚙️ Mission Config", "🧠 ACE Deliberation", "📜 Data Audit"])
 
-with col_input:
-    st.subheader("📥 Mission Parameters")
-    with st.container(border=True):
-        st.write("**Real-time Telemetry Tuning**")
-        # [FIX] توحيد الأسماء في السلايدر (ms بدلاً من mps)
-        wind = st.slider("Wind Intensity (m/s)", 0.0, 25.0, float(st.session_state.payload['telemetry'].get('wind_speed_ms', 3.0)))
-        batt = st.slider("Battery Reserve (%)", 0.0, 100.0, float(st.session_state.payload['telemetry'].get('battery_level_pct', 95.0)))
+with tab_config:
+    col_input, col_json = st.columns([1, 1])
+    with col_input:
+        st.subheader("Flight Parameters")
+        mass = st.number_input("UAV Mass (kg)", value=45.0)
+        wind = st.slider("Wind Speed (m/s)", 0.0, 40.0, 5.5)
         
-        # [FIX] تحديث الـ session_state بالأسماء الصحيحة
-        st.session_state.payload['telemetry']['wind_speed_ms'] = wind
-        st.session_state.payload['telemetry']['battery_level_pct'] = batt
+        DEFAULT_PAYLOAD["uav"]["mass_kg"] = mass
+        DEFAULT_PAYLOAD["environment"]["weather"]["wind_mps"] = wind
+
+    with col_json:
+        st.subheader("Telemetry Snapshot")
+        raw_json = st.text_area("JSON Editor", value=json.dumps(DEFAULT_PAYLOAD, indent=2), height=300)
+        payload = json.loads(raw_json)
+
+    # [إصلاح]: استخدام المعامل الجديد حسب تحذيرات Streamlit
+    if st.button("🚀 EXECUTE SAFETY AUDIT", type="primary", width='stretch'): 
+        async def call_ace():
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                # [إصلاح الـ 404]: إضافة /v2 لتتوافق مع ملف main.py
+                url = "http://127.0.0.1:8000/v2/stage2/evaluate"
+                response = await client.post(url, json=payload)
+                if response.status_code != 200:
+                    st.error(f"API Error {response.status_code}: {response.text}")
+                    return None
+                return response.json()
         
+        with st.spinner("Agents are deliberating..."):
+            result = asyncio.run(call_ace())
+            if result:
+                st.session_state.ace_result = result
+
+with tab_analysis:
+    if "ace_result" in st.session_state:
+        res = st.session_state.ace_result
+        st.header(f"Final Verdict: {res.get('decision')}")
+        
+        col_phys, col_leg, col_temp, col_ml = st.columns(4)
+        drivers = {d['agent']: d['score'] for d in res.get("structured_data", {}).get("forensic_drivers", [])}
+        
+        # [إصلاح]: استبدال use_container_width بـ width='stretch' لإسكات التحذيرات
+        col_phys.plotly_chart(create_risk_gauge(drivers.get("PHYSICS", 0), "Physics"), width='stretch')
+        col_leg.plotly_chart(create_risk_gauge(drivers.get("LEGAL", 0), "Legal (RAG)"), width='stretch')
+        col_temp.plotly_chart(create_risk_gauge(drivers.get("TEMPORAL", 0), "Temporal"), width='stretch')
+        col_ml.plotly_chart(create_risk_gauge(drivers.get("ML_CONSULTANT", 0), "ML (10%)"), width='stretch')
+
         st.markdown("---")
-        # [FIX] json.dumps سيعمل الآن لأننا تخلصنا من الـ sets
-        raw_json = st.text_area("Full JSON Editor", 
-                               value=json.dumps(st.session_state.payload, indent=2), 
-                               height=400)
-        
-        try:
-            st.session_state.payload = json.loads(raw_json)
-        except:
-            st.error("⚠️ Invalid JSON Structure")
-
-    if st.button("🚀 EXECUTE EVALUATION", type="primary"):
-        async def call_api():
-            async with httpx.AsyncClient(timeout=45.0) as client:
-                resp = await client.post("http://localhost:8000/v2/stage2/evaluate", json=st.session_state.payload)
-                return resp.json()
-        
-        with st.spinner("Analyzing Safety..."):
-            try:
-                st.session_state.last_result = asyncio.run(call_api())
-            except Exception as e:
-                st.error(f"Connection Failed: {e}")
-
-with col_results:
-    if "last_result" in st.session_state:
-        res = st.session_state.last_result
-        st.subheader(f"Final Verdict: {res.get('decision', 'N/A')}")
         st.markdown(res.get("report_markdown", "No report available."))
+
+with tab_audit:
+    if "ace_result" in st.session_state:
+        st.subheader("Data Audit Trace")
+        audit_data = res.get("structured_data", {}).get("raw_snapshot", {})
+        # [إصلاح التحذير]: استخدام width='stretch'
+        st.dataframe(pd.DataFrame(list(audit_data.items()), columns=["Field", "Value"]), width='stretch')

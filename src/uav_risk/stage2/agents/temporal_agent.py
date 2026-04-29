@@ -189,23 +189,29 @@ class TemporalAgent:
         # توقع رياضي مباشر ومبني على الفيزياء:
         
         # توقع أسوأ رياح بافتراض تذبذب بنسبة 15%
+# 4. مسار الـ (Single-Shot) التنبؤ الرياضي العميق
+        
+        # توقع أسوأ رياح بافتراض تذبذب بنسبة 15%
         proj_wind = wind_est * 1.15 
         
-        # توقع البطارية بعد انتهاء وقت الرحلة
-        proj_batt = batt_est - (abs(batt_drain_rate) * horizon_min)
+        # [الذكاء الجديد]: معامل استهلاك البطارية يرتفع مع زيادة الرياح (Aerodynamic Penalty)
+        # إذا كانت الرياح قوية (> 5 m/s)، تستهلك الطائرة طاقة إضافية لمقاومة الانجراف
+        weather_penalty_multiplier = 1.0 + (max(0.0, proj_wind - 5.0) * 0.05)
+        effective_drain_rate = abs(batt_drain_rate) * weather_penalty_multiplier
+        
+        # توقع البطارية بعد انتهاء وقت الرحلة باستخدام الاستهلاك المعدل بالطقس
+        proj_batt = batt_est - (effective_drain_rate * horizon_min)
         proj_batt = float(np.clip(proj_batt, 0.0, 100.0))
         
         warnings = []
+        if weather_penalty_multiplier > 1.1:
+            warnings.append(f"WEATHER PENALTY: High winds increasing battery drain by {(weather_penalty_multiplier-1)*100:.1f}%.")
+            
         if proj_batt < 20.0:
-            warnings.append(
-                f"PROJECTION: Battery projected to reach {proj_batt:.1f}% by the end of "
-                f"the {horizon_min:.0f} min mission — below 20% safe reserve!"
-            )
+            warnings.append(f"PROJECTION: Battery projected to reach {proj_batt:.1f}% by the end of {horizon_min:.0f} min mission.")
             
         if proj_wind > self.WIND_PROJECTION_INCREASE_RATIO * wind_est and proj_wind > 5.0:
-            warnings.append(
-                f"PROJECTION: Wind may gust up to {proj_wind:.1f} m/s during the {horizon_min:.0f} min flight."
-            )
+            warnings.append(f"PROJECTION: Wind may gust up to {proj_wind:.1f} m/s.")
 
         elapsed_ms = (time.perf_counter() - t_start) * 1000
 

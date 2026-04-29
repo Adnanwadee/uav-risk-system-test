@@ -9,6 +9,7 @@ import os
 import joblib
 import logging
 import __main__
+import numpy as np
 from typing import NamedTuple, Any, Dict
 
 def to_string_safe(x):
@@ -28,52 +29,38 @@ class Stage1Artifacts(NamedTuple):
 
 def load_stage1_artifacts(artifacts_dir: str = "artifacts") -> Stage1Artifacts:
     logger.info(f"🚀 Initiating Stage-1 Heavy Artifact Loading from: {artifacts_dir}")
+    label_encoder = joblib.load(os.path.join(artifacts_dir, "label_encoder_stage1_v2.pkl"))
     
     def _force_patch_model(model):
-        """[رقعة عميقة]: حقن السمات المفقودة مع حماية ضد النصوص (Strings)."""
         attributes = {
             'predictor': 'cpu_predictor',
             'gpu_id': -1,
             'use_label_encoder': False,
             'n_jobs': 1,
-            'tree_method': 'auto'
+            'tree_method': 'auto',
+            'classes_': np.array([0, 1]) # [الإصلاح الجذري لمشكلة الـ ValueError]
         }
         
         def patch_obj(obj):
-            # [إصلاح حاسم]: تجاوز العملية إذا كان الكائن مجرد نص (String) أو فارغ
             if isinstance(obj, str) or obj is None:
                 return
-                
             for attr, val in attributes.items():
-                try:
-                    setattr(obj, attr, val)
-                except Exception:
-                    pass
+                try: setattr(obj, attr, val)
+                except Exception: pass
         
-        # 1. حقن الموديل الرئيسي
         patch_obj(model)
-        
-        # 2. حقن الموديل الأساسي (Base Estimator)
-        if hasattr(model, 'base_estimator'):
-            patch_obj(model.base_estimator)
-            
-        # 3. حقن الموديلات المحملة داخل CalibratedClassifierCV
+        if hasattr(model, 'base_estimator'): patch_obj(model.base_estimator)
         if hasattr(model, 'calibrated_classifiers_'):
             for cc in model.calibrated_classifiers_:
-                if hasattr(cc, 'base_estimator'):
-                    patch_obj(cc.base_estimator)
-                    
+                if hasattr(cc, 'base_estimator'): patch_obj(cc.base_estimator)
+                if hasattr(cc, 'estimator'): patch_obj(cc.estimator)
         return model
 
-    # تحميل الموديلات مع الرقعة الشاملة والآمنة
     reg_model = _force_patch_model(joblib.load(os.path.join(artifacts_dir, "xgb_reg_stage1_v2.pkl")))
     clf_model = _force_patch_model(joblib.load(os.path.join(artifacts_dir, "clf_calibrator_stage1_v2.pkl")))
 
     return Stage1Artifacts(
-        reg_model=reg_model,
-        calibrator_model=clf_model,
+        reg_model=reg_model, calibrator_model=clf_model,
         preprocessor=joblib.load(os.path.join(artifacts_dir, "uav_stage1_preprocessor_v2.pkl")),
-        label_encoder=joblib.load(os.path.join(artifacts_dir, "label_encoder_stage1_v2.pkl")),
-        policy_config={}, 
-        training_stats={}
+        label_encoder=label_encoder, policy_config={}, training_stats={}
     )

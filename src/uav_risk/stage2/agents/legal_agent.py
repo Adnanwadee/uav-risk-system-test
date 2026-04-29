@@ -182,8 +182,14 @@ class LegalAgent:
         
         judge_decision = await self._safe_llm_evaluation(pro_evidence, con_evidence, query)
         
-        # [تعديل] تجميع حزمة الأدلة للاستشهادات [Source | Article] في التقرير
-        all_citations = [f"[{e.source_document} | {e.chunk_id}]" for e in (pro_evidence + con_evidence)]
+        # [الإصلاح الجذري للـ RAG]: استخراج النص الحقيقي وتنظيف المسار
+        rag_findings = []
+        for e in con_evidence:
+            # تنظيف المسار لإبقاء اسم الملف فقط
+            clean_doc = e.source_document.split('/')[-1] if '/' in e.source_document else e.source_document
+            # تجهيز النص المقتبس الفعلي
+            text = e.exact_quote.replace('\n', ' ').strip()[:250] # أول 250 حرف
+            rag_findings.append(f"RAG CITATION [{clean_doc}]: \"{text}...\"")
 
         return LegalRiskReport(
             compliance_status=judge_decision.compliance_status,
@@ -194,7 +200,8 @@ class LegalAgent:
                 rebuttal_evidence=con_evidence,
                 is_defeated=(judge_decision.go_no_go == GoNoGo.NO_GO)
             ),
-            critical_violations=judge_decision.critical_violations + ([f"Legal Violation Cited: {all_citations}"] if all_citations else []),
+            # دمج الاقتباسات الحقيقية ضمن الانتهاكات لتظهر في التقرير النهائي مباشرة
+            critical_violations=judge_decision.critical_violations + rag_findings,
             required_mitigations=judge_decision.required_mitigations,
             execution_time_ms=(time.perf_counter() - t_start) * 1000
         )

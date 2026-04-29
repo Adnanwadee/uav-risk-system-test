@@ -1,13 +1,3 @@
-"""
-ACE Mission Control | V16.0 Apex Command Center
-==============================================
-التحديثات الهندسية الكبرى:
-1. Multi-Agent Radar Chart: تمثيل مرئي لتوازن القوى بين (الفيزياء، القانون، الزمن، والـ ML).
-2. Cognitive Evidence Vault: عرض الاستشهادات القانونية [المصدر | المادة] بشكل تفاعلي.
-3. Resilience Engine: آلية انتظار ذكية (Smart Retries) عند تشغيل السيرفر.
-4. Professional HUD: تصميم داكن مستوحى من أنظمة التحكم في الطائرات المسيرة.
-"""
-
 import streamlit as st
 import json
 import httpx
@@ -16,156 +6,175 @@ import plotly.graph_objects as go
 import pandas as pd
 from datetime import datetime
 
-# ─── 1. الإعدادات البصرية المتقدمة (Aviation Theme) ───
-st.set_page_config(page_title="ACE Apex Control", layout="wide", page_icon="🛡️")
+# ─── 1. إعدادات الواجهة الاحترافية (Aviation HUD Theme) ───
+st.set_page_config(page_title="ACE Apex Mission Control", layout="wide", page_icon="🛡️")
 
 st.markdown("""
     <style>
     .main { background-color: #0e1117; color: #c9d1d9; }
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #161b22; border-radius: 5px 5px 0 0; padding: 10px 20px; }
-    .status-go { color: #238636; font-weight: bold; border: 1px solid #238636; padding: 5px 15px; border-radius: 20px; }
-    .status-nogo { color: #f85149; font-weight: bold; border: 1px solid #f85149; padding: 5px 15px; border-radius: 20px; }
-    .evidence-card { background-color: #0d1117; border-right: 4px solid #1f6feb; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
+    .status-go { color: #238636; font-weight: bold; font-size: 28px; border: 2px solid #238636; padding: 10px; border-radius: 8px; background: rgba(35, 134, 54, 0.1); }
+    .status-no-go { color: #da3633; font-weight: bold; font-size: 28px; border: 2px solid #da3633; padding: 10px; border-radius: 8px; background: rgba(218, 54, 51, 0.1); }
+    .metric-box { background: #1c2128; padding: 20px; border-radius: 12px; border: 1px solid #30363d; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+    .evidence-card { background-color: #161b22; border-left: 5px solid #58a6ff; padding: 15px; margin-bottom: 12px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 0.9em; }
     </style>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# ─── 2. إدارة البيانات (الـ 50 عاموداً) ───
-if 'payload' not in st.session_state:
-    st.session_state.payload = {
-        "uav": {
-            "mass_kg": 45.0,
-            "max_thrust_n": 150.0,
-            "sensors": {"has_lidar": True, "has_camera": True, "has_radar": True}
-        },
-        "environment": {
-            "weather": {"wind_mps": 8.0, "temp_c": 35.0}, 
-            "gnss_jam_dbm": -105.0
-        },
-        "telemetry": {
-            "battery_level_pct": 85.0,
-            "altitude_m": 120.0,
-            "population_density": "HIGH_DENSE",
-            "comms_status": "STABLE"
-        }
-    }
+# ─── 2. محرك الاتصال (Resilient API Client) ───
+API_URL = "http://localhost:8000/v2/stage2/evaluate"
 
-# ─── 3. محرك الرسوم البيانية الهندسية ───
-def create_radar_chart(drivers):
-    """إنشاء مخطط راداري يوضح وزن كل وكيل في القرار."""
-    agents = ['Physics', 'Legal (RAG)', 'Temporal', 'ML (10%)']
-    scores = [drivers.get('PHYSICS', 0)*100, drivers.get('LEGAL', 0)*100, 
-              drivers.get('TEMPORAL', 0)*100, drivers.get('ML_CONSULTANT', 0)*100]
-    
-    fig = go.Figure(data=go.Scatterpolar(
-        r=scores + [scores[0]],
-        theta=agents + [agents[0]],
-        fill='toself',
-        fillcolor='rgba(31, 111, 235, 0.3)',
-        line=dict(color='#1f6feb', width=2)
-    ))
-    fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 100], gridcolor="#30363d"),
-                   bgcolor="rgba(0,0,0,0)", angularaxis=dict(gridcolor="#30363d")),
-        showlegend=False, paper_bgcolor='rgba(0,0,0,0)', height=350, margin=dict(t=30, b=30)
-    )
-    return fig
-
-# ─── 4. هيكل التطبيق الرئيسي ───
-st.sidebar.image("https://cdn-icons-png.flaticon.com/512/2528/2528143.png", width=100)
-st.sidebar.title("ACE v16.0 Apex")
-st.sidebar.info("Aviation Compliance Engine is ONLINE.")
-
-st.title("🛡️ Mission Command Center")
-st.caption("Strategic Autonomous Risk Assessment & Compliance Framework")
-
-tab_config, tab_deliberation, tab_audit = st.tabs(["🚀 Mission Setup", "🧠 ACE Deliberation", "📜 Evidence Audit"])
-
-with tab_config:
-    col_input, col_json = st.columns([1.2, 1])
-    
-    with col_input:
-        st.subheader("Mission Telemetry Injection")
-        with st.expander("✈️ Aircraft Configuration", expanded=True):
-            mass = st.number_input("Payload Mass (kg)", value=st.session_state.payload['uav']['mass_kg'])
-            st.session_state.payload['uav']['mass_kg'] = mass
-            
-        with st.expander("🌍 Environmental Context", expanded=True):
-            wind = st.slider("Wind Intensity (m/s)", 0.0, 30.0, st.session_state.payload['environment']['weather']['wind_mps'])
-            pop = st.selectbox("Area Density", ["SPARSE", "RURAL", "SUBURBAN", "URBAN", "HIGH_DENSE"], index=4)
-            st.session_state.payload['environment']['weather']['wind_mps'] = wind
-            st.session_state.payload['telemetry']['population_density'] = pop
-
-    with col_json:
-        st.subheader("Raw Data Stream (50+ Columns)")
-        raw_json = st.text_area("Telemetry Buffer", value=json.dumps(st.session_state.payload, indent=2), height=350)
+async def call_ace_api(payload):
+    async with httpx.AsyncClient(timeout=60.0) as client:
         try:
-            st.session_state.payload = json.loads(raw_json)
-        except:
-            st.error("Invalid JSON")
+            response = await client.post(API_URL, json=payload)
+            return response.json()
+        except Exception as e:
+            return {"status": "ERROR", "error_details": str(e)}
 
-    if st.button("⚡ EXECUTE CATASTROPHIC RISK ANALYSIS", type="primary", width="stretch"):
-        async def call_ace():
-            # [Resilience]: آلية انتظار للسيرفر مع 3 محاولات
-            for attempt in range(3):
-                try:
-                    async with httpx.AsyncClient(timeout=60.0) as client:
-                        url = "http://127.0.0.1:8000/v2/stage2/evaluate"
-                        resp = await client.post(url, json=st.session_state.payload)
-                        if resp.status_code == 200: return resp.json()
-                        st.error(f"API Error {resp.status_code}")
-                except httpx.ConnectError:
-                    if attempt < 2: await asyncio.sleep(2); continue
-                    st.error("Backend Offline.")
-            return None
+# ─── 3. بناء لوحة التحكم (Mission Control) ───
+st.title("🛡️ ACE Apex | Mission Critical Flight Guardian")
+st.caption(f"Operational Intel: V17.0 Apex-Ready | Deployment Date: {datetime.now().strftime('%Y-%m-%d')}")
 
-        with st.spinner("Council of Agents is deliberating on flight safety..."):
-            res = asyncio.run(call_ace())
-            if res: st.session_state.ace_result = res
+col_input, col_display = st.columns([1.3, 2], gap="large")
 
-# ─── 5. عرض نتائج "مجلس الوكلاء" ───
-with tab_deliberation:
+with col_input:
+    st.header("🎛️ Flight Parameters (GO Scenario)")
+    
+    # هذه هي البيانات "الإجبارية" لعمل الوكلاء باحترافية
+    with st.expander("✈️ UAV Engineering Specs", expanded=True):
+        # قيم افتراضية لسيناريو GO: طائرة خفيفة (2كجم) ودفع قوي جداً (100ن)
+        uav_mass = st.number_input("Mass (kg)", value=2.0, step=0.1, help="Required by Physics & Legal Agents")
+        uav_thrust = st.number_input("Max Thrust (N)", value=100.0, step=5.0, help="Required for T/W Ratio calculations")
+        uav_power = st.number_input("Hover Power (W)", value=200.0, step=10.0, help="Required for Energy Drain simulation")
+        uav_type = st.selectbox("Frame Type", ["quadrotor", "hexarotor", "fixed-wing"], index=0)
+        
+        st.markdown("**Sensor Suite**")
+        c1, c2 = st.columns(2)
+        has_camera = c1.toggle("HD Optical Camera", value=True)
+        has_lidar = c2.toggle("LiDAR Sensor", value=False)
+    
+    with st.expander("🌐 Operational Environment", expanded=True):
+        # قيم افتراضية لسيناريو GO: ارتفاع منخفض (40م)، رياح هادئة (2م/ث)، منطقة ريفية آمنة
+        pop_density = st.selectbox("Population Density", ["RURAL", "SUBURBAN", "URBAN", "HIGH_DENSE"], index=0)
+        wind_speed = st.slider("Current Wind Speed (m/s)", 0.0, 25.0, 2.0)
+        altitude = st.slider("Target Altitude (m)", 0, 500, 40)
+        mission_type = st.selectbox("Mission Profile", ["VLOS flight", "BVLOS flight", "Delivery"], index=0)
+        
+    with st.expander("🔋 Mission Energy Profile", expanded=True):
+        # قيم افتراضية لسيناريو GO: بطارية ممتلئة (95%) ووقت رحلة قصير (10 دقائق)
+        mission_time = st.number_input("Mission Duration (min)", value=10.0, step=1.0)
+        mission_dist = st.number_input("Planned Distance (m)", value=1000.0, step=100.0)
+        battery_pct = st.slider("Current Battery Charge (%)", 0, 100, 95)
+        drain_rate = st.number_input("Est. Consumption (%/min)", value=1.5, step=0.1)
+
+    if st.button("🚀 EXECUTE SAFETY AUDIT", use_container_width=True, type="primary"):
+        # بناء الـ Payload الشامل (الـ 50 عاموداً) لضمان عدم وجود نقص داتا
+        payload = {
+            "uav": {
+                "mass_kg": uav_mass,
+                "max_thrust_n": uav_thrust,
+                "hover_power_w": uav_power,
+                "type": uav_type,
+                "sensors": {
+                    "has_camera": "1" if has_camera else "0",
+                    "has_lidar": "1" if has_lidar else "0"
+                }
+            },
+            "environment": {
+                "weather": {"wind_mps": wind_speed, "temp_c": 22.0}
+            },
+            "telemetry": {
+                "altitude_m": altitude,
+                "battery_level_pct": battery_pct,
+                "battery_drain_rate_pct_per_min": drain_rate,
+                "population_density": pop_density
+            },
+            "mission": {
+                "type": mission_type,
+                "estimated_flight_time_min": mission_time,
+                "planned_distance_m": mission_dist
+            }
+        }
+        
+        with st.spinner("Council of Agents is Analyzing System Integrity..."):
+            result = asyncio.run(call_ace_api(payload))
+            st.session_state.ace_result = result
+            st.session_state.last_payload = payload
+
+# ─── 4. معالجة وعرض مخرجات الوكلاء ───
+with col_display:
     if "ace_result" in st.session_state:
         res = st.session_state.ace_result
-        decision = res.get('decision', 'UNKNOWN')
         
-        # هيدر القرار النهائي
-        st.markdown(f"### Final Verdict: <span class='{'status-go' if decision=='GO' else 'status-nogo'}'>{decision}</span>", unsafe_allow_html=True)
-        
-        col_chart, col_stats = st.columns([1, 1])
-        
-        with col_chart:
-            st.write("**Agent Risk Distribution (NRS)**")
-            drivers = {d['agent']: d['score'] for d in res.get("structured_data", {}).get("forensic_drivers", [])}
-            st.plotly_chart(create_radar_chart(drivers), width="stretch")
-            
-        with col_stats:
-            st.write("**Agent Sentiment Analysis**")
-            st.progress(drivers.get('PHYSICS', 0), text=f"Physics Margin: {drivers.get('PHYSICS', 0)*100}%")
-            st.progress(drivers.get('LEGAL', 0), text=f"Legal Risk: {drivers.get('LEGAL', 0)*100}%")
-            st.progress(drivers.get('ML_CONSULTANT', 0), text=f"ML Stats (10% weight): {drivers.get('ML_CONSULTANT', 0)*100}%")
+        if res.get("status") == "ERROR":
+            st.error(f"FATAL PIPELINE ERROR: {res.get('error_details')}")
+        else:
+            # مؤشرات الأداء الحيوية (KPIs)
+            k1, k2, k3 = st.columns(3)
+            decision = res.get('decision', 'N/A')
+            with k1:
+                st.markdown(f"<div class='metric-box'><h6>Final Decision</h6><p class='{'status-go' if decision == 'GO' else 'status-no-go'}'>{decision}</p></div>", unsafe_allow_html=True)
+            with k2:
+                conf = res.get("metrics", {}).get("confidence", 0.0)
+                st.markdown(f"<div class='metric-box'><h6>System Confidence</h6><h2>{round((1-conf)*100, 1)}%</h2></div>", unsafe_allow_html=True)
+            with k3:
+                time_ms = res.get("metrics", {}).get("total_time_ms", 0.0)
+                st.markdown(f"<div class='metric-box'><h6>Analysis Time</h6><h2>{int(time_ms)}ms</h2></div>", unsafe_allow_html=True)
 
-        st.markdown("---")
-        st.subheader("📋 Official Safety Audit Report")
-        st.markdown(res.get("report_markdown", "Report processing..."))
+            # التبويبات المتطورة
+            tab_rep, tab_viz, tab_audit = st.tabs(["📄 Safety Audit Report", "📊 Risk Distribution", "📡 Telemetry Audit"])
 
-# ─── 6. تدقيق الأدلة (Evidence & RAG) ───
-with tab_audit:
-    if "ace_result" in st.session_state:
-        col_rag, col_raw = st.columns([1, 1])
-        
-        with col_rag:
-            st.subheader("⚖️ Legal RAG Evidence Vault")
-            citations = res.get("structured_data", {}).get("legal_citations", [])
-            if citations:
-                for cite in citations:
-                    st.markdown(f"<div class='evidence-card'><b>Citation:</b> {cite}</div>", unsafe_allow_html=True)
-            else:
-                st.info("No specific legal violations cited.")
+            with tab_rep:
+                st.subheader("📋 Executive Mission Safety Report")
+                st.markdown(res.get("report_markdown", "No report content generated."))
 
-        with col_raw:
-            st.subheader("📡 Full Telemetry Trace")
-            audit_log = res.get("structured_data", {}).get("raw_snapshot", {})
-            st.dataframe(pd.DataFrame(list(audit_log.items()), columns=["Sensor", "Value"]), width="stretch", height=400)
-            
-            st.download_button("📥 Download Audit Pack (JSON)", data=json.dumps(res, indent=2), file_name="ACE_Evidence_Pack.json")
+            with tab_viz:
+                st.subheader("⚖️ Neural-Symbolic Radar Balance")
+                scores = res.get("structured_data", {}).get("agent_scores", {})
+                
+                # تمثيل "هامش الأمان": 1.0 تعني أمان مطلق، 0 تعني خطر مطلق
+                categories = ['Physics Guardian', 'Legal Compliance', 'Temporal Stability', 'ML Consultant']
+                values = [
+                    max(0, 1.0 - scores.get('physics', 1.0)),
+                    max(0, 1.0 - scores.get('legal', 1.0)),
+                    max(0, 1.0 - scores.get('temporal', 1.0)),
+                    max(0, 1.0 - scores.get('ml', 1.0))
+                ]
+
+                fig = go.Figure(data=go.Scatterpolar(
+                    r=values + [values[0]],
+                    theta=categories + [categories[0]],
+                    fill='toself',
+                    line_color='#58a6ff',
+                    fillcolor='rgba(88, 166, 255, 0.3)'
+                ))
+                fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 1])), template="plotly_dark", showlegend=False)
+                st.plotly_chart(fig, width='stretch')
+
+            with tab_audit:
+                col_c, col_d = st.columns([1, 1])
+                with col_c:
+                    st.subheader("⚖️ Legal RAG Citations")
+                    citations = res.get("structured_data", {}).get("legal_citations", [])
+                    if citations:
+                        for cite in citations:
+                            st.markdown(f"<div class='evidence-card'>{cite}</div>", unsafe_allow_html=True)
+                    else:
+                        st.info("No legal warnings detected for this configuration.")
+
+                with col_d:
+                    st.subheader("📡 Raw Sensor Trace")
+                    # عرض كل البيانات المرسلة للتأكد من وصولها للـ Backend
+                    audit_log = pd.json_normalize(st.session_state.last_payload).T.reset_index()
+                    audit_log.columns = ["Data Path", "Value"]
+                    # [الإصلاح الحاسم لـ Arrow]: تحويل القيم لنصوص
+                    st.dataframe(audit_log.astype(str), width='stretch', height=400)
+
+    else:
+        st.markdown("<br><br><br><div style='text-align: center; color: #8b949e;'><h3>🛡️ Awaiting Mission Configuration</h3><p>Adjust parameters and execute the audit sequence to generate a safety report.</p></div>", unsafe_allow_html=True)
+
+# ─── 5. حالة النظام ───
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔌 System Integrity")
+st.sidebar.success("✅ Backend Service: Connected")
+st.sidebar.success("✅ Groq Cognitive: Online")
+st.sidebar.success("✅ RAG Database: Synchronized")

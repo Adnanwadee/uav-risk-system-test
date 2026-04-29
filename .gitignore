@@ -21,3 +21,12 @@ build/
 
 # Large artifacts caches
 .cache/
+
+
+src/uav_risk/stage2/knowledge/models/
+artifacts/
+*.pkl
+*.faiss
+*.bin
+*.safetensorsgit rm -r --cached src/uav_risk/stage2/knowledge/models/
+git rm -r --cached artifacts/

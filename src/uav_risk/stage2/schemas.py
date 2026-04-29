@@ -1,18 +1,17 @@
 """
-Internal System Schemas (V15.0 - Apex Unified)
+Internal System Schemas (V15.1 - Apex Unified & Fixed)
 ========================================================
-Fixes:
-- Restored all missing classes (PhysicsRiskReport, LegalRiskReport, etc.)
-- Integrated 50+ column support in AgentState (Dict[str, Any]).
-- Added dynamic aircraft specs (mass, thrust) to RuntimeFlightData.
-- Standardized all Enums for Multi-Agent Consensus.
+Fixes in V15.1:
+- Added 'projected_risk_level' to PhysicsRiskReport to prevent consensus crash.
+- Added explicit report references to ConsensusReport for the Evidence Engine.
+- Maintained 50+ column support and dynamic specs.
 """
 
 import operator
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Annotated
 from typing_extensions import TypedDict
-from pydantic import BaseModel, Field, ConfigDict, computed_field
+from pydantic import BaseModel, Field, ConfigDict
 from langchain_core.messages import BaseMessage
 
 # ---------------------------------------------------------------------------
@@ -48,7 +47,7 @@ class MLResult(BaseModel):
 
 class RuntimeFlightData(BaseModel):
     """بيانات الرحلة التشغيلية مع دعم المواصفات الديناميكية."""
-    model_config = ConfigDict(extra="allow") # السماح بالـ 50 عاموداً
+    model_config = ConfigDict(extra="allow")
 
     battery_level_pct: float
     battery_drain_rate_pct_per_min: float
@@ -59,7 +58,6 @@ class RuntimeFlightData(BaseModel):
     planned_distance_m: float
     estimated_flight_time_min: float
     
-    # المواصفات المستخرجة من الداتا سيت
     mass_kg: Optional[float] = None
     max_thrust_n: Optional[float] = None
     hover_power_w: Optional[float] = None
@@ -71,6 +69,8 @@ class RuntimeFlightData(BaseModel):
 class PhysicsRiskReport(BaseModel):
     go_no_go: str
     risk_level: str
+    # [FIX]: إضافة الحقل المفقود الذي تسبب في انهيار وكيل الإجماع
+    projected_risk_level: Optional[str] = "LOW" 
     mc_failure_probability: float
     mc_confidence_interval: Tuple[float, float]
     mc_samples: int
@@ -102,6 +102,8 @@ class LegalRiskReport(BaseModel):
     go_no_go: Any
     critical_violations: List[str] = Field(default_factory=list)
     required_mitigations: List[str] = Field(default_factory=list)
+    # [إضافة]: حقل المقالات المطابقة لدعم محرك الأدلة
+    matched_articles: List[LegalEvidence] = Field(default_factory=list)
     execution_time_ms: float = 0.0
 
 # ---------------------------------------------------------------------------
@@ -124,6 +126,12 @@ class ConsensusReport(BaseModel):
     temporal_nrs: float
     ml_decision: str
     ml_nrs: float
+    
+    # [FIX]: إضافة مراجع التقارير الفرعية لكي يتمكن محرك الأدلة (Evidence Engine) من العثور عليها
+    physics_report: Optional[PhysicsRiskReport] = None
+    legal_report: Optional[LegalRiskReport] = None
+    temporal_report: Optional[TemporalStateEstimate] = None
+    
     legal_violations: List[str] = Field(default_factory=list)
     all_warnings: List[str] = Field(default_factory=list)
     required_mitigations: List[str] = Field(default_factory=list)
@@ -137,7 +145,6 @@ class ConsensusReport(BaseModel):
 
 class AgentState(TypedDict):
     flight_id: str
-    # القاموس الذي يحمل الـ 50 عاموداً كاملة
     telemetry: Dict[str, Any] 
     messages: Annotated[list[BaseMessage], operator.add]
     physics_report: Optional[PhysicsRiskReport]

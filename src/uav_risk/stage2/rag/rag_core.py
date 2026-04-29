@@ -1,19 +1,19 @@
 """
-Async RAG Core Engine (V13.0 - Certified Aviation Standard)
+Async RAG Core Engine (V15.1 - Pydantic Validation Fix)
 =========================================================
-التحسينات:
-- الحفاظ على Circuit Breaker و TTL Cache لحماية أداء النظام.
-- تعزيز استخراج الميتا-داتا (Source & Article ID) لدعم التقارير الاحترافية.
-- مطابقة مخرجات البحث مع متطلبات الوكيل القانوني (LegalAgent).
+التحديثات:
+- إصلاح خطأ الـ Extra inputs: نقل local_files_only إلى model_kwargs.
+- الربط المباشر مع مجلد knowledge/models المحلي.
+- تفعيل local_files_only لضمان عدم التعليق نهائياً.
+- تحسين استقرار الـ Reranker باستخدام مسارات Pathlib المطلقة.
 """
 
 import os
 import hashlib
 import asyncio
 import logging
-import re
 import time
-import unicodedata
+from pathlib import Path
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum, auto
@@ -28,9 +28,19 @@ from .config import RAGConfig
 
 logger = logging.getLogger("AsyncRAGCore")
 
-# ---------------------------------------------------------------------------
-# Resilience Structures (Circuit Breaker & Thread-Safe TTL Cache)
-# ---------------------------------------------------------------------------
+# ───────────────────────────────────────────────────────────────────────────
+# 1. إعداد المسارات المحلية الدقيقة (المجلد الذي أنشأته)
+# ───────────────────────────────────────────────────────────────────────────
+# المسار النسبي: يرجع من rag إلى stage2 ثم يدخل knowledge/models
+CURRENT_DIR = Path(__file__).resolve().parent
+MODELS_DIR = CURRENT_DIR.parent / "knowledge" / "models"
+
+EMBEDDING_PATH = MODELS_DIR / "embedding"
+RERANKER_PATH = MODELS_DIR / "reranker"
+
+# ───────────────────────────────────────────────────────────────────────────
+# 2. الهياكل المرنة (Circuit Breaker & Cache)
+# ───────────────────────────────────────────────────────────────────────────
 
 class CircuitState(Enum):
     CLOSED = auto()
@@ -90,12 +100,9 @@ class AsyncTTLCache:
             if len(self._cache) > self.max_size:
                 self._cache.popitem(last=False)
 
-    def size(self) -> int:
-        return len(self._cache)
-
-# ---------------------------------------------------------------------------
-# Core Engine
-# ---------------------------------------------------------------------------
+# ───────────────────────────────────────────────────────────────────────────
+# 3. المحرك الأساسي (AsyncRAGCore)
+# ───────────────────────────────────────────────────────────────────────────
 
 class AsyncRAGCore(AsyncRAGIndexInterface):
     def __init__(self, config: Optional[RAGConfig] = None):
@@ -112,40 +119,47 @@ class AsyncRAGCore(AsyncRAGIndexInterface):
         self._reranker: Optional[CrossEncoder] = None
         self._reranker_lock = asyncio.Lock()
         
-        self.metrics = {
-            "total_searches": 0, 
-            "cache_hits": 0,
-            "failed_searches": 0, 
-            "latency_sum_ms": 0.0
-        }
+        self.metrics = {"total_searches": 0, "cache_hits": 0, "failed_searches": 0, "latency_sum_ms": 0.0}
         
         self._initialize_base_engines()
 
     def _initialize_base_engines(self) -> None:
+        """تحميل محرك التضمين وقاعدة البيانات أوفلاين."""
         if not self.config.INDEX_PATH or not self.config.INDEX_PATH.exists():
             logger.critical(f"Index missing at {self.config.INDEX_PATH}. RAG Offline.")
             return
 
         try:
-            self._embeddings = HuggingFaceEmbeddings(model_name=self.config.EMBEDDING_MODEL)
+            logger.info(f"📡 Accessing local embeddings at: {EMBEDDING_PATH}")
+            # [تعديل حاسم]: تم نقل local_files_only لداخل model_kwargs لحل خطأ Pydantic
+            self._embeddings = HuggingFaceEmbeddings(
+                model_name=str(EMBEDDING_PATH),
+                model_kwargs={
+                    'device': 'cpu',
+                    'local_files_only': True # إجبار الأوفلاين داخل القاموس
+                }
+            )
+            
             self._db = FAISS.load_local(
                 str(self.config.INDEX_PATH), 
                 self._embeddings, 
                 allow_dangerous_deserialization=True
             )
-            logger.info("Base RAG Engines loaded successfully.")
+            logger.info("✅ FAISS & Embeddings loaded successfully from local models.")
         except Exception as e:
             logger.critical(f"FATAL: Failed to load RAG engines: {e}")
             self._db = None
 
     async def _ensure_reranker_loaded(self):
+        """تحميل الـ Reranker من المجلد المحلي عند الطلب."""
         if self._reranker is None:
             async with self._reranker_lock:
                 if self._reranker is None:
+                    logger.info(f"📡 Initializing local Reranker from: {RERANKER_PATH}")
                     loop = asyncio.get_running_loop()
                     self._reranker = await loop.run_in_executor(
                         self._pool, 
-                        lambda: CrossEncoder(self.config.RERANKER_MODEL, device='cpu')
+                        lambda: CrossEncoder(str(RERANKER_PATH), device='cpu', local_files_only=True)
                     )
 
     def _hybrid_normalize_scores(self, raw_scores: list[float]) -> list[float]:
@@ -157,7 +171,7 @@ class AsyncRAGCore(AsyncRAGIndexInterface):
         return [max(0.0, min(1.0, (s - min_s) / (max_s - min_s))) for s in clamped]
 
     def _sync_search_pipeline(self, query: str, top_k: int, min_score: float) -> List[Dict[str, Any]]:
-        """خط إنتاج البحث المحدث لاستخراج الأدلة الجنائية للتقارير."""
+        """خط إنتاج البحث لاستخراج الأدلة الجنائية."""
         try:
             if not self._db or not self._reranker: return []
 
@@ -172,7 +186,6 @@ class AsyncRAGCore(AsyncRAGIndexInterface):
             for i, doc in enumerate(docs):
                 conf_score = normalized_scores[i]
                 if conf_score >= min_score:
-                    # [إصلاح هندسي]: استخراج الميتا-داتا للاستشهادات القانونية
                     source = doc.metadata.get("source", "Aviation Regulation")
                     article_id = doc.metadata.get("article_id", "N/A")
                     
@@ -183,7 +196,6 @@ class AsyncRAGCore(AsyncRAGIndexInterface):
                             "article_id": article_id,
                             "chunk_id": hashlib.sha256(doc.page_content.encode()).hexdigest()[:16],
                             "score": conf_score,
-                            # بناء الاستشهاد الموحد للتقرير الاحترافي
                             "citation": f"[{source} | Article: {article_id}]"
                         }
                     }
@@ -196,7 +208,7 @@ class AsyncRAGCore(AsyncRAGIndexInterface):
             return []
 
     async def search(self, query: str, top_k: int, min_score: float) -> List[Dict[str, Any]]:
-        """دالة البحث الأساسية المحمية بـ Circuit Breaker و Cache."""
+        """دالة البحث الأساسية المحمية."""
         if not self.circuit.allow_request():
             self.metrics["failed_searches"] += 1
             return []

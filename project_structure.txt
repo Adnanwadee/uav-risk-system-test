@@ -2,48 +2,152 @@
 ├── Dockerfile
 ├── Makefile
 ├── README.md
+├── artifacts
+│   ├── clf_calibrator_stage1_v2.pkl
+│   ├── label_encoder_stage1_v2.pkl
+│   ├── stage1_bundle_v2.pkl
+│   ├── stage1_policy_config_v2.json
+│   ├── training_stats.json
+│   ├── uav_stage1_preprocessor_v2.pkl
+│   ├── uav_stage1_v2_dataset.csv
+│   ├── xgb_clf_stage1_v2.pkl
+│   └── xgb_reg_stage1_v2.pkl
+├── build
+│   ├── bdist.linux-x86_64
+│   └── lib
+│       └── uav_risk
+│           ├── api
+│           │   └── main.py
+│           ├── stage1
+│           │   ├── canonicalize.py
+│           │   ├── infer.py
+│           │   ├── loader.py
+│           │   └── utils.py
+│           ├── stage2
+│           │   ├── __init__.py
+│           │   ├── agents
+│           │   │   ├── consensus_agent.py
+│           │   │   ├── legal_agent.py
+│           │   │   ├── physics_agent.py
+│           │   │   └── temporal_agent.py
+│           │   ├── api.py
+│           │   ├── evidence.py
+│           │   ├── graph
+│           │   │   └── safety_agent.py
+│           │   ├── input_contract.py
+│           │   ├── llm
+│           │   │   ├── groq_client.py
+│           │   │   └── report_writer.py
+│           │   ├── pipeline.py
+│           │   ├── policies
+│           │   │   ├── config.py
+│           │   │   └── deterministic_core.py
+│           │   ├── rag
+│           │   │   ├── config.py
+│           │   │   └── rag_core.py
+│           │   ├── report
+│           │   │   ├── prompts.py
+│           │   │   ├── templates.py
+│           │   │   └── verifier.py
+│           │   ├── schemas.py
+│           │   └── tools
+│           │       └── toolbox.py
+│           └── utils
+│               ├── __init__.py
+│               ├── json_sanitize.py
+│               └── string_utils.py
 ├── git
 ├── knowledge
 │   └── aviation
 │       └── weather_limits.md
 ├── project_structure.txt
-├── project_tree.txt
 ├── pyproject.toml
 ├── run.py
 ├── src
 │   ├── uav_risk
-│   │   ├── __init__.py
 │   │   ├── api
 │   │   │   └── main.py
+│   │   ├── schema
+│   │   │   └── feature_registry.py
 │   │   ├── stage1
 │   │   │   ├── canonicalize.py
 │   │   │   ├── infer.py
-│   │   │   ├── loader.py
-│   │   │   └── utils.py
+│   │   │   └── loader.py
 │   │   ├── stage2
 │   │   │   ├── __init__.py
 │   │   │   ├── agents
-│   │   │   │   ├── data_quality.py
-│   │   │   │   ├── evidence_builder.py
-│   │   │   │   ├── retrieval.py
-│   │   │   │   ├── risk_context.py
-│   │   │   │   └── risk_drivers.py
+│   │   │   │   ├── consensus_agent.py
+│   │   │   │   ├── legal_agent.py
+│   │   │   │   ├── physics_agent.py
+│   │   │   │   └── temporal_agent.py
 │   │   │   ├── api.py
 │   │   │   ├── evidence.py
 │   │   │   ├── graph
 │   │   │   │   └── safety_agent.py
 │   │   │   ├── input_contract.py
 │   │   │   ├── knowledge
-│   │   │   │   ├── company_sop
-│   │   │   │   │   └── flight_risk_policy.md
-│   │   │   │   ├── regulations
-│   │   │   │   │   └── uav_ops_guidelines.md
-│   │   │   │   ├── safety
-│   │   │   │   │   └── gnss_interference_mitigation.md
-│   │   │   │   ├── uav_manual
-│   │   │   │   │   └── generic_uav_manual.md
-│   │   │   │   └── weather
-│   │   │   │       └── wind_visibility_limits.md
+│   │   │   │   ├── models
+│   │   │   │   │   ├── embedding
+│   │   │   │   │   │   ├── 1_Pooling
+│   │   │   │   │   │   │   └── config.json
+│   │   │   │   │   │   ├── README.md
+│   │   │   │   │   │   ├── config.json
+│   │   │   │   │   │   ├── config_sentence_transformers.json
+│   │   │   │   │   │   ├── data_config.json
+│   │   │   │   │   │   ├── model.safetensors
+│   │   │   │   │   │   ├── modules.json
+│   │   │   │   │   │   ├── onnx
+│   │   │   │   │   │   │   ├── model.onnx
+│   │   │   │   │   │   │   ├── model_O1.onnx
+│   │   │   │   │   │   │   ├── model_O2.onnx
+│   │   │   │   │   │   │   ├── model_O3.onnx
+│   │   │   │   │   │   │   ├── model_O4.onnx
+│   │   │   │   │   │   │   ├── model_qint8_arm64.onnx
+│   │   │   │   │   │   │   ├── model_qint8_avx512.onnx
+│   │   │   │   │   │   │   ├── model_qint8_avx512_vnni.onnx
+│   │   │   │   │   │   │   └── model_quint8_avx2.onnx
+│   │   │   │   │   │   ├── openvino
+│   │   │   │   │   │   │   ├── openvino_model.bin
+│   │   │   │   │   │   │   ├── openvino_model.xml
+│   │   │   │   │   │   │   ├── openvino_model_qint8_quantized.bin
+│   │   │   │   │   │   │   └── openvino_model_qint8_quantized.xml
+│   │   │   │   │   │   ├── pytorch_model.bin
+│   │   │   │   │   │   ├── rust_model.ot
+│   │   │   │   │   │   ├── sentence_bert_config.json
+│   │   │   │   │   │   ├── special_tokens_map.json
+│   │   │   │   │   │   ├── tf_model.h5
+│   │   │   │   │   │   ├── tokenizer.json
+│   │   │   │   │   │   ├── tokenizer_config.json
+│   │   │   │   │   │   ├── train_script.py
+│   │   │   │   │   │   └── vocab.txt
+│   │   │   │   │   └── reranker
+│   │   │   │   │       ├── README.md
+│   │   │   │   │       ├── config.json
+│   │   │   │   │       ├── flax_model.msgpack
+│   │   │   │   │       ├── model.safetensors
+│   │   │   │   │       ├── onnx
+│   │   │   │   │       │   ├── model.onnx
+│   │   │   │   │       │   ├── model_O1.onnx
+│   │   │   │   │       │   ├── model_O2.onnx
+│   │   │   │   │       │   ├── model_O3.onnx
+│   │   │   │   │       │   ├── model_O4.onnx
+│   │   │   │   │       │   ├── model_qint8_arm64.onnx
+│   │   │   │   │       │   ├── model_qint8_avx512.onnx
+│   │   │   │   │       │   ├── model_qint8_avx512_vnni.onnx
+│   │   │   │   │       │   └── model_quint8_avx2.onnx
+│   │   │   │   │       ├── openvino
+│   │   │   │   │       │   ├── openvino_model.bin
+│   │   │   │   │       │   ├── openvino_model.xml
+│   │   │   │   │       │   ├── openvino_model_qint8_quantized.bin
+│   │   │   │   │       │   └── openvino_model_qint8_quantized.xml
+│   │   │   │   │       ├── pytorch_model.bin
+│   │   │   │   │       ├── special_tokens_map.json
+│   │   │   │   │       ├── tokenizer.json
+│   │   │   │   │       ├── tokenizer_config.json
+│   │   │   │   │       └── vocab.txt
+│   │   │   │   └── vector_db
+│   │   │   │       ├── index.faiss
+│   │   │   │       └── index.pkl
 │   │   │   ├── llm
 │   │   │   │   ├── groq_client.py
 │   │   │   │   └── report_writer.py
@@ -52,9 +156,9 @@
 │   │   │   │   ├── config.py
 │   │   │   │   └── deterministic_core.py
 │   │   │   ├── rag
-│   │   │   │   ├── index.py
-│   │   │   │   ├── loader.py
-│   │   │   │   └── retrieval.py
+│   │   │   │   ├── config.py
+│   │   │   │   ├── force_download.py
+│   │   │   │   └── rag_core.py
 │   │   │   ├── report
 │   │   │   │   ├── prompts.py
 │   │   │   │   ├── templates.py
@@ -75,5 +179,4 @@
 └── ui
     └── app.py
 
-    23 directories, 52 files
-    
+44 directories, 135 files

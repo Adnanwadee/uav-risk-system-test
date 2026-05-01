@@ -1,0 +1,234 @@
+{
+    "uav.mass_kg": {
+        "mean": 0.12711915498703102,
+        "std": 0.8424925361070832
+    },
+    "uav.battery_model.hover_power_W": {
+        "mean": 0.14313680323187544,
+        "std": 0.7432450759220618
+    },
+    "feat_mission_dist_m": {
+        "mean": 0.007211969975292134,
+        "std": 0.7595165999650174
+    },
+    "feat_mission_climb_m": {
+        "mean": -0.0736453537534205,
+        "std": 1.220748344370748
+    },
+    "feat_airspace_area_m2": {
+        "mean": 0.0012969140194925473,
+        "std": 0.6752398684237744
+    },
+    "feat_power_to_weight": {
+        "mean": -0.0071373979435749365,
+        "std": 1.0118816928811823
+    },
+    "feat_obstacle_density_per_km2": {
+        "mean": 0.3592186708779942,
+        "std": 1.579456456041695
+    },
+    "uav.max_speed_mps": {
+        "mean": 0.02678608859698155,
+        "std": 0.5898851410766343
+    },
+    "environment.weather.wind_mps": {
+        "mean": 0.07921324762437114,
+        "std": 0.718043697920361
+    },
+    "environment.weather.gust_mps": {
+        "mean": 0.12328814980435998,
+        "std": 0.9022359560378945
+    },
+    "environment.gnss_jam_dbm": {
+        "mean": 0.027051936526143015,
+        "std": 0.6023608753239414
+    },
+    "daa.sep_threshold_m": {
+        "mean": 0.061996925656791504,
+        "std": 0.7749007670732386
+    },
+    "daa.ttc_threshold_s": {
+        "mean": 0.04355261319172722,
+        "std": 0.7570498807963692
+    },
+    "feat_weather_score": {
+        "mean": -0.016332448295136946,
+        "std": 0.5973719946808848
+    },
+    "feat_obstacle_avg_speed": {
+        "mean": 0.3694626886528787,
+        "std": 1.3934371589139294
+    },
+    "feat_mission_tortuosity": {
+        "mean": 0.18731086208889816,
+        "std": 0.8143438865910243
+    },
+    "is_missing__environment.gnss_multipath": {
+        "mean": 0.5015895751816657,
+        "std": 0.4999974737220267
+    },
+    "is_missing__comms.uplink_ok": {
+        "mean": 0.2014044158747904,
+        "std": 0.4010515152062635
+    },
+    "is_missing__comms.downlink_ok": {
+        "mean": 0.2014044158747904,
+        "std": 0.4010515152062635
+    },
+    "is_missing__environment.em_interference": {
+        "mean": 0.5015895751816657,
+        "std": 0.4999974737220267
+    },
+    "is_missing__mission.runway_required": {
+        "mean": 0.20077557294577977,
+        "std": 0.40058448761214044
+    },
+    "has_lidar": {
+        "mean": 0.3999441028507546,
+        "std": 0.48988941728189686
+    },
+    "is_missing__has_lidar": {
+        "mean": 0.19894144773616545,
+        "std": 0.39920701193399436
+    },
+    "has_radar": {
+        "mean": 0.4026690888764673,
+        "std": 0.49043900984824364
+    },
+    "is_missing__has_radar": {
+        "mean": 0.19894144773616545,
+        "std": 0.39920701193399436
+    },
+    "has_gnss": {
+        "mean": 0.8010585522638346,
+        "std": 0.39920701193399453
+    },
+    "is_missing__has_gnss": {
+        "mean": 0.19894144773616545,
+        "std": 0.39920701193399436
+    },
+    "has_imu": {
+        "mean": 0.8010585522638346,
+        "std": 0.39920701193399453
+    },
+    "is_missing__has_imu": {
+        "mean": 0.19894144773616545,
+        "std": 0.39920701193399436
+    },
+    "has_camera_rgb": {
+        "mean": 0.6033747903856904,
+        "std": 0.48919934250212046
+    },
+    "is_missing__has_camera_rgb": {
+        "mean": 0.19894144773616545,
+        "std": 0.39920701193399436
+    },
+    "has_camera_thermal": {
+        "mean": 0.20143935159306874,
+        "std": 0.4010776566453965
+    },
+    "is_missing__has_camera_thermal": {
+        "mean": 0.19894144773616545,
+        "std": 0.39920701193399436
+    },
+    "dq_core_present_pct": {
+        "mean": 0.9056255240357742,
+        "std": 0.14152771217036494
+    },
+    "dq_weather_present": {
+        "mean": 0.8872275013974288,
+        "std": 0.3163158913941409
+    },
+    "dq_uav_present": {
+        "mean": 1.0,
+        "std": 0.0
+    },
+    "dq_mission_present": {
+        "mean": 1.0,
+        "std": 0.0
+    },
+    "dq_comms_present": {
+        "mean": 0.7985955841252096,
+        "std": 0.4010515152062635
+    },
+    "dq_sensors_present_pct": {
+        "mean": 0.8010585522638346,
+        "std": 0.39920701193399453
+    },
+    "mission.type_area_recon_fixedwing": {
+        "mean": 0.010148826159865846,
+        "std": 0.10022830843322197
+    },
+    "mission.type_convoy_escort": {
+        "mean": 0.010096422582448296,
+        "std": 0.09997193988514112
+    },
+    "mission.type_delivery": {
+        "mean": 0.03846422582448295,
+        "std": 0.1923157523193297
+    },
+    "mission.type_firefighting_drop": {
+        "mean": 0.010044018987562885,
+        "std": 0.09971383377758957
+    },
+    "mission.type_inspection": {
+        "mean": 0.1979283119060928,
+        "std": 0.39844070213031085
+    },
+    "mission.type_mapping": {
+        "mean": 0.20164896586780324,
+        "std": 0.40123382755290616
+    },
+    "mission.type_package_delivery": {
+        "mean": 0.19890651201788708,
+        "std": 0.3991807386046907
+    },
+    "mission.type_runway_touch_and_go": {
+        "mean": 0.010061486864169927,
+        "std": 0.09980005706429396
+    },
+    "mission.type_search_rescue": {
+        "mean": 0.010463247624371158,
+        "std": 0.10175294524275062
+    },
+    "mission.type_survey": {
+        "mean": 0.20121226942425936,
+        "std": 0.4009088523315764
+    },
+    "mission.type_infrequent_sklearn": {
+        "mean": 0.11102571268865288,
+        "std": 0.3141670984857431
+    },
+    "mission.pattern_corridor": {
+        "mean": 0.11478130240357741,
+        "std": 0.3187610023646549
+    },
+    "mission.pattern_grid": {
+        "mean": 0.2319906372275014,
+        "std": 0.42210667500584483
+    },
+    "mission.pattern_orbit": {
+        "mean": 0.1287905254331994,
+        "std": 0.33496924842188445
+    },
+    "mission.pattern_spiral": {
+        "mean": 0.1306421185019564,
+        "std": 0.33700940561570755
+    },
+    "mission.pattern_infrequent_sklearn": {
+        "mean": 0.3937954164337619,
+        "std": 0.4885934440026217
+    },
+    "environment.weather.visibility_good": {
+        "mean": 0.5015895751816657,
+        "std": 0.4999974737220267
+    },
+    "environment.weather.visibility_poor": {
+        "mean": 0.20102012297372833,
+        "std": 0.40076625890251144
+    },
+    "environment.weather.visibility_infrequent_sklearn": {
+        "mean": 0.2973903018446059,
+        "std": 0.4571120015502692
+    }
+}

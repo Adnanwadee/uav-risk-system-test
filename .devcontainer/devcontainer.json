@@ -1,6 +1,5 @@
 {
-  "name": "uav-risk-system-py311",
-  "image": "mcr.microsoft.com/devcontainers/python:1-3.10-bullseye",
+  "name": "uav-risk-system-py312",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
   "postCreateCommand": "python -m pip install --upgrade pip && pip install -e ."
 }
-

@@ -12,50 +12,6 @@
 │   ├── uav_stage1_v2_dataset.csv
 │   ├── xgb_clf_stage1_v2.pkl
 │   └── xgb_reg_stage1_v2.pkl
-├── build
-│   ├── bdist.linux-x86_64
-│   └── lib
-│       └── uav_risk
-│           ├── api
-│           │   └── main.py
-│           ├── stage1
-│           │   ├── canonicalize.py
-│           │   ├── infer.py
-│           │   ├── loader.py
-│           │   └── utils.py
-│           ├── stage2
-│           │   ├── __init__.py
-│           │   ├── agents
-│           │   │   ├── consensus_agent.py
-│           │   │   ├── legal_agent.py
-│           │   │   ├── physics_agent.py
-│           │   │   └── temporal_agent.py
-│           │   ├── api.py
-│           │   ├── evidence.py
-│           │   ├── graph
-│           │   │   └── safety_agent.py
-│           │   ├── input_contract.py
-│           │   ├── llm
-│           │   │   ├── groq_client.py
-│           │   │   └── report_writer.py
-│           │   ├── pipeline.py
-│           │   ├── policies
-│           │   │   ├── config.py
-│           │   │   └── deterministic_core.py
-│           │   ├── rag
-│           │   │   ├── config.py
-│           │   │   └── rag_core.py
-│           │   ├── report
-│           │   │   ├── prompts.py
-│           │   │   ├── templates.py
-│           │   │   └── verifier.py
-│           │   ├── schemas.py
-│           │   └── tools
-│           │       └── toolbox.py
-│           └── utils
-│               ├── __init__.py
-│               ├── json_sanitize.py
-│               └── string_utils.py
 ├── git
 ├── knowledge
 │   └── aviation
@@ -66,16 +22,38 @@
 ├── src
 │   ├── uav_risk
 │   │   ├── api
+│   │   │   ├── __pycache__
+│   │   │   │   └── main.cpython-310.pyc
 │   │   │   └── main.py
 │   │   ├── schema
+│   │   │   ├── __pycache__
+│   │   │   │   └── feature_registry.cpython-310.pyc
 │   │   │   └── feature_registry.py
+│   │   ├── stage-1-final-plan.ipynb
 │   │   ├── stage1
+│   │   │   ├── __pycache__
+│   │   │   │   ├── canonicalize.cpython-310.pyc
+│   │   │   │   ├── infer.cpython-310.pyc
+│   │   │   │   ├── loader.cpython-310.pyc
+│   │   │   │   └── utils.cpython-310.pyc
 │   │   │   ├── canonicalize.py
 │   │   │   ├── infer.py
 │   │   │   └── loader.py
 │   │   ├── stage2
 │   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── __init__.cpython-310.pyc
+│   │   │   │   ├── api.cpython-310.pyc
+│   │   │   │   ├── evidence.cpython-310.pyc
+│   │   │   │   ├── input_contract.cpython-310.pyc
+│   │   │   │   ├── pipeline.cpython-310.pyc
+│   │   │   │   └── schemas.cpython-310.pyc
 │   │   │   ├── agents
+│   │   │   │   ├── __pycache__
+│   │   │   │   │   ├── consensus_agent.cpython-310.pyc
+│   │   │   │   │   ├── legal_agent.cpython-310.pyc
+│   │   │   │   │   ├── physics_agent.cpython-310.pyc
+│   │   │   │   │   └── temporal_agent.cpython-310.pyc
 │   │   │   │   ├── consensus_agent.py
 │   │   │   │   ├── legal_agent.py
 │   │   │   │   ├── physics_agent.py
@@ -83,6 +61,8 @@
 │   │   │   ├── api.py
 │   │   │   ├── evidence.py
 │   │   │   ├── graph
+│   │   │   │   ├── __pycache__
+│   │   │   │   │   └── safety_agent.cpython-310.pyc
 │   │   │   │   └── safety_agent.py
 │   │   │   ├── input_contract.py
 │   │   │   ├── knowledge
@@ -149,13 +129,22 @@
 │   │   │   │       ├── index.faiss
 │   │   │   │       └── index.pkl
 │   │   │   ├── llm
+│   │   │   │   ├── __pycache__
+│   │   │   │   │   ├── groq_client.cpython-310.pyc
+│   │   │   │   │   └── report_writer.cpython-310.pyc
 │   │   │   │   ├── groq_client.py
 │   │   │   │   └── report_writer.py
 │   │   │   ├── pipeline.py
 │   │   │   ├── policies
+│   │   │   │   ├── __pycache__
+│   │   │   │   │   ├── config.cpython-310.pyc
+│   │   │   │   │   └── deterministic_core.cpython-310.pyc
 │   │   │   │   ├── config.py
 │   │   │   │   └── deterministic_core.py
 │   │   │   ├── rag
+│   │   │   │   ├── __pycache__
+│   │   │   │   │   ├── config.cpython-310.pyc
+│   │   │   │   │   └── rag_core.cpython-310.pyc
 │   │   │   │   ├── config.py
 │   │   │   │   ├── force_download.py
 │   │   │   │   └── rag_core.py
@@ -165,9 +154,14 @@
 │   │   │   │   └── verifier.py
 │   │   │   ├── schemas.py
 │   │   │   └── tools
+│   │   │       ├── __pycache__
+│   │   │       │   └── toolbox.cpython-310.pyc
 │   │   │       └── toolbox.py
 │   │   └── utils
 │   │       ├── __init__.py
+│   │       ├── __pycache__
+│   │       │   ├── __init__.cpython-310.pyc
+│   │       │   └── json_sanitize.cpython-310.pyc
 │   │       ├── json_sanitize.py
 │   │       └── string_utils.py
 │   └── uav_risk_system.egg-info
@@ -176,7 +170,14 @@
 │       ├── dependency_links.txt
 │       ├── requires.txt
 │       └── top_level.txt
+├── tests
+│   ├── test_canonicalize.py
+│   ├── test_feature_registry.py
+│   ├── test_infer_drift.py
+│   ├── test_loader.py
+│   └── test_pipeline_mock.py
+├── uav_stage1_v2_dataset.csv
 └── ui
     └── app.py
 
-44 directories, 135 files
+41 directories, 139 files

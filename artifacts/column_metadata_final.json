@@ -1,0 +1,51 @@
+{
+  "timestamp": "20260509_005318",
+  "n_features": 198,
+  "train_shape": [
+    40072,
+    198
+  ],
+  "val_shape": [
+    8588,
+    198
+  ],
+  "test_shape": [
+    8588,
+    198
+  ],
+  "target_classes": [
+    "High Risk",
+    "Low Risk",
+    "Medium Risk"
+  ],
+  "selected_strategy": "BorderlineSMOTE (k=3)",
+  "removed_features": {
+    "simulation_outputs": [
+      "benchmark_tags_count",
+      "benchmark_tags_first",
+      "metrics_count",
+      "metrics_first",
+      "name"
+    ],
+    "high_corr_indicators": [
+      "environment_em_interference_was_missing",
+      "environment_gnss_jam_dbm_was_missing",
+      "environment_gnss_multipath_was_missing",
+      "environment_wind_profile_count_was_missing",
+      "environment_wind_profile_sample_alt_m_was_missing",
+      "environment_wind_profile_sample_wind_mps_was_missing",
+      "environment_wind_profile_sample_dir_deg_was_missing",
+      "faults_sample_t_s_was_missing",
+      "faults_sample_type_was_missing",
+      "faults_sample_duration_s_was_missing",
+      "faults_sample_severity_was_missing",
+      "environment_thermal_plumes_count_was_missing",
+      "environment_thermal_plumes_sample_radius_m_was_missing",
+      "environment_thermal_plumes_sample_w_up_mps_was_missing"
+    ],
+    "near_zero_variance": [
+      "sim_dt",
+      "uav_sensors_magnetometer"
+    ]
+  }
+}

@@ -4,45 +4,83 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uav-risk-system"
-version = "0.2.0" # إصدار الجيل الجديد (Neuro-Symbolic)
+version = "0.3.0"  # الإصدار الجديد بعد إعادة الهيكلة
 requires-python = ">=3.10,<3.13"
 
 dependencies = [
-    # --- 1. Legacy ML & Core Data (STRICT VERSIONING - DO NOT CHANGE) ---
-    "numpy==1.24.4",         # لحماية نماذج المرحلة الأولى
-    "scipy==1.11.4",         # نسخة جاهزة تتوافق مع numpy القديم وتمنع البناء من الصفر
-    "pandas==2.0.3",
-    "scikit-learn==1.2.2",
-    "xgboost==1.7.6",
-    "joblib",
+
+    # --- 1. Stage1 ML (نفس بيئة التدريب - إصدارات ثابتة) ---
+    "numpy==2.0.2",
+    "pandas==2.2.2",
+    "scipy==1.15.3",
+    "scikit-learn==1.6.1",
+    "lightgbm==4.6.0",
+    "shap==0.49.1",
+    "joblib==1.5.3",
+    "imbalanced-learn==0.14.0",
+    "category-encoders==2.8.1",
+    "numba==0.60.0",      # ✅ إضافة numba - السبب الحقيقي للخطأ
+
+
+    # --- 2. Testing & Quality ---
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
     
-    # --- 2. API & Infrastructure ---
+    # --- 3. API & Infrastructure ---
     "pydantic>=2.0",
-    "fastapi",
-    "uvicorn[standard]",
-    "python-multipart",
-    "httpx",                 # بديل requests المظلم (يدعم Async)
-    "streamlit",
-    "matplotlib==3.7.3",
-    "plotly",                # [إضافة] للمخططات التفاعلية في الواجهة
-    "tenacity",              # [إضافة] لمحرك إعادة المحاولة (Retry Logic) في الـ Pipeline
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",
+    "python-multipart>=0.0.6",
+    "httpx>=0.24.0",         # Async HTTP client
+    "streamlit>=1.25.0",
+    "matplotlib>=3.5.0",
+    "plotly>=5.17.0",        # مخططات تفاعلية
+    "seaborn>=0.11.0",       # تصورات إحصائية
     
-    # --- 3. The Agentic Brain (LangGraph Core) ---
-    "langgraph>=0.0.26",     # محرك الوكلاء
-    "langchain-core",        # البنية الأساسية
-    "langchain-groq",        # للتواصل مع Groq LPU
-    "instructor",            # لإجبار الـ LLM على إخراج JSON صارم
+    # --- 4. Agent & LLM ---
+    "langgraph>=0.0.26",     # Agent orchestration
+    "langchain-core>=0.1.0",
+    "langchain-groq>=0.1.0", # Groq API (مجاني وسريع)
+    "instructor>=0.5.0",     # JSON output enforcement
+    "tenacity>=8.2.0",       # Retry logic
     
-    # --- 4. Advanced Hybrid RAG (FAISS Integration) ---
-    "faiss-cpu==1.8.0",           # محرك البحث المتجهي
-    "sentence-transformers",      # نماذج التضمين وإعادة الترتيب (Re-ranking)
-    "langchain-huggingface",      # لربط نماذج HuggingFace
-    "langchain-community",        # لربط محرك FAISS ببيئة LangChain
+    # --- 5. RAG & Vector Search ---
+    "faiss-cpu>=1.8.0",      # Vector database
+    "sentence-transformers>=2.2.0",  # Embeddings + reranker
+    "langchain-huggingface>=0.0.1",
+    "langchain-community>=0.0.10",
     
-    # --- 5. Observability ---
-    "langsmith"              # الصندوق الأسود لتسجيل قرارات الوكيل
+    # --- 6. Observability & Monitoring ---
+    "langsmith>=0.0.77",     # Tracing and analytics
+    
+    # --- 7. Utilities ---
+    "python-dotenv>=1.0.0",  # Environment variables
+    "typing-extensions>=4.8.0",
+    "requests>=2.28.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+    "pre-commit>=3.5.0",
 ]
 
 [tool.ruff.per-file-ignores]
 "src/uav_risk/stage1/loader.py" = ["E402"]
 "ui/app.py" = ["E402"]
+"src/uav_risk/ml/loader.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short --strict-markers"
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_return_any = true
+warn_unused_configs = true

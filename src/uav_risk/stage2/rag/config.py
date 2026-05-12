@@ -1,10 +1,6 @@
 """
-RAG Configuration (V15.0 - Strict Offline & Path Optimized)
-==========================================================
-التعديلات الهندسية:
-1. الموديلات المحلية: تم ربط EMBEDDING_MODEL و RERANKER_MODEL بالمسارات الفيزيائية داخل مجلد models.
-2. استدامة المسارات: استخدام Pathlib لضمان العثور على الموارد في بيئة Codespaces دون تعليق.
-3. التوافق مع الرادار: ضبط المعاملات لضمان دقة استجابة الوكيل القانوني بنسبة عالية.
+RAG Configuration (V18.0 - Production Ready)
+===========================================
 """
 
 import os
@@ -15,55 +11,87 @@ from typing import Optional
 
 logger = logging.getLogger("RAGConfig")
 
+
 @dataclass
 class RAGConfig:
-    # [تعديل المسار]: نرجع 4 مستويات للوصول للمجلد الرئيسي للمشروع (Root)
-    BASE_DIR: Path = Path(__file__).resolve().parents[4] 
+    """التهيئة الأساسية لنظام RAG - نسخة محسنة"""
     
-    # تعريف المسارات الأساسية للموارد المحلية
-    INDEX_PATH: Optional[Path] = field(default=None, init=False)
-    MODELS_DIR: Optional[Path] = field(default=None, init=False)
+    # المسارات
+    BASE_DIR: Path = Path(__file__).resolve().parent.parent
     
-    # [تعديل حاسم]: تحويل الموديلات للإشارة للمجلدات المحلية بدلاً من Hugging Face
-    EMBEDDING_MODEL: str = field(default=None, init=False)
-    RERANKER_MODEL: str = field(default=None, init=False)
+    @property
+    def INDEX_PATH(self) -> Path:
+        return self.BASE_DIR / "knowledge" / "vector_db"
     
-    # معاملات الأداء والدقة
-    MIN_RELEVANCE_SCORE: float = 0.65
-    TOP_K: int = 5
-    INITIAL_K: int = 15
+    @property
+    def MODELS_DIR(self) -> Path:
+        return self.BASE_DIR / "knowledge" / "models"
+    
+    @property
+    def EMBEDDING_PATH(self) -> Path:
+        return self.MODELS_DIR / "embedding"
+    
+    @property
+    def RERANKER_PATH(self) -> Path:
+        return self.MODELS_DIR / "reranker"
+    
+    # معاملات الأداء - محسنة لرفع الثقة
+    MIN_RELEVANCE_SCORE: float = 0.30      # أقل للسماح بمصادر أكثر
+    TOP_K: int = 10                        # نتائج نهائية أكثر
+    INITIAL_K: int = 60                    # بحث أولي أكبر
     MAX_THREADS: int = 4
-    TIMEOUT_SEC: float = 10.0
+    TIMEOUT_SEC: float = 20.0
     MAX_CONCURRENT_REQUESTS: int = 10
     
-    # معاملات الـ Reranker لتطبيع النتائج
+    # معاملات الـ Reranker
     LOGIT_MIN: float = -10.0
     LOGIT_MAX: float = 10.0
-
+    
+    # وضع التصحيح - يعرض كل خطوة
+    DEBUG_MODE: bool = True
+    
     def __post_init__(self):
-        """بناء المسارات من الجذر مباشرة لضمان الدقة وتجنب خطأ 404 أو 429."""
+        """التحقق من وجود الموارد"""
+        if self.DEBUG_MODE:
+            logger.info(f"BASE_DIR: {self.BASE_DIR}")
+            logger.info(f"INDEX_PATH: {self.INDEX_PATH}")
+            logger.info(f"EMBEDDING_PATH: {self.EMBEDDING_PATH}")
+            logger.info(f"RERANKER_PATH: {self.RERANKER_PATH}")
         
-        # 1. تحديد موقع مجلد الـ Stage2
-        STAGE2_PATH = self.BASE_DIR / "src" / "uav_risk" / "stage2"
-        
-        # 2. تحديد مسار قاعدة البيانات الـ Vector DB
-        self.INDEX_PATH = STAGE2_PATH / "knowledge" / "vector_db"
-        
-        # 3. تحديد مسار الموديلات المحلية التي قمت بنقلها يدوياً
-        self.MODELS_DIR = STAGE2_PATH / "knowledge" / "models"
-        
-        # 4. ربط الموديلات بالمسارات الفعلية لضمان عمل local_files_only=True
-        self.EMBEDDING_MODEL = str(self.MODELS_DIR / "embedding")
-        self.RERANKER_MODEL = str(self.MODELS_DIR / "reranker")
-        
-        # 5. التحقق الوقائي من وجود الموارد قبل إقلاع السيرفر
         if not self.INDEX_PATH.exists():
-            logger.error(f"CRITICAL: RAG Index NOT found at {self.INDEX_PATH}")
-            
-        if not Path(self.EMBEDDING_MODEL).exists():
-            logger.warning(f"Offline Embedding model NOT found at {self.EMBEDDING_MODEL}. System may hang.")
-            
-        if not Path(self.RERANKER_MODEL).exists():
-            logger.warning(f"Offline Reranker model NOT found at {self.RERANKER_MODEL}. RAG reranking will fail.")
+            logger.warning(f"Index not found at {self.INDEX_PATH}")
+        if not self.EMBEDDING_PATH.exists():
+            logger.warning(f"Embedding model not found at {self.EMBEDDING_PATH}")
+        if not self.RERANKER_PATH.exists():
+            logger.warning(f"Reranker model not found at {self.RERANKER_PATH}")
 
-        logger.info("✅ RAG Configuration finalized for STRICT OFFLINE mode.")
+
+@dataclass
+class GroqSettings:
+    """إعدادات Groq API - محسنة"""
+    api_key: str = field(default_factory=lambda: os.environ.get("GROQ_API_KEY", ""))
+    model: str = "llama-3.3-70b-versatile"
+    temperature: float = 0.1
+    max_tokens: int = 8192          # زيادة كبيرة للإجابات الأطول
+    top_p: float = 0.95
+    frequency_penalty: float = 0.0
+    presence_penalty: float = 0.0
+
+
+# تحميل API key من ملف .env
+def load_api_key():
+    env_path = Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                if line.startswith("GROQ_API_KEY"):
+                    key = line.split("=", 1)[1].strip()
+                    os.environ["GROQ_API_KEY"] = key
+                    return key
+    return None
+
+
+load_api_key()
+
+if not os.environ.get("GROQ_API_KEY"):
+    logger.warning("GROQ_API_KEY not set. LLM features disabled.")

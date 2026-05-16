@@ -1,18 +1,4 @@
 .
-├── .gitattributes
-├── .github
-│   └── workflows
-│       ├── broken.yml
-│       └── main.yml
-├── .gitignore
-├── .pytest_cache
-│   ├── .gitignore
-│   ├── CACHEDIR.TAG
-│   ├── README.md
-│   └── v
-│       └── cache
-│           ├── lastfailed
-│           └── nodeids
 ├── Dockerfile
 ├── Makefile
 ├── README.md
@@ -110,10 +96,22 @@
 │   │   │   ├── __init__.py
 │   │   │   ├── agents
 │   │   │   │   ├── consensus_agent.py
-│   │   │   │   ├── legal_agent.py
+│   │   │   │   ├── legal_agent_old.py
 │   │   │   │   ├── physics_agent.py
 │   │   │   │   └── temporal_agent.py
 │   │   │   ├── api.py
+│   │   │   ├── build_index.py
+│   │   │   ├── chunks
+│   │   │   ├── docs
+│   │   │   │   ├── 14 CFR Part 107 (up to date as of 5-13-2026).pdf
+│   │   │   │   ├── AC_107-2A.pdf
+│   │   │   │   ├── D0593E_2024-07-10_06.26.37_EAR-for-Unmanned-Aircraft-Systems.pdf
+│   │   │   │   ├── SORA-v2.5-Annex-A-Release.JAR_doc_26-pdf.pdf
+│   │   │   │   ├── SORA-v2.5-Annex-B-Release.JAR_doc_27pdf.pdf
+│   │   │   │   ├── SORA-v2.5-Annex-E-Release.JAR_doc_28pdf.pdf
+│   │   │   │   ├── SORA-v2.5-Annex-F-Release.JAR_doc_29pdf.pdf
+│   │   │   │   ├── SORA-v2.5-Main-Body-Release-JAR_doc_25.pdf
+│   │   │   │   └── special_condition_sc_light-uas_medium_risk_01.pdf
 │   │   │   ├── evidence.py
 │   │   │   ├── graph
 │   │   │   │   └── safety_agent.py
@@ -121,45 +119,6 @@
 │   │   │   ├── knowledge
 │   │   │   │   ├── models
 │   │   │   │   │   ├── embedding
-│   │   │   │   │   │   ├── .cache
-│   │   │   │   │   │   │   └── huggingface
-│   │   │   │   │   │   │       ├── .gitignore
-│   │   │   │   │   │   │       ├── CACHEDIR.TAG
-│   │   │   │   │   │   │       └── download
-│   │   │   │   │   │   │           ├── .gitattributes.metadata
-│   │   │   │   │   │   │           ├── 1_Pooling
-│   │   │   │   │   │   │           │   └── config.json.metadata
-│   │   │   │   │   │   │           ├── README.md.metadata
-│   │   │   │   │   │   │           ├── config.json.metadata
-│   │   │   │   │   │   │           ├── config_sentence_transformers.json.metadata
-│   │   │   │   │   │   │           ├── data_config.json.metadata
-│   │   │   │   │   │   │           ├── model.safetensors.metadata
-│   │   │   │   │   │   │           ├── modules.json.metadata
-│   │   │   │   │   │   │           ├── onnx
-│   │   │   │   │   │   │           │   ├── model.onnx.metadata
-│   │   │   │   │   │   │           │   ├── model_O1.onnx.metadata
-│   │   │   │   │   │   │           │   ├── model_O2.onnx.metadata
-│   │   │   │   │   │   │           │   ├── model_O3.onnx.metadata
-│   │   │   │   │   │   │           │   ├── model_O4.onnx.metadata
-│   │   │   │   │   │   │           │   ├── model_qint8_arm64.onnx.metadata
-│   │   │   │   │   │   │           │   ├── model_qint8_avx512.onnx.metadata
-│   │   │   │   │   │   │           │   ├── model_qint8_avx512_vnni.onnx.metadata
-│   │   │   │   │   │   │           │   └── model_quint8_avx2.onnx.metadata
-│   │   │   │   │   │   │           ├── openvino
-│   │   │   │   │   │   │           │   ├── openvino_model.bin.metadata
-│   │   │   │   │   │   │           │   ├── openvino_model.xml.metadata
-│   │   │   │   │   │   │           │   ├── openvino_model_qint8_quantized.bin.metadata
-│   │   │   │   │   │   │           │   └── openvino_model_qint8_quantized.xml.metadata
-│   │   │   │   │   │   │           ├── pytorch_model.bin.metadata
-│   │   │   │   │   │   │           ├── rust_model.ot.metadata
-│   │   │   │   │   │   │           ├── sentence_bert_config.json.metadata
-│   │   │   │   │   │   │           ├── special_tokens_map.json.metadata
-│   │   │   │   │   │   │           ├── tf_model.h5.metadata
-│   │   │   │   │   │   │           ├── tokenizer.json.metadata
-│   │   │   │   │   │   │           ├── tokenizer_config.json.metadata
-│   │   │   │   │   │   │           ├── train_script.py.metadata
-│   │   │   │   │   │   │           └── vocab.txt.metadata
-│   │   │   │   │   │   ├── .gitattributes
 │   │   │   │   │   │   ├── 1_Pooling
 │   │   │   │   │   │   │   └── config.json
 │   │   │   │   │   │   ├── README.md
@@ -193,37 +152,6 @@
 │   │   │   │   │   │   ├── train_script.py
 │   │   │   │   │   │   └── vocab.txt
 │   │   │   │   │   └── reranker
-│   │   │   │   │       ├── .cache
-│   │   │   │   │       │   └── huggingface
-│   │   │   │   │       │       ├── .gitignore
-│   │   │   │   │       │       ├── CACHEDIR.TAG
-│   │   │   │   │       │       └── download
-│   │   │   │   │       │           ├── .gitattributes.metadata
-│   │   │   │   │       │           ├── README.md.metadata
-│   │   │   │   │       │           ├── config.json.metadata
-│   │   │   │   │       │           ├── flax_model.msgpack.metadata
-│   │   │   │   │       │           ├── model.safetensors.metadata
-│   │   │   │   │       │           ├── onnx
-│   │   │   │   │       │           │   ├── model.onnx.metadata
-│   │   │   │   │       │           │   ├── model_O1.onnx.metadata
-│   │   │   │   │       │           │   ├── model_O2.onnx.metadata
-│   │   │   │   │       │           │   ├── model_O3.onnx.metadata
-│   │   │   │   │       │           │   ├── model_O4.onnx.metadata
-│   │   │   │   │       │           │   ├── model_qint8_arm64.onnx.metadata
-│   │   │   │   │       │           │   ├── model_qint8_avx512.onnx.metadata
-│   │   │   │   │       │           │   ├── model_qint8_avx512_vnni.onnx.metadata
-│   │   │   │   │       │           │   └── model_quint8_avx2.onnx.metadata
-│   │   │   │   │       │           ├── openvino
-│   │   │   │   │       │           │   ├── openvino_model.bin.metadata
-│   │   │   │   │       │           │   ├── openvino_model.xml.metadata
-│   │   │   │   │       │           │   ├── openvino_model_qint8_quantized.bin.metadata
-│   │   │   │   │       │           │   └── openvino_model_qint8_quantized.xml.metadata
-│   │   │   │   │       │           ├── pytorch_model.bin.metadata
-│   │   │   │   │       │           ├── special_tokens_map.json.metadata
-│   │   │   │   │       │           ├── tokenizer.json.metadata
-│   │   │   │   │       │           ├── tokenizer_config.json.metadata
-│   │   │   │   │       │           └── vocab.txt.metadata
-│   │   │   │   │       ├── .gitattributes
 │   │   │   │   │       ├── README.md
 │   │   │   │   │       ├── config.json
 │   │   │   │   │       ├── flax_model.msgpack
@@ -248,25 +176,38 @@
 │   │   │   │   │       ├── tokenizer.json
 │   │   │   │   │       ├── tokenizer_config.json
 │   │   │   │   │       └── vocab.txt
-│   │   │   │   └── vector_db
+│   │   │   │   ├── vector_db
+│   │   │   │   │   ├── index.faiss
+│   │   │   │   │   └── index.pkl
+│   │   │   │   └── vector_db_backup_20260512_005519
 │   │   │   │       ├── index.faiss
 │   │   │   │       └── index.pkl
 │   │   │   ├── llm
 │   │   │   │   ├── groq_client.py
 │   │   │   │   └── report_writer.py
+│   │   │   ├── markdown
 │   │   │   ├── pipeline.py
 │   │   │   ├── policies
 │   │   │   │   ├── config.py
 │   │   │   │   └── deterministic_core.py
+│   │   │   ├── qdrant_data
 │   │   │   ├── rag
+│   │   │   │   ├── __init__.py
 │   │   │   │   ├── config.py
+│   │   │   │   ├── conversational_memory.py
+│   │   │   │   ├── enhanced_legal_agent.py
+│   │   │   │   ├── enhanced_retriever.py
 │   │   │   │   ├── force_download.py
+│   │   │   │   ├── groq_llm.py
+│   │   │   │   ├── paths.py
+│   │   │   │   ├── prompts.py
 │   │   │   │   └── rag_core.py
 │   │   │   ├── report
 │   │   │   │   ├── prompts.py
 │   │   │   │   ├── templates.py
 │   │   │   │   └── verifier.py
 │   │   │   ├── schemas.py
+│   │   │   ├── test_rag.py
 │   │   │   └── tools
 │   │   │       └── toolbox.py
 │   │   └── utils
@@ -285,8 +226,9 @@
 │   ├── test_feature_registry.py
 │   ├── test_infer_drift.py
 │   ├── test_loader.py
-│   └── test_pipeline_mock.py
+│   ├── test_pipeline_mock.py
+│   └── test_rag.py
 └── ui
     └── app.py
 
-67 directories, 223 files
+56 directories, 176 files

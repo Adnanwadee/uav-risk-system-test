@@ -39,8 +39,112 @@ from typing import Dict, Any, Optional, Union
 
 # Type alias for feature definition
 FeatureDefinition = Dict[str, Any]
+import json
+import os
+# ============================================================
+# SAFE VALUES REGISTRY (No Guesswork - Aviation & Physics Based)
+# ============================================================
 
+SAFE_VALUES_REGISTRY = {
+    # 1. Basic UAV Features (Standard 5kg Quadcopter Baseline)
+    "uav_mass_kg": 5.0,                  # وزن متوسط آمن للطائرات التجارية
+    "uav_battery_wh": 99.0,              # الحد الأقصى للنقل الجوي المدني UN 38.3
+    "uav_fuel_l": 0.0,                   # افتراض طاقة كهربائية (الأكثر أماناً)
+    "uav_energy_source_battery": 1.0,    # True
+    "uav_energy_source_fuel": 0.0,       # False
+    "uav_energy_source_hybrid": 0.0,     # False
+    "uav_max_speed_mps": 10.0,           # سرعة آمنة (حوالي 36 كم/ساعة)
+    "uav_max_tilt_deg": 20.0,            # زاوية ميل مستقرة لا تسبب انهيار الرفع
+    "uav_reserve_fraction": 0.25,        # 25% احتياطي طاقة (توصية FAA)
+    "uav_payload_mass_kg": 0.0,          # رحلة بدون حمولة إضافية (أكثر أماناً)
+    "uav_payload_drag_coeff": 0.0,       # لا يوجد حمولة = لا يوجد مقاومة هواء إضافية
+    "uav_rotorcraft_rotor_count": 4.0,   # Quadcopter هو المعيار الأكثر استقراراً
+    "uav_rotorcraft_disk_area_m2": 0.5,  # مساحة قرص قياسية لطائرة بوزن 5 كجم
+    "uav_battery_model_hover_power_w": 300.0, # استهلاك طاقة قياسي للتحليق
+    "uav_battery_model_k_drag": 0.05,    # معامل سحب هوائي منخفض لطائرة انسيابية
+    "uav_battery_model_k_manoeuvre": 0.1,# استهلاك مناورة هادئة
+    "uav_rotorcraft_max_climb_mps": 3.0, # معدل صعود هادئ ومستقر
 
+    # 2. Aerodynamic Features (If Fixed-Wing is assumed, though rotorcraft is default)
+    "uav_aero_wing_area_m2": 1.0,
+    "uav_aero_aspect_ratio": 10.0,       # نسبة باعية قياسية (كفاءة جيدة)
+    "uav_aero_cl_max": 1.2,              # معامل رفع قياسي قبل الانهيار (Stall)
+    "uav_aero_cd0": 0.02,                # سحب طفيلي (Parasitic drag) قياسي
+    "uav_aero_prop_efficiency": 0.75,    # كفاءة مروحة 75% (واقعية جداً)
+    "uav_aero_stall_speed_mps": 5.0,
+    "uav_rotorcraft_hover_ceiling_m": 2000.0, # سقف تحليق آمن
+
+    # 3. Environmental & Weather (The "Perfect Day" Scenario)
+    "environment_weather_wind_mps": 0.0, # سكون الرياح
+    "environment_weather_wind_dir_deg": 0.0,
+    "environment_weather_gust_mps": 0.0, # لا يوجد هبات رياح
+    "environment_weather_phenomena_count": 0.0, # طقس صافٍ
+    "environment_gnss_jam_dbm": -125.0,  # إشارة GPS طبيعية ومثالية
+    "environment_gnss_multipath": 0.0,   # لا يوجد انعكاس للإشارات
+    "environment_em_interference": 0.0,  # لا تداخل كهرومغناطيسي
+    "environment_wind_profile_count": 0.0,
+    "environment_wind_profile_sample_alt_m": 50.0,
+    "environment_wind_profile_sample_wind_mps": 0.0,
+    "environment_wind_profile_sample_dir_deg": 0.0,
+    "environment_thermal_plumes_count": 0.0, # لا تيارات حرارية صاعدة
+    "environment_thermal_plumes_sample_radius_m": 10.0,
+    "environment_thermal_plumes_sample_w_up_mps": 0.0,
+
+    # 4. Operational & Mission (Standard Simple VLOS Flight)
+    "mission_pattern_custom": 1.0,       # مسار مخصص واضح
+    "mission_pattern_grid": 0.0,
+    "mission_pattern_orbit": 0.0,
+    "mission_pattern_spiral": 0.0,
+    "controls_mode_continuous": 1.0,     # تحكم مستمر سلس
+    "controls_mode_discrete": 0.0,
+    "controls_actions_first_fwd": 1.0,
+    "controls_actions_first_hold": 0.0,
+    "controls_actions_first_throttle": 0.0,
+    "mission_waypoints_count": 2.0,      # رحلة بسيطة (نقطتين: إقلاع وهبوط)
+    "mission_waypoints_x_mean": 0.0,
+    "mission_waypoints_x_range": 50.0,   # مسافة قريبة جداً (50 متر)
+    "mission_time_budget_s": 600.0,      # 10 دقائق (مدة قصيرة وآمنة)
+    "mission_runway_required": 0.0,      # إقلاع عمودي (VTOL)
+    "mission_loiter_radius_m": 30.0,
+    "mission_transition_profile_vtol_to_ff_t_s": 3.0,
+    "mission_transition_profile_ff_to_vtol_t_s": 3.0,
+    "traffic_count": 0.0,                # لا طائرات أخرى
+    "moving_obstacles_count": 0.0,       # لا عوائق متحركة
+
+    # 5. Airspace & Safety (Clear & Legal Airspace)
+    "airspace_altitude_agl_min_m": 10.0, # أعلى من الأشخاص والأشجار
+    "airspace_altitude_agl_max_m": 50.0, # أقل بكثير من الحد القانوني 122م
+    "airspace_no_fly_zones_count": 0.0,  # بعيد عن المطارات والمناطق المحظورة
+    "airspace_no_fly_zones_sample_radius_m": 0.0,
+    "airspace_no_fly_zones_dynamic_count": 0.0,
+    "airspace_no_fly_zones_dynamic_sample_radius_m": 0.0,
+    "airspace_runway_threshold_count": 0.0,
+    "airspace_runway_length_m": 0.0,
+    "airspace__geofence__sample__points_count": 4.0, # مربع حماية قياسي
+    "daa_sep_threshold_m": 100.0,        # مسافة أمان ممتازة (100 متر)
+
+    # 6. Faults & Communications (Perfect Health)
+    "faults_count": 0.0,                 # صفر أعطال
+    "faults_sample_duration_s": 0.0,
+    "faults_sample_severity": 1.0,       # أقل درجة خطورة
+    "comms_uplink_ok": 1.0,              # اتصال الطيار بالطائرة ممتاز
+    "comms_downlink_ok": 1.0,            # إرسال الفيديو والبيانات ممتاز
+    "comms_loss_windows_count": 0.0,     # لا يوجد أي انقطاع
+    "comms_rssi_dbm_min": -50.0,         # قوة إشارة ممتازة (Excellent)
+
+    # 7. Swarm Features (Single Drone Assumption)
+    "swarm_enabled": 0.0,                # طائرة مفردة (تلغي مخاطر التصادم بين السرب)
+    "swarm_size": 2.0,                   # إذا تم تفعيله بالخطأ، نفترض أصغر سرب ممكن
+    "swarm_roles_count": 1.0,
+    "swarm_inter_uav_sep_min_m": 10.0,   # تباعد آمن بين الدرونز
+    "swarm_roles_first_leader": 1.0,
+    "swarm_roles_first_scout": 0.0,
+    "swarm_roles_first_relay": 0.0,
+    "swarm_roles_first_single": 0.0,
+    "swarm_roles_first_solo": 0.0,
+    "sim_duration_steps": 100.0,
+    "sim_policy_frequency": 10.0,
+}
 # ============================================================
 # SECTION 1: Basic UAV Features (17 features)
 # ============================================================
@@ -923,6 +1027,41 @@ SWARM_FEATURES: Dict[str, FeatureDefinition] = {
         "critical_high": None,
         "source": "OneHot from preprocessing pipeline"
     },
+    "swarm_roles_first_relay": {
+        "name": "swarm_roles_first_relay",
+        "unit": "boolean",
+        "description": "First UAV role: relay",
+        "safe_min": None, "safe_max": None, "critical_low": None, "critical_high": None,
+        "source": "OneHot from preprocessing pipeline"
+    },
+    "swarm_roles_first_single": {
+        "name": "swarm_roles_first_single",
+        "unit": "boolean",
+        "description": "First UAV role: single",
+        "safe_min": None, "safe_max": None, "critical_low": None, "critical_high": None,
+        "source": "OneHot from preprocessing pipeline"
+    },
+    "swarm_roles_first_solo": {
+        "name": "swarm_roles_first_solo",
+        "unit": "boolean",
+        "description": "First UAV role: solo",
+        "safe_min": None, "safe_max": None, "critical_low": None, "critical_high": None,
+        "source": "OneHot from preprocessing pipeline"
+    },
+    "sim_duration_steps": {
+        "name": "sim_duration_steps",
+        "unit": "count",
+        "description": "Simulation duration in steps",
+        "safe_min": 0, "safe_max": None, "critical_low": None, "critical_high": None,
+        "source": "Simulation parameters"
+    },
+    "sim_policy_frequency": {
+        "name": "sim_policy_frequency",
+        "unit": "Hz",
+        "description": "Simulation policy frequency",
+        "safe_min": 0, "safe_max": None, "critical_low": None, "critical_high": None,
+        "source": "Simulation parameters"
+    },
 }
 
 # ============================================================
@@ -1278,6 +1417,124 @@ def get_feature_summary() -> Dict[str, int]:
         "missing_indicators": len(MISSING_INDICATOR_NAMES),
     }
 
+
+def get_all_feature_names() -> list[str]:
+    """
+    Returns a deterministic, sorted list of all 198 feature names.
+    Rigorously parses the specific LightGBM metadata JSON structure.
+    """
+    mapping_path = "/workspaces/uav-risk-system-test/artifacts/stage1_feature_mapping.json"
+    
+    if os.path.exists(mapping_path):
+        with open(mapping_path, 'r', encoding='utf-8') as f:
+            raw_mapping = json.load(f)
+            
+        # 1. إذا كان الملف هو الميتا-داتا الخاص بـ LightGBM (الهيكل الفعلي الذي رأيناه)
+        if isinstance(raw_mapping, dict) and "feature_names" in raw_mapping:
+            return raw_mapping["feature_names"]
+            
+        # 2. إذا كان JSON على شكل قائمة مباشرة
+        if isinstance(raw_mapping, list):
+            return raw_mapping
+            
+        # 3. إذا كان قاموساً تقليدياً (Fallback)
+        if isinstance(raw_mapping, dict):
+            first_key = next(iter(raw_mapping.keys()))
+            if str(first_key).isdigit(): # {"0": "feat1"}
+                sorted_features = sorted(raw_mapping.items(), key=lambda x: int(x[0]))
+                return [item[1] for item in sorted_features]
+            else: # {"feat1": 0}
+                sorted_features = sorted(raw_mapping.items(), key=lambda x: int(x[1]))
+                return [item[0] for item in sorted_features]
+                
+    # إذا لم يجد الملف يعود للطريقة التقليدية
+    all_defs = get_all_feature_definitions()
+    return sorted(list(all_defs.keys()))
+
+
+def get_core_features() -> list[str]:
+    """
+    Returns the list of the 40 core features critical for system operation.
+    """
+    all_defs = get_all_feature_definitions()
+    core_list = [name for name, defn in all_defs.items() if defn.get("is_core") is True]
+    
+    if not core_list:
+        explicit_cores = [
+            "uav_mass_kg", "uav_battery_wh", "uav_max_speed_mps", "uav_rotorcraft_rotor_count",
+            "environment_weather_wind_mps", "environment_weather_gust_mps", "environment_weather_phenomena_count",
+            "environment_gnss_jam_dbm", "environment_em_interference", "mission_waypoints_count",
+            "mission_time_budget_s", "mission_loiter_radius_m", "traffic_count", "moving_obstacles_count",
+            "airspace_altitude_agl_max_m", "airspace_altitude_agl_min_m", "airspace_no_fly_zones_count",
+            "airspace_runway_threshold_count", "comms_uplink_ok", "comms_downlink_ok", "comms_rssi_dbm_min",
+            "uav_energy_source_battery", "uav_energy_source_fuel", "uav_energy_source_hybrid",
+            "uav_aero_wing_area_m2", "uav_aero_aspect_ratio", "uav_aero_cl_max", "uav_aero_cd0",
+            "uav_aero_prop_efficiency", "uav_aero_stall_speed_mps", "environment_weather_wind_dir_deg",
+            "environment_gnss_multipath", "mission_pattern_custom", "controls_mode_continuous",
+            "mission_waypoints_x_range", "airspace_no_fly_zones_dynamic_count", "daa_sep_threshold_m",
+            "faults_count", "faults_sample_severity", "swarm_enabled"
+        ]
+        core_list = [name for name in all_defs.keys() if name in explicit_cores]
+    
+    return core_list[:40]
+
+
+def get_safe_value(feature_name: str) -> float:
+    """
+    Fetches the strict fallback safe value for a feature from SAFE_VALUES_REGISTRY.
+    Raises KeyError if the feature doesn't exist to prevent ungrounded logic.
+    """
+    all_defs = get_all_feature_definitions()
+    if feature_name not in all_defs:
+        raise KeyError(f"Feature '{feature_name}' is not recognized in system definitions.")
+        
+    # جلب القيمة من السجل الذي أضفته في البداية، وإذا لم توجد (مثل الميزات الإحصائية) فالحالة الآمنة الافتراضية هي 0.0
+    return SAFE_VALUES_REGISTRY.get(feature_name, 0.0)
+
+
+def is_critical_value(feature_name: str, value: float) -> bool:
+    """
+    Quickly checks if a validated physical value violates critical aviation/airworthiness limits.
+    """
+    defn = get_feature_definition(feature_name)
+    if not defn:
+        return False
+        
+    try:
+        num_value = float(value)
+    except (TypeError, ValueError):
+        return False
+        
+    if defn.get("critical_low") is not None and num_value < defn["critical_low"]:
+        return True
+    if defn.get("critical_high") is not None and num_value > defn["critical_high"]:
+        return True
+        
+    return False
+
+
+def get_features_by_category(category: str) -> list[str]:
+    """
+    Returns feature names belonging to a specific structural block.
+    Used by the router to populate the context pool for the ReAct Agent.
+    """
+    all_defs = get_all_feature_definitions()
+    # التحقق من الكلمات المفتاحية في اسم الميزة لتصنيفها ديناميكياً إذا لم تكن مصنفة
+    category_map = {
+        "aerodynamic": ["aero", "wing", "cl_max", "cd0", "stall"],
+        "environmental": ["environment", "weather", "wind", "gust", "gnss", "thermal"],
+        "battery": ["battery", "power", "fuel", "energy_source"],
+        "mission": ["mission", "waypoints", "traffic", "obstacles", "controls"],
+        "gps": ["gnss", "gps", "satellites", "hdop", "latitude", "longitude"],
+        "comms": ["comms", "rssi", "uplink", "downlink"],
+        "operator": ["operator", "license", "experience", "atc_clearance"]
+    }
+    
+    keywords = category_map.get(category.lower(), [])
+    if not keywords:
+        return []
+        
+    return [name for name in all_defs.keys() if any(kw in name for kw in keywords)]
 
 # ============================================================
 # Quick Test

@@ -1,3 +1,8 @@
+"""
+Aviation-Grade Structured Logging
+Ensures every log entry is tied to a specific request and flight ID for flawless auditing.
+"""
+
 from __future__ import annotations
 import contextvars
 import logging
@@ -5,34 +10,47 @@ from contextlib import contextmanager
 from typing import Any, Iterator
 import structlog
 
-# Context variable for request tracing across async boundaries
+# Context variables for precise tracing across async API calls
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="SYSTEM")
+flight_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("flight_id", default="SYSTEM_INIT")
 
 
-def inject_request_id(logger: Any, log_method: str, event_dict: dict) -> dict:
-    """Structlog processor that injects the current request id into the event dict."""
+def inject_tracing_vars(logger: Any, log_method: str, event_dict: dict) -> dict:
+    """Structlog processor that injects flight_id and request_id into every log."""
     try:
-        event_dict["request_id"] = request_id_var.get()
+        event_dict["req_id"] = request_id_var.get()
+        event_dict["flt_id"] = flight_id_var.get()
     except Exception:
-        event_dict["request_id"] = "SYSTEM"
+        event_dict["req_id"] = "UNKNOWN"
+        event_dict["flt_id"] = "UNKNOWN"
     return event_dict
 
 
-def setup_logging(log_level: str = "INFO") -> None:
-    """Configure standard library logging and structlog for JSON structured logs."""
+def setup_logging(log_level: str = "INFO", environment: str = "development") -> None:
+    """
+    Configure standard library logging and structlog.
+    Uses human-readable console logs in dev, and strict JSON in production.
+    """
     level = getattr(logging, log_level.upper(), logging.INFO)
     logging.basicConfig(level=level, format="%(message)s")
 
-    # ✅ FIX: `add_logger_name` relocated to `structlog.stdlib` in modern versions
-    from structlog.stdlib import add_logger_name
+    from structlog.stdlib import add_logger_name, add_log_level
+    from structlog.processors import TimeStamper, JSONRenderer
+    from structlog.dev import ConsoleRenderer
 
+    # المعالجات المشتركة
     processors = [
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.stdlib.add_log_level,
-        add_logger_name,  # Uses the correct stdlib-integrated processor
-        inject_request_id,
-        structlog.processors.JSONRenderer(),
+        TimeStamper(fmt="iso"),
+        add_log_level,
+        add_logger_name,
+        inject_tracing_vars,
     ]
+
+    # اختيار التنسيق بناءً على بيئة التشغيل
+    if environment == "production":
+        processors.append(JSONRenderer())
+    else:
+        processors.append(ConsoleRenderer(colors=True))
 
     structlog.configure(
         processors=processors,
@@ -49,12 +67,19 @@ def get_logger(name: str) -> structlog.BoundLogger:
 
 @contextmanager
 def set_request_id(req_id: str) -> Iterator[None]:
-    """Context manager to temporarily set the request id for the current context."""
+    """Context manager to temporarily set the request id."""
     token = request_id_var.set(req_id)
     try:
         yield
     finally:
-        try:
-            request_id_var.reset(token)
-        except Exception:
-            request_id_var.set("SYSTEM")
+        request_id_var.reset(token)
+
+
+@contextmanager
+def set_flight_id(flt_id: str) -> Iterator[None]:
+    """Context manager to temporarily set the flight id for tracking the drone's evaluation."""
+    token = flight_id_var.set(flt_id)
+    try:
+        yield
+    finally:
+        flight_id_var.reset(token)

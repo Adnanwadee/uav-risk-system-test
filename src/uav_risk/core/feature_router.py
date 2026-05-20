@@ -1,101 +1,142 @@
-from __future__ import annotations
+"""
+Feature Router (Gate 3 - Vectorization & Context Routing)
+Maps the validated 198-feature dictionary into a strictly ordered NumPy array for ML.
+Routes features into semantic categories for the ReAct Agent's context.
+"""
 
-import math
 import logging
-from typing import Any, Dict, List, Tuple
+import numpy as np
+from typing import Dict, Tuple, List, Any
 
-from .contracts import FlightInput
+# استدعاء الدوال المساعدة من الدستور
+from uav_risk.ml.feature_defs import get_safe_value, get_features_by_category
 
 logger = logging.getLogger(__name__)
 
-# Deterministic mapping from raw API fields to 198-feature vector indices.
-# Aligns with stage1_feature_mapping.json used during ML training.
-_RAW_TO_VECTOR_INDEX: Dict[str, int] = {
-    "speed": 0,
-    "altitude": 1,
-    "distance": 2,
-    "wind_speed": 3,
-    "visibility": 4,
-    "alt_dist_ratio": 5,
-    "tier_numeric": 6,
-}
-
-# Indices 7..197 are reserved for OneHot, Missing Indicators, Statistical & Derived features.
-_VECTOR_SIZE = 198
-
-
 class FeatureRouter:
-    """Deterministic router: FlightInput → 198-dim ML vector + Context Pool."""
+    """
+    Translates dictionary-based validated features into the exact mathematical 
+    vector expected by the LightGBM model using stage1_feature_mapping.json.
+    """
+    
+    def __init__(self, feature_defs: Dict[str, Any], feature_mapping: Any):
+        """
+        يستقبل تعريفات الميزات وملف الـ JSON الخاص بالترتيب (mapping).
+        """
+        self.feature_defs = feature_defs
+        self._index_map = {}
+        
+        # ==========================================
+        # 🧠 Precise JSON Parser based on actual artifact structure
+        # ==========================================
+        if isinstance(feature_mapping, dict) and "feature_names" in feature_mapping:
+            # هذا هو الهيكل الحقيقي للملف!
+            features_list = feature_mapping["feature_names"]
+            self._index_map = {str(name): idx for idx, name in enumerate(features_list)}
+            
+        elif isinstance(feature_mapping, list):
+            self._index_map = {str(name): idx for idx, name in enumerate(feature_mapping)}
+            
+        elif isinstance(feature_mapping, dict):
+            if len(feature_mapping) > 0:
+                first_key = next(iter(feature_mapping.keys()))
+                if str(first_key).isdigit():
+                    self._index_map = {str(v): int(k) for k, v in feature_mapping.items()}
+                else:
+                    self._index_map = {str(k): int(v) for k, v in feature_mapping.items()}
+        # ==========================================
+        
+        # 1. التحقق الصارم من العدد
+        if len(self._index_map) != 198:
+            raise ValueError(f"CRITICAL: Feature mapping mismatch. Expected 198, got {len(self._index_map)}")
+        
+        # 2. التحقق من سلامة الأرقام (من 0 إلى 197 بدون فجوات)
+        indices = list(self._index_map.values())
+        if min(indices) != 0 or max(indices) != 197 or len(set(indices)) != 198:
+            raise ValueError("CRITICAL: Feature mapping indices are corrupted! Must be strictly 0 to 197.")
+            
+        logger.info("FeatureRouter initialized successfully. Mapping perfectly aligns with 198 dimensions.")
+    def route_to_vector(self, validated_features: Dict[str, Any]) -> np.ndarray:
+        """
+        يحول القاموس النظيف إلى مصفوفة رياضية بالترتيب الصارم.
+        مصفح ضد أخطاء أنواع البيانات ومشاكل الفهارس.
+        """
+        # 1. إنشاء مصفوفة أصفار بحجم 198 ونوع float64
+        vector = np.zeros(198, dtype=np.float64)
+        
+        # 2. تعبئة المصفوفة بناءً على الـ mapping الصحيح
+        for name, index in self._index_map.items():
+            raw_value = validated_features.get(name)
+            
+            # شبكة أمان أخيرة (Paranoia Check) لا تنهار مع النصوص
+            try:
+                float_val = float(raw_value) if raw_value is not None else float('nan')
+            except (ValueError, TypeError):
+                float_val = float('nan') # إجبارها لتكون NaN ليتم اصطيادها في السطر التالي
+                
+            if np.isnan(float_val) or np.isinf(float_val):
+                safe_val = get_safe_value(name)
+                logger.warning(f"Router Paranoia Check: Invalid value '{raw_value}' for '{name}'. Forcing safe_value: {safe_val}")
+                float_val = float(safe_val)
+                
+            vector[index] = float_val
+            
+        # 3. الفحص النهائي الصارم جداً قبل التسليم للنموذج
+        if np.any(np.isnan(vector)) or np.any(np.isinf(vector)):
+            bad_indices = np.where(np.isnan(vector) | np.isinf(vector))[0]
+            bad_names = [name for name, idx in self._index_map.items() if idx in bad_indices]
+            raise RuntimeError(f"CRITICAL: route_to_vector produced NaN/Inf in features: {bad_names}")
+            
+        return vector
 
-    def __init__(self) -> None:
-        self._nan = math.nan
+    def route_to_context_pool(self, validated_features: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+        """
+        يصنف الميزات في فئات منطقية لتسهيل قراءتها وفحصها من قبل الوكيل (ReAct Agent).
+        """
+        categories = ["aerodynamic", "environmental", "battery", "mission", "gps", "comms", "operator"]
+        context_pool: Dict[str, Dict[str, float]] = {cat: {} for cat in categories}
+        context_pool["other"] = {} # شبكة أمان للميزات التي لم تُصنف
+        
+        routed_keys = set()
+        
+        # تصنيف الميزات الأساسية
+        for cat in categories:
+            cat_features = get_features_by_category(cat)
+            for feat in cat_features:
+                if feat in validated_features:
+                    try:
+                        context_pool[cat][feat] = float(validated_features[feat])
+                    except (ValueError, TypeError):
+                        context_pool[cat][feat] = float(get_safe_value(feat))
+                    routed_keys.add(feat)
+                    
+        # وضع الباقي في "other" لضمان عدم ضياع أي معلومة إحصائية أو مشتقة
+        for key, value in validated_features.items():
+            if key not in routed_keys:
+                try:
+                    context_pool["other"][key] = float(value)
+                except (ValueError, TypeError):
+                    context_pool["other"][key] = float(get_safe_value(key))
+                
+        return context_pool
 
-    def _safe_float(self, value: Any) -> float:
-        """Convert to float; explicitly reject bools and return NaN on failure."""
-        if value is None or isinstance(value, bool):
-            return self._nan
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return self._nan
-
-    def _extract_wind_speed(self, wind: Any) -> float:
-        """Extract scalar wind speed from float or dict representations."""
-        if wind is None:
-            return self._nan
-        if isinstance(wind, (int, float)):
-            return self._safe_float(wind)
-        if isinstance(wind, dict):
-            for key in ("speed", "wind_speed", "magnitude"):
-                if key in wind:
-                    return self._safe_float(wind[key])
-            if "u" in wind and "v" in wind:
-                u, v = self._safe_float(wind["u"]), self._safe_float(wind["v"])
-                if not math.isnan(u) and not math.isnan(v):
-                    return math.hypot(u, v)
-        return self._nan
-
-    def route_payload(self, payload: FlightInput) -> Tuple[List[float], Dict[str, Any]]:
-        """Route validated payload into ML vector and agent context pool."""
-        # 1. Extract raw values safely
-        speed = self._safe_float(payload.speed)
-        altitude = self._safe_float(payload.altitude)
-        distance = self._safe_float(payload.distance)
-        visibility = self._safe_float(payload.visibility)
-        wind_speed = self._extract_wind_speed(payload.wind)
-
-        alt_dist_ratio = (
-            altitude / distance
-            if not math.isnan(altitude) and not math.isnan(distance) and distance != 0
-            else self._nan
-        )
-
-        tier_numeric = float(payload.tier_level)
-
-        # 2. Build 198-dim vector (NaN-initialized)
-        ml_vector: List[float] = [self._nan] * _VECTOR_SIZE
-        raw_map = {
-            "speed": speed,
-            "altitude": altitude,
-            "distance": distance,
-            "wind_speed": wind_speed,
-            "visibility": visibility,
-            "alt_dist_ratio": alt_dist_ratio,
-            "tier_numeric": tier_numeric,
-        }
-        for feat_name, val in raw_map.items():
-            idx = _RAW_TO_VECTOR_INDEX.get(feat_name)
-            if idx is not None:
-                ml_vector[idx] = val
-
-        # 3. Context Pool for Agents / RAG / Reporting
-        context_pool: Dict[str, Any] = {
-            "flight_id": payload.flight_id,
-            "tier": payload.tier,
-            "tier_level": payload.tier_level,
-            "bounds_warnings": payload.validate_bounds(),
-            "missing_fields": [k for k, v in raw_map.items() if math.isnan(v)],
-            "original_wind": payload.wind,
-        }
-
-        return ml_vector, context_pool
+    def validate_vector(self, vector: np.ndarray) -> Tuple[bool, List[str]]:
+        """
+        يتأكد أن المصفوفة الجاهزة مثالية رياضياً لتدخل لنموذج الـ LightGBM.
+        """
+        issues = []
+        
+        if vector.shape != (198,):
+            issues.append(f"Invalid shape: expected (198,), got {vector.shape}")
+            
+        if np.any(np.isnan(vector)):
+            issues.append("Vector contains NaN (Not a Number) values")
+            
+        if np.any(np.isinf(vector)):
+            issues.append("Vector contains Inf (Infinite) values")
+            
+        if vector.dtype != np.float64:
+            issues.append(f"Invalid dtype: expected float64, got {vector.dtype}")
+            
+        is_valid = len(issues) == 0
+        return is_valid, issues

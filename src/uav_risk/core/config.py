@@ -1,42 +1,60 @@
+"""
+Centralized Configuration Module
+Manages environment variables, paths, and strict thresholds for the ACE System.
+"""
+
 from __future__ import annotations
 from functools import lru_cache
 from typing import Optional
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class SystemSettings(BaseSettings):
-    """Centralized system settings read from environment or a .env file.
-    All settings have sensible defaults and can be overridden via environment
-    variables or a `.env` file located at the project root.
+    """
+    Centralized system settings read from environment or a .env file.
     """
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_file_encoding="utf-8")
 
-    # Paths
-    UAV_ARTIFACTS_DIR: str = Field("./artifacts", description="Directory for artifacts")
-    UAV_KNOWLEDGE_DIR: str = Field("./knowledge", description="Directory for knowledge store")
-    UAV_REPORTS_DIR: str = Field("./data/reports", description="Directory for generated reports")
+    # ==========================================
+    # System & Environment
+    # ==========================================
+    ENVIRONMENT: str = Field("development", description="development or production")
+    LOG_LEVEL: str = Field("INFO", description="Standard logging level")
 
-    # Decision weights
-    DECISION_WEIGHT_ML: float = Field(0.15, description="Weight applied to ML decision")
-    DECISION_WEIGHT_AGENT: float = Field(0.55, description="Weight applied to agent decision")
-    DECISION_WEIGHT_COMPLIANCE: float = Field(0.30, description="Weight applied to compliance checks")
+    # ==========================================
+    # Paths (Aligned with actual project structure)
+    # ==========================================
+    UAV_ARTIFACTS_DIR: str = Field("artifacts", description="Directory for ML stage 1 artifacts")
+    UAV_KNOWLEDGE_DIR: str = Field("src/uav_risk/stage2/knowledge", description="Directory for RAG documents and vector DB")
+    UAV_REPORTS_DIR: str = Field("data/reports", description="Directory for generated final markdown reports")
 
-    # RAG configuration
-    RAG_MIN_CONFIDENCE: float = Field(0.55, description="Minimum confidence threshold for RAG results")
-    RAG_TOP_K: int = Field(5, description="Number of top retrievals to return")
-    RAG_USE_RERANKER: bool = Field(True, description="Whether to apply reranker to retrieved candidates")
+    # ==========================================
+    # ReAct Agent & LLM Config (Groq)
+    # ==========================================
+    GROQ_API_KEY: Optional[SecretStr] = Field(None, description="API Key for Groq Cloud")
+    AGENT_MODEL_NAME: str = Field("llama3-70b-8192", description="Primary model used by the ReAct Agent")
+    AGENT_REASONING_TIMEOUT_SEC: float = Field(30.0, description="Absolute timeout for agent to deliberate")
+    REPORT_MODEL_NAME: str = Field("mixtral-8x7b-32768", description="Model used for fast report generation")
 
-    # Timeouts (seconds)
-    ML_INFERENCE_TIMEOUT_SEC: float = Field(2.0, description="Timeout for ML inference in seconds")
-    AGENT_REASONING_TIMEOUT_SEC: float = Field(10.0, description="Timeout for agent reasoning in seconds")
+    # ==========================================
+    # RAG Engine Configuration
+    # ==========================================
+    RAG_MIN_CONFIDENCE: float = Field(0.55, description="Minimum confidence threshold for FAISS retrievals")
+    RAG_TOP_K: int = Field(5, description="Number of top document chunks to retrieve")
+    RAG_USE_RERANKER: bool = Field(True, description="Whether to apply cross-encoder reranking")
 
-    # Security signatures (optional)
-    ML_BUNDLE_SHA256: Optional[str] = Field(None, description="Optional SHA256 for ML bundle integrity")
-    FAISS_INDEX_SHA256: Optional[str] = Field(None, description="Optional SHA256 for FAISS index integrity")
+    # ==========================================
+    # ML Inference Config
+    # ==========================================
+    ML_INFERENCE_TIMEOUT_SEC: float = Field(2.0, description="Timeout for LightGBM model inference")
+    ML_BUNDLE_FILENAME: str = Field("stage1_production_bundle.pkl", description="Exact name of the ML bundle")
 
 
 @lru_cache()
 def get_settings() -> SystemSettings:
-    """Return a cached SystemSettings instance (singleton pattern)."""
+    """
+    Cached function to return system settings. 
+    Prevents reading the .env file multiple times.
+    """
     return SystemSettings()

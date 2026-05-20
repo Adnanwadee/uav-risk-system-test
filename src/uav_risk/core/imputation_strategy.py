@@ -1,112 +1,106 @@
-from __future__ import annotations
+"""
+Imputation Strategy Engine (Context-Aware Fallbacks)
+Responsible for determining the smartest and safest fallback value for missing features
+using physical derivations or the official Safe Values Registry.
+"""
 
-import math
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Dict, Tuple, Any
+
+# استدعاء دالة جلب القيمة الآمنة من الدستور
+from uav_risk.ml.feature_defs import get_safe_value
 
 logger = logging.getLogger(__name__)
 
-
 class ImputationStrategy:
-    """3-Layer deterministic imputation for 198-dim ML vectors.
-    Layer 1: Physics/Legal safe baselines
-    Layer 2: Statistical population averages
-    Layer 3: Derived computations (alt/dist, ratios)
-    All mutations are logged to context_pool["imputation_log"].
     """
+    The brain behind filling missing data. 
+    It looks at the context (available features) before falling back to static defaults.
+    """
+    
+    def __init__(self):
+        # يمكن تمرير أي إعدادات للمستقبل هنا (مثلاً: Strict Mode vs Lenient Mode)
+        pass
 
-    def __init__(self) -> None:
-        self._nan = math.nan
+    def get_imputed_value(
+        self, 
+        feature_name: str, 
+        available_features: Dict[str, float], 
+        raw_inputs: Dict[str, Any] = None
+    ) -> Tuple[float, str]:
+        """
+        يستقبل اسم الميزة الناقصة، ويحاول إيجاد قيمة لها بالاشتقاق.
+        إذا فشل الاشتقاق، يعود للقيمة الآمنة الصارمة.
+        
+        Returns:
+            Tuple[float, str]: (The imputed value, The reason/formula used)
+        """
+        raw = raw_inputs or {}
+        
+        # ==========================================
+        # 🧠 الذكاء الفيزيائي: محاولات الاشتقاق (Derivations)
+        # ==========================================
+        
+        # 1. اشتقاق طاقة البطارية (Wh)
+        if feature_name == "uav_battery_wh":
+            # نبحث في raw inputs أو available features
+            mah = raw.get("battery_capacity_mah") or raw.get("uav_battery_capacity_mah")
+            volts = raw.get("battery_voltage_v") or raw.get("uav_battery_voltage_v")
+            if mah is not None and volts is not None:
+                try:
+                    val = (float(mah) * float(volts)) / 1000.0
+                    return val, f"Derived from capacity ({mah}mAh) and voltage ({volts}V)"
+                except (ValueError, TypeError):
+                    pass
 
-    @staticmethod
-    def _is_nan(value: Any) -> bool:
+        # 2. اشتقاق حمولة الجناح / القرص (Disk/Wing Loading)
+        elif feature_name == "feat_disk_loading":
+            mass = available_features.get("uav_mass_kg")
+            wing_area = available_features.get("uav_aero_wing_area_m2")
+            if mass and wing_area and wing_area > 0:
+                val = (mass * 9.81) / wing_area
+                return val, f"Derived physics: (mass {mass}kg * 9.81) / area {wing_area}m²"
+
+        # 3. اشتقاق الباعية (Aspect Ratio)
+        elif feature_name == "uav_aero_aspect_ratio":
+            wingspan = raw.get("wingspan_m") or raw.get("uav_wingspan_m")
+            wing_area = available_features.get("uav_aero_wing_area_m2")
+            if wingspan and wing_area and wing_area > 0:
+                try:
+                    val = (float(wingspan) ** 2) / wing_area
+                    return val, f"Derived physics: (wingspan {wingspan}m)² / area {wing_area}m²"
+                except (ValueError, TypeError):
+                    pass
+
+        # 4. [إضافة إبداعية] اشتقاق هبات الرياح (Gust Estimation)
+        elif feature_name == "environment_weather_gust_mps":
+            wind = available_features.get("environment_weather_wind_mps")
+            if wind is not None and wind > 0:
+                # في الطيران، عادة ما تُقدر الهبات بزيادة 40% عن الرياح المستمرة
+                val = wind * 1.4
+                return val, f"Estimated aviation gust factor (wind {wind}m/s * 1.4)"
+
+        # 5. [إضافة إبداعية] اشتقاق مساحة القرص المروحي لطائرات الدرون
+        elif feature_name == "uav_rotorcraft_disk_area_m2":
+            rotors = available_features.get("uav_rotorcraft_rotor_count")
+            prop_dia = raw.get("propeller_diameter_m") or raw.get("uav_propeller_diameter_m")
+            if rotors and prop_dia:
+                try:
+                    radius = float(prop_dia) / 2.0
+                    val = float(rotors) * 3.14159 * (radius ** 2)
+                    return val, f"Calculated disk area from {rotors} rotors and {prop_dia}m dia"
+                except (ValueError, TypeError):
+                    pass
+
+        # ==========================================
+        # 🛡️ شبكة الأمان: القيمة الافتراضية الصارمة (Fallback)
+        # ==========================================
+        
+        # إذا لم تتطابق أي قاعدة اشتقاق، نلجأ للدستور
         try:
-            return isinstance(value, float) and math.isnan(value)
-        except Exception:
-            return False
-
-    def apply_imputation(
-        self, ml_vector: List[float], context_pool: Dict[str, Any]
-    ) -> Tuple[List[float], Dict[str, Any]]:
-        if not isinstance(ml_vector, list):
-            raise TypeError("ml_vector must be a list of floats")
-        if not isinstance(context_pool, dict):
-            raise TypeError("context_pool must be a dict")
-
-        log: List[Dict[str, Any]] = []
-        existing_log = context_pool.get("imputation_log", [])
-        if isinstance(existing_log, list):
-            log.extend(existing_log)
-
-        # Layer 1: Physics/Legal Safe Defaults
-        physics_safe = {
-            1: 120.0,   # altitude (m AGL baseline)
-            3: 5000.0,  # visibility (safe baseline assumption)
-        }
-
-        # Layer 2: Statistical Baselines
-        stat_baseline = {
-            0: 12.0,    # speed
-            2: 1000.0,  # distance
-            4: 10.0,    # wind speed
-            6: 3.0,     # tier numeric default
-        }
-
-        for idx in range(len(ml_vector)):
-            if not self._is_nan(ml_vector[idx]):
-                continue
-
-            imputed_val: float
-            layer: str
-            reason: str
-
-            if idx in physics_safe:
-                imputed_val = physics_safe[idx]
-                layer = "physics_safe_baseline"
-                reason = f"Missing index {idx} assumed physics/legal safe default"
-            elif idx in stat_baseline:
-                imputed_val = stat_baseline[idx]
-                layer = "statistical_baseline"
-                reason = f"Missing index {idx} imputed with population baseline"
-            else:
-                imputed_val = 0.0
-                layer = "fallback_zero"
-                reason = f"Missing index {idx} defaulted to zero (non-critical)"
-
-            ml_vector[idx] = imputed_val
-            log.append({
-                "feature_index": idx,
-                "original": "NaN",
-                "imputed": imputed_val,
-                "layer": layer,
-                "reason": reason,
-            })
-
-        # Layer 3: Derivations
-        self._derive_features(ml_vector, log)
-
-        context_pool["imputation_log"] = log
-        return ml_vector, context_pool
-
-    def _derive_features(self, vec: List[float], log: List[Dict[str, Any]]) -> None:
-        """Compute derived features when primary components are available."""
-        if len(vec) > 5 and self._is_nan(vec[5]):
-            alt, dist = vec[1], vec[2]
-            if not self._is_nan(alt) and not self._is_nan(dist) and dist != 0:
-                vec[5] = alt / dist
-                log.append({
-                    "feature_index": 5,
-                    "original": "NaN",
-                    "imputed": vec[5],
-                    "layer": "derivation",
-                    "reason": "Derived alt/dist ratio from imputed altitude & distance",
-                })
-            else:
-                vec[5] = 0.0
-                log.append({
-                    "feature_index": 5,
-                    "original": "NaN",
-                    "imputed": 0.0,
-                    "layer": "derivation_fallback",
-                    "reason": "Could not derive ratio; applied zero fallback",
-                })
+            fallback_val = get_safe_value(feature_name)
+            return fallback_val, "Used static safe value from registry."
+        except KeyError:
+            # حالة طوارئ قصوى: الميزة غير موجودة في الدستور
+            logger.error(f"Critical: Feature {feature_name} has no safe value defined!")
+            return 0.0, "UNKNOWN FEATURE - Forced to 0.0 fallback."

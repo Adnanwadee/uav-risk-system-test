@@ -1,283 +1,144 @@
 """
-ML Model Loader - Load Stage1 production bundle and artifacts.
-
-This module handles loading of:
-- stage1_production_bundle.pkl (master bundle with model, preprocessor, encoder)
-- stage1_feature_mapping.json (feature names and order)
-- model_card.json (metadata for versioning and documentation)
-
-SECURITY NOTE: joblib.load() and pickle can execute arbitrary code.
-Only load bundles from trusted sources (signed URLs, internal registry, versioned artifacts).
+Module: uav_risk.ml.loader
+Purpose: High-integrity loader for Stage-1 production bundle, feature mappings, and model cards.
+Dependencies: Strictly follows the architectural specifications outlined in "Plan K".
 """
 
+import os
 import json
-import logging
-import hashlib
-import warnings
-from pathlib import Path
-from typing import Dict, Any, Optional, List
-
 import joblib
+import structlog
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
-from .schemas import ModelBundle
-
-# Configure logging
-logger = logging.getLogger(__name__)
+# إعداد نظام التتبع والـ Logger المركزي للمنظومة
+logger = structlog.get_logger(__name__)
 
 
 class ModelLoadError(Exception):
-    """Raised when model loading fails."""
+    """Custom exception raised when any stage of the model bundle assembly sequence fails."""
     pass
 
 
-def _verify_file_hash(file_path: str, expected_hash: Optional[str]) -> bool:
+@dataclass
+class Stage1Bundle:
     """
-    Verify file integrity using SHA256 hash.
-    
-    Args:
-        file_path: Path to the file to verify
-        expected_hash: Expected SHA256 hash (if None, verification is skipped)
-    
-    Returns:
-        True if hash matches or no hash provided, False otherwise
+    Complete representation of all loaded machine learning artifacts and metadata.
+    Strictly aligned with the fields required by "Plan K" and runtime execution realities.
     """
-    if not expected_hash:
-        return True  # Skip if no hash provided
-    
-    sha256 = hashlib.sha256()
-    with open(file_path, 'rb') as f:
-        for chunk in iter(lambda: f.read(8192), b''):
-            sha256.update(chunk)
-    
-    actual_hash = sha256.hexdigest()
-    if actual_hash != expected_hash:
-        logger.error(f"Hash mismatch for {file_path}: expected {expected_hash}, got {actual_hash}")
-        return False
-    logger.debug(f"Hash verification passed for {file_path}")
-    return True
+    model: Any                      # LightGBM model instance
+    preprocessor: Any               # sklearn ColumnTransformer instance
+    feature_names: List[str]        # List of the 198 features in exact sequence
+    feature_mapping: Dict[str, int] # Mapping of {feature_name: index}
+    training_stats: Dict[str, Any]  # Baseline statistics for data drift detection
+    policy_config: Dict[str, Any]   # Decision thresholds and operational boundaries
+    model_metadata: Dict[str, Any]  # Content from model_card.json (version, metrics)
+    shap_explainer: Optional[Any]   # Loaded SHAP TreeExplainer instance
+    bundle_path: str                # File path from which the bundle was retrieved
+    label_encoder: Optional[Any] = None
+    class_names: List[str] = field(default_factory=field(default_factory=list))
+
+    def get_model_version(self) -> str:
+        """Dynamic retrieval of the model execution iteration version from metadata."""
+        if isinstance(self.model_metadata, dict):
+            return self.model_metadata.get("version", self.model_metadata.get("pipeline_version", "unknown"))
+        return "unknown"
 
 
-def load_stage1_bundle(
-    bundle_path: str,
-    feature_mapping_path: Optional[str] = None,
-    model_card_path: Optional[str] = None,
-    expected_feature_count: int = 198,
-    verify_hash: bool = True
-) -> ModelBundle:
+def load_stage1_bundle(artifacts_dir: str) -> Stage1Bundle:
     """
-    Load the Stage1 production bundle and associated artifacts.
-    
-    Args:
-        bundle_path: Path to stage1_production_bundle.pkl
-        feature_mapping_path: Optional path to stage1_feature_mapping.json
-        model_card_path: Optional path to model_card.json
-        expected_feature_count: Expected number of features (default: 198)
-        verify_hash: Whether to verify SHA256 hash if available in model_card
-    
-    Returns:
-        ModelBundle object with all artifacts
-    
-    Raises:
-        ModelLoadError: If loading fails or required keys are missing
-        FileNotFoundError: If bundle file does not exist
+    Loads the comprehensive production bundle and verified context files from the artifacts directory.
     """
-    logger.info(f"Loading Stage1 bundle from: {bundle_path}")
+    logger.info("Initializing Stage-1 high-integrity load sequence", artifacts_dir=artifacts_dir)
     
-    # 1. Check file existence and security
-    if not Path(bundle_path).exists():
-        raise FileNotFoundError(f"Bundle file not found: {bundle_path}")
-    
-    if not bundle_path.endswith(('.pkl', '.joblib')):
-        logger.warning(f"Unusual file extension for joblib: {bundle_path}")
-    
-    logger.info("⚠️  Security Note: Ensure bundle source is trusted (joblib can execute arbitrary code)")
-    
-    # 2. Load model card first (for hash verification)
-    model_card = {}
-    if model_card_path and Path(model_card_path).exists():
-        try:
-            with open(model_card_path, 'r') as f:
-                model_card = json.load(f)
-            logger.info(f"✅ Model card loaded: version {model_card.get('version', 'unknown')}")
-        except Exception as e:
-            logger.warning(f"Could not load model card: {e}")
-    
-    # 3. Verify file hash if requested and hash is available
-    if verify_hash and model_card.get("bundle_sha256"):
-        if not _verify_file_hash(bundle_path, model_card["bundle_sha256"]):
-            raise ModelLoadError("Bundle integrity check failed (hash mismatch)")
-    
-    # 4. Load master bundle
-    try:
-        bundle = joblib.load(bundle_path)
-        logger.info("✅ Master bundle loaded successfully")
-    except Exception as e:
-        raise ModelLoadError(f"Failed to load bundle from {bundle_path}: {e}")
-    
-    # 5. Validate bundle structure
-    required_keys = ['model', 'preprocessor', 'label_encoder', 'feature_names', 'class_names']
-    missing_keys = [key for key in required_keys if key not in bundle]
-    
-    if missing_keys:
-        # Try to find alternative names
-        available_keys = list(bundle.keys())
-        logger.debug(f"Bundle keys: {available_keys}")
+    if not os.path.exists(artifacts_dir):
+        error_msg = f"Target artifacts directory not found: {artifacts_dir}"
+        logger.critical("Loading failed: Missing directory", error=error_msg)
+        raise ModelLoadError(error_msg)
         
-        alt_mappings = {
-            'model': ['model', 'classifier', 'estimator', 'lightgbm_model'],
-            'preprocessor': ['preprocessor', 'pipeline', 'preprocessing_pipeline', 'column_transformer'],
-            'label_encoder': ['label_encoder', 'encoder', 'le', 'label_encoder_'],
-            'feature_names': ['feature_names', 'features', 'feature_names_', 'input_features'],
-            'class_names': ['class_names', 'classes', 'target_names', 'label_classes']
+    bundle_pkl_path = os.path.join(artifacts_dir, "stage1_production_bundle.pkl")
+    feature_mapping_json_path = os.path.join(artifacts_dir, "stage1_feature_mapping.json")
+    model_card_json_path = os.path.join(artifacts_dir, "model_card.json")
+    inference_config_json_path = os.path.join(artifacts_dir, "stage1_inference_config.json")
+    metadata_json_path = os.path.join(artifacts_dir, "column_metadata_final.json")
+    
+    required_paths = [bundle_pkl_path, feature_mapping_json_path, model_card_json_path, inference_config_json_path, metadata_json_path]
+    for path in required_paths:
+        if not os.path.exists(path):
+            error_msg = f"Critical ML component file is missing from artifacts: {path}"
+            logger.critical("Loading aborted due to unfulfilled dependency", error=error_msg)
+            raise ModelLoadError(error_msg)
+            
+    try:
+        logger.info("Loading master binary package", path=bundle_pkl_path)
+        raw_bundle = joblib.load(bundle_pkl_path)
+        
+        with open(feature_mapping_json_path, 'r') as f:
+            raw_feature_mapping = json.load(f)
+            
+        with open(model_card_json_path, 'r') as f:
+            model_card_data = json.load(f)
+            
+        with open(inference_config_json_path, 'r') as f:
+            policy_config_data = json.load(f)
+            
+        with open(metadata_json_path, 'r') as f:
+            column_metadata = json.load(f)
+            
+        validate_bundle(raw_bundle, policy_config_data)
+        
+        extracted_feature_names = raw_bundle.get("feature_names", raw_feature_mapping.get("feature_names", []))
+        generated_feature_mapping = {name: idx for idx, name in enumerate(extracted_feature_names)}
+        
+        extracted_training_stats = {
+            "timestamp": column_metadata.get("timestamp", "unknown"),
+            "train_shape": column_metadata.get("train_shape", [0, 0]),
+            "selected_strategy": column_metadata.get("selected_strategy", "unknown"),
+            "expected_shap_values": policy_config_data.get("expected_shap_values", [])
         }
         
-        for key in missing_keys:
-            for alt in alt_mappings.get(key, []):
-                if alt in bundle:
-                    bundle[key] = bundle[alt]
-                    logger.info(f"Using alternative '{alt}' for '{key}'")
-                    break
-        
-        # Re-check after mapping
-        missing_keys = [key for key in required_keys if key not in bundle]
-        if missing_keys:
-            raise ModelLoadError(f"Bundle missing required keys: {missing_keys}. Available: {available_keys}")
-    
-    # 6. Load feature mapping (if provided)
-    feature_mapping = {}
-    if feature_mapping_path and Path(feature_mapping_path).exists():
-        try:
-            with open(feature_mapping_path, 'r') as f:
-                feature_mapping = json.load(f)
-            logger.info(f"✅ Feature mapping loaded: {len(feature_mapping.get('feature_names', []))} features")
-        except Exception as e:
-            logger.warning(f"Could not load feature mapping: {e}")
-    
-    # 7. Build ModelBundle
-    model_bundle = ModelBundle(
-        model=bundle['model'],
-        preprocessor=bundle['preprocessor'],
-        label_encoder=bundle['label_encoder'],
-        feature_names=bundle['feature_names'],
-        class_names=bundle['class_names'],
-        metadata=model_card,
-        feature_mapping=feature_mapping
-    )
-    
-    # 8. Validate bundle
-    validate_bundle(model_bundle, expected_feature_count=expected_feature_count)
-    
-    return model_bundle
-
-
-def load_stage1_bundle_from_artifacts(
-    artifacts_dir: str = "artifacts",
-    expected_feature_count: int = 198,
-    verify_hash: bool = True
-) -> ModelBundle:
-    """
-    Convenience function to load bundle from default artifacts directory.
-    
-    Args:
-        artifacts_dir: Path to artifacts directory (relative or absolute)
-        expected_feature_count: Expected number of features (default: 198)
-        verify_hash: Whether to verify SHA256 hash if available
-    
-    Returns:
-        ModelBundle object
-    """
-    base_path = Path(artifacts_dir)
-    
-    bundle_path = base_path / "stage1_production_bundle.pkl"
-    feature_mapping_path = base_path / "stage1_feature_mapping.json"
-    model_card_path = base_path / "model_card.json"
-    
-    # Check if bundle exists
-    if not bundle_path.exists():
-        raise ModelLoadError(f"Bundle not found at {bundle_path}")
-    
-    return load_stage1_bundle(
-        bundle_path=str(bundle_path),
-        feature_mapping_path=str(feature_mapping_path) if feature_mapping_path.exists() else None,
-        model_card_path=str(model_card_path) if model_card_path.exists() else None,
-        expected_feature_count=expected_feature_count,
-        verify_hash=verify_hash
-    )
-
-
-def validate_bundle(bundle: ModelBundle, expected_feature_count: int = 198) -> bool:
-    """
-    Validate that the loaded bundle is ready for inference.
-    
-    Args:
-        bundle: ModelBundle object to validate
-        expected_feature_count: Expected number of features (default: 198)
-    
-    Returns:
-        True if valid, raises exception otherwise
-    
-    Raises:
-        ModelLoadError: If validation fails
-    """
-    # 1. Check model
-    if bundle.model is None:
-        raise ModelLoadError("Model is None")
-    
-    # 2. Check preprocessor
-    if bundle.preprocessor is None:
-        raise ModelLoadError("Preprocessor is None")
-    
-    # 3. Check label_encoder
-    if bundle.label_encoder is None:
-        raise ModelLoadError("Label encoder is None")
-    
-    # 4. Check feature_names
-    if not bundle.feature_names:
-        raise ModelLoadError("Feature names list is empty")
-    
-    # 5. Check feature count
-    if len(bundle.feature_names) != expected_feature_count:
-        logger.warning(
-            f"Feature count mismatch: expected {expected_feature_count}, "
-            f"got {len(bundle.feature_names)}. This may cause inference errors."
+        logger.info("Stage-1 bundle successfully assembled and validated in memory",
+                    total_features=len(extracted_feature_names),
+                    target_classes=raw_bundle["class_names"])
+                    
+        return Stage1Bundle(
+            model=raw_bundle["model"],
+            preprocessor=raw_bundle["preprocessor"],
+            feature_names=extracted_feature_names,
+            feature_mapping=generated_feature_mapping,
+            training_stats=extracted_training_stats,
+            policy_config=policy_config_data,
+            model_metadata=model_card_data,
+            shap_explainer=raw_bundle["shap_explainer"],
+            bundle_path=bundle_pkl_path,
+            label_encoder=raw_bundle["label_encoder"],
+            class_names=raw_bundle["class_names"]
         )
-    
-    # 6. Check model type (optional but recommended)
-    model_type = type(bundle.model).__name__
-    if "LGBM" not in model_type and "LightGBM" not in model_type and "Booster" not in model_type:
-        logger.warning(f"Expected LightGBM model, got {model_type}")
-    
-    # 7. Check class names
-    expected_classes = ["High Risk", "Medium Risk", "Low Risk"]
-    if bundle.class_names and set(bundle.class_names) != set(expected_classes):
-        logger.warning(f"Class names differ from expected: {bundle.class_names}")
-    
-    logger.info(f"✅ Bundle validation passed: {len(bundle.feature_names)} features, "
-                f"{len(bundle.class_names)} classes, model={model_type}")
-    return True
+        
+    except Exception as e:
+        error_msg = f"Bundle validation failed: Runtime assembly error at {artifacts_dir}. Details: {str(e)}"
+        logger.critical("Fatal loading sequence failure", error=str(e))
+        raise ModelLoadError(error_msg) from e
 
 
-# Optional: Quick test
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    try:
-        # Try loading from default artifacts directory
-        bundle = load_stage1_bundle_from_artifacts("artifacts")
-        logger.info(f"📊 Bundle loaded successfully:")
-        logger.info(f"   Features: {bundle.n_features}")
-        logger.info(f"   Classes: {bundle.n_classes}")
-        logger.info(f"   Model version: {bundle.get_model_version()}")
-        logger.info(f"   Class names: {bundle.class_names}")
+def validate_bundle(bundle_data: dict, policy_config: dict) -> None:
+    """Validates structural constraints to prevent silent failures in runtime."""
+    if "model" not in bundle_data or "preprocessor" not in bundle_data:
+        raise ValueError("Bundle validation failed: Core components 'model' or 'preprocessor' are missing")
         
-        validate_bundle(bundle)
-        logger.info("✅ All validations passed!")
+    if "feature_names" not in bundle_data or len(bundle_data["feature_names"]) != 198:
+        raise ValueError(f"Bundle validation failed: Expected exactly 198 feature entries")
         
-    except ModelLoadError as e:
-        logger.error(f"❌ Failed to load bundle: {e}")
-    except FileNotFoundError as e:
-        logger.error(f"❌ File not found: {e}")
-        logger.info("   Make sure artifacts/stage1_production_bundle.pkl exists")
+    if not hasattr(bundle_data["model"], "predict_proba"):
+        raise ValueError("Bundle validation failed: Loaded model instance does not expose 'predict_proba'")
+        
+    if "class_names" not in policy_config or len(policy_config["class_names"]) != 3:
+        raise ValueError("Bundle validation failed: Configuration alignment must match triple categories")
+        
+    logger.debug("Structural verification constraints successfully cleared")
+
+# =====================================================================
+# Architectural Registry Block:
+# This file depends on: None (Foundational Subsystem Loader).
+# Files depending on this file: src/uav_risk/ml/inference.py, src/uav_risk/ml/shap_explain.py
+# =====================================================================

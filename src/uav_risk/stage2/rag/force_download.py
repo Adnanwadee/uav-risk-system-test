@@ -1,43 +1,45 @@
 """
-ACE Model Force Downloader (V1.0 - Mirror & Structure Optimized)
-================================================================
-يقوم هذا السكربت بتحميل الموديلات من المرآة العالمية وحفظها محلياً 
-داخل مجلد الـ knowledge لضمان تشغيل النظام أوفلاين للأبد.
+Module: src/uav_risk/stage2/rag/force_download.py
+Author: Elite Technical Partner
+Description: Binds with RAGConfig paths to pull embedding and reranker weights offline.
 """
 
 import os
-from pathlib import Path
+import structlog
 from huggingface_hub import snapshot_download
+from uav_risk.stage2.rag.config import RAGConfig
 
-# بناء المسارات بناءً على الهيكلية التي أرفقتها
-BASE_DIR = Path(__file__).resolve().parents[3] # يرجع من rag إلى stage2
-MODELS_DIR = BASE_DIR / "src" / "uav_risk" / "stage2" / "knowledge" / "models"
+logger = structlog.get_logger()
+config = RAGConfig()
 
-EMBEDDING_DIR = MODELS_DIR / "embedding"
-RERANKER_DIR = MODELS_DIR / "reranker"
-
-# إنشاء المجلدات إذا لم تكن موجودة
-os.makedirs(EMBEDDING_DIR, exist_ok=True)
-os.makedirs(RERANKER_DIR, exist_ok=True)
-
-def download_with_retry(repo_id, local_dir):
-    print(f"🚀 Attempting to download {repo_id} to {local_dir}...")
+def download_with_retry(repo_id: str, local_dir: str):
+    logger.info("attempting_model_snapshot_download", repo_id=repo_id, destination=local_dir)
     try:
         snapshot_download(
             repo_id=repo_id,
             local_dir=str(local_dir),
-            endpoint="https://hf-mirror.com", # استخدام المرآة لتجاوز حظر الـ IP
-            local_files_only=False,
-            # استبدل YOUR_TOKEN بالتوكن الجديد الذي أنشأته (اختياري مع المرآة)
-            # token="YOUR_NEW_TOKEN" 
+            endpoint="https://hf-mirror.com",  # لتخطي حظر الـ IPs
+            local_files_only=False
         )
-        print(f"✅ Success: {repo_id} is now offline-ready.")
+        logger.info("model_download_success", repo_id=repo_id)
     except Exception as e:
-        print(f"❌ Failed to download {repo_id}: {e}")
+        logger.error("model_download_failed_critical", repo_id=repo_id, error=str(e))
+        raise e
 
 if __name__ == "__main__":
-    # 1. تحميل موديل الـ Embedding
-    download_with_retry("sentence-transformers/all-MiniLM-L6-v2", EMBEDDING_DIR)
+    # إنشاء المجلدات الرسمية المعتمدة في Config حياً
+    os.makedirs(config.EMBEDDING_PATH, exist_ok=True)
+    os.makedirs(config.RERANKER_PATH, exist_ok=True)
     
-    # 2. تحميل موديل الـ Reranker (المسبب الرئيسي للمشكلة)
-    download_with_retry("cross-encoder/ms-marco-MiniLM-L-6-v2", RERANKER_DIR)
+    # 1. جلب نموذج التضمين المحلي
+    download_with_retry("sentence-transformers/all-MiniLM-L6-v2", config.EMBEDDING_PATH)
+    
+    # 2. جلب مفسر إعادة الترتيب المحلي
+    download_with_retry("cross-encoder/ms-marco-MiniLM-L-6-v2", config.RERANKER_PATH)
+
+# =====================================================================
+# Stage 2 Architectural Dependency Comment Block:
+# Deployment bootstrap utility to seed local intelligence weights.
+# Dependencies: src/uav_risk/stage2/rag/config.py -> RAGConfig Paths
+# Dependent Files: None (Standalone Setup Script)
+# =====================================================================

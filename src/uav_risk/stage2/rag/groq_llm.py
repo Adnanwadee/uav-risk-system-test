@@ -1,49 +1,39 @@
 """
-Groq LLM Integration for UAV RAG System
-========================================
-دمج Groq API مع نظام RAG للحصول على استجابات سريعة وقوية
+Module: src/uav_risk/stage2/rag/groq_llm.py
+Author: Elite Technical Partner
+Description: Asynchronous API client wrapper for Groq LLM inference, optimized for aviation compliance.
 """
 
 import asyncio
-import logging
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
-
+from typing import Any, Dict, List, Optional
+import structlog
 from groq import AsyncGroq
 
-from .prompts import SYSTEM_PROMPT
+# الاستيراد المطلق للعقود والموجهات الموحدة بناءً على قواعد الاتساق
+from uav_risk.stage2.rag.config import GroqLLMConfig
+from uav_risk.stage2.rag.prompts import SYSTEM_PROMPT, QUERY_CLASSIFIER_PROMPT, HYDE_PROMPT
 
-logger = logging.getLogger("GroqLLM")
+logger = structlog.get_logger()
 
-@dataclass
-class GroqLLMConfig:
-    """إعدادات Groq API"""
-    api_key: str
-    model: str = "llama-3.3-70b-versatile"  # نماذج متاحة: llama-3.3-70b-versatile, mixtral-8x7b-32768, gemma2-9b-it
-    temperature: float = 0.1  # منخفض للدقة القانونية
-    max_tokens: int = 4096
-    top_p: float = 0.95
-    frequency_penalty: float = 0.0
-    presence_penalty: float = 0.0
 
 class GroqLLM:
-    """
-    واجهة Groq LLM للنظام
-    """
-    
+    """Production-grade asynchronous interface for Groq engine client operations."""
+
     def __init__(self, config: GroqLLMConfig):
         self.config = config
         self.client = AsyncGroq(api_key=config.api_key)
         self.system_prompt = SYSTEM_PROMPT
-    
+        logger.info("groq_llm_client_initialized", model=config.model, temperature=config.temperature)
+
     async def generate(self, prompt: str, include_system: bool = True) -> str:
-        """توليد رد من النموذج"""
+        """Generates a text completion from Groq API with defensive timeout handling."""
+        logger.debug("groq_inference_request_sent", prompt_len=len(prompt), include_system=include_system)
         
         messages = []
         if include_system:
             messages.append({"role": "system", "content": self.system_prompt})
         messages.append({"role": "user", "content": prompt})
-        
+
         try:
             response = await self.client.chat.completions.create(
                 model=self.config.model,
@@ -54,59 +44,56 @@ class GroqLLM:
                 frequency_penalty=self.config.frequency_penalty,
                 presence_penalty=self.config.presence_penalty
             )
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            logger.error(f"Groq API Error: {e}")
-            return f"خطأ في الاتصال بـ Groq API: {e}"
-    
+            output_text = response.choices[0].message.content
+            logger.debug("groq_inference_response_received", output_len=len(output_text))
+            return output_text
+        except Exception as exc:
+            logger.error("groq_api_call_failed_fallback_activated", error=str(exc))
+            return f"Error connecting to Groq API client pipeline: {str(exc)}"
+
     async def generate_with_context(self, query: str, context: str) -> str:
-        """توليد رد مع سياق قانوني"""
-        
-        prompt = f"""Based on the following legal context, answer the user's question.
+        """Assembles a high-density grounded context block to answer the compliance query."""
+        structured_prompt = (
+            f"Based on the following verified legal context, answer the user's aviation compliance question.\n\n"
+            f"LEGAL CONTEXT:\n{context}\n\n"
+            f"USER QUESTION: {query}\n\n"
+            f"Remember to strictly apply constraints, compare FAA/EASA if relevant, and remain entirely factual.\n"
+            f"ANSWER:"
+        )
+        return await self.generate(structured_prompt, include_system=True)
 
-LEGAL CONTEXT:
-{context}
-
-USER QUESTION: {query}
-
-Remember to:
-1. Cite specific sections
-2. Compare FAA and EASA if both appear
-3. Be precise and practical
-
-ANSWER:"""
+    async def classify_query(self, query: str) -> dict[str, Any]:
+        """Classifies the incoming operational request into discrete aviation categories."""
+        formatted_prompt = QUERY_CLASSIFIER_PROMPT.format(query=query)
+        response_text = await self.generate(formatted_prompt, include_system=False)
         
-        return await self.generate(prompt, include_system=True)
-    
-    async def classify_query(self, query: str) -> Dict[str, Any]:
-        """تصنيف نوع السؤال"""
-        
-        from .prompts import QUERY_CLASSIFIER_PROMPT
-        
-        prompt = QUERY_CLASSIFIER_PROMPT.format(query=query)
-        response = await self.generate(prompt, include_system=False)
-        
-        # تحليل الرد
+        # التنقيب البرمجي عن التصنيف ونسبة الثقة المستخرجة من الرد الاستدلالي
         category = "OTHER"
         confidence = 0.5
         
-        for line in response.split("\n"):
-            if line.startswith("Category:"):
-                category = line.replace("Category:", "").strip()
-            elif line.startswith("Confidence:"):
+        for line in response_text.split("\n"):
+            cleaned_line = line.strip()
+            if cleaned_line.startswith("Category:"):
+                category = cleaned_line.replace("Category:", "").strip()
+            elif cleaned_line.startswith("Confidence:"):
                 try:
-                    confidence = float(line.replace("Confidence:", "").strip())
-                except:
+                    confidence = float(cleaned_line.replace("Confidence:", "").strip())
+                except (ValueError, TypeError):
                     pass
-        
+                    
+        logger.info("query_classification_concluded", category=category, confidence=confidence)
         return {"category": category, "confidence": confidence}
-    
+
     async def generate_hypothetical_answer(self, query: str) -> str:
-        """توليد إجابة افتراضية لـ HyDE"""
-        
-        from .prompts import HYDE_PROMPT
-        
-        prompt = HYDE_PROMPT.format(query=query)
-        return await self.generate(prompt, include_system=False)
+        """Generates an idealized regulatory passage to feed the HyDE search module."""
+        formatted_prompt = HYDE_PROMPT.format(query=query)
+        return await self.generate(formatted_prompt, include_system=False)
+
+
+# =====================================================================
+# Stage 2 Architectural Dependency Comment Block:
+# Core LLM gateway driver interacting with external API clusters.
+# Dependencies: src/uav_risk/stage2/rag/config.py -> GroqLLMConfig
+#               src/uav_risk/stage2/rag/prompts.py -> Prompts Registries
+# Dependent Files: src/uav_risk/stage2/rag/enhanced_retriever.py, rag_core.py
+# =====================================================================

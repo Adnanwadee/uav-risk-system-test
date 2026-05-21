@@ -1,218 +1,164 @@
 """
-Enhanced Legal Agent for UAV RAG System (V3.0 - Fixed)
-======================================================
+Module: src/uav_risk/stage2/rag/enhanced_legal_agent.py
+Author: Elite Technical Partner
+Description: Refactored legal agent that processes strict RetrievedChunk objects, 
+             extracts accurate citations (FAA/SORA), and synthesizes validated compliance text.
 """
 
 import re
-import logging
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, field
-from enum import Enum
+from typing import List, Optional
+import structlog
 
-from .prompts import (
-    LEGAL_COMPARISON_PROMPT,
-    FINAL_ANSWER_TEMPLATE,
-    SYSTEM_PROMPT,
-)
-from .groq_llm import GroqLLM
-from .config import RAGConfig
+# الاستيراد المطلق للعقود لضمان التكاملية التامة ومنع تعارض الأنواع
+from uav_risk.stage2.rag.schemas import RetrievedChunk, LegalCitation, LegalAnswer
+from uav_risk.stage2.rag.groq_llm import GroqLLM
+from uav_risk.stage2.rag.config import RAGConfig
+from uav_risk.stage2.rag.prompts import LEGAL_COMPARISON_PROMPT, FINAL_ANSWER_TEMPLATE
 
-logger = logging.getLogger("EnhancedLegalAgent")
-
-
-class RegulationSource(Enum):
-    FAA = "FAA (US)"
-    EASA = "EASA (EU)"
-    UNKNOWN = "Unknown"
-
-
-@dataclass
-class LegalCitation:
-    """الاقتباس القانوني"""
-    text: str
-    source: RegulationSource
-    section_number: Optional[str] = None
-    
-    def __str__(self) -> str:
-        if self.section_number:
-            if self.source == RegulationSource.FAA:
-                return f"§ {self.section_number}"
-            elif self.source == RegulationSource.EASA:
-                return f"Article {self.section_number}"
-        return self.source.value
-
-
-@dataclass
-class LegalAnswer:
-    """الإجابة القانونية"""
-    answer: str
-    citations: List[LegalCitation]
-    confidence_score: float = 0.0
-    debug_info: Dict[str, Any] = field(default_factory=dict)
+logger = structlog.get_logger()
 
 
 class EnhancedLegalAgent:
-    """الوكيل القانوني المحسن"""
-    
+    """Aviation compliance intelligence core responsible for cross-referencing FAA and SORA documents."""
+
     def __init__(self, llm: GroqLLM, config: Optional[RAGConfig] = None):
         self.llm = llm
         self.config = config or RAGConfig()
         self.debug_mode = self.config.DEBUG_MODE
         
-        self.section_pattern = re.compile(r'§\s*([0-9\.]+)')
-        self.easa_article_pattern = re.compile(r'Article\s*([0-9]+)', re.IGNORECASE)
-        self.easa_point_pattern = re.compile(r'UAS\.([A-Z0-9\.]+)', re.IGNORECASE)
-    
+        # قوالب صيد نصوص المواد الفيدرالية وبنود SORA v2.5 الدولية بدقة
+        self.faa_pattern = re.compile(r'(§+|Part)\s*([0-9\.]+)', re.IGNORECASE)
+        self.sora_article_pattern = re.compile(r'(Article|Annex|UAS\.SPEC\.)\s*([A-Z0-9\._\-]+)', re.IGNORECASE)
+
     def _extract_section(self, text: str) -> Optional[str]:
-        """استخراج رقم المقطع"""
-        match = self.section_pattern.search(text)
-        if match:
-            return match.group(1)
-        match = self.easa_article_pattern.search(text)
-        if match:
-            return f"Article {match.group(1)}"
-        match = self.easa_point_pattern.search(text)
-        if match:
-            return match.group(1)
+        """Extracts formal specific clause numbers or article tags from standard regulatory phrasing."""
+        faa_match = self.faa_pattern.search(text)
+        if faa_match:
+            return f"§ {faa_match.group(2)}"
+            
+        sora_match = self.sora_article_pattern.search(text)
+        if sora_match:
+            return f"{sora_match.group(1)} {sora_match.group(2)}"
+            
         return None
-    
-    def extract_citations(self, text: str, source_name: str) -> List[LegalCitation]:
-        """استخراج الاقتباسات"""
-        citations = []
-        
-        if "FAA" in source_name or "107" in text:
-            source = RegulationSource.FAA
-        elif "EASA" in source_name or "Regulation (EU)" in text:
-            source = RegulationSource.EASA
-        else:
-            source = RegulationSource.UNKNOWN
-        
-        section = self._extract_section(text)
-        citations.append(LegalCitation(
-            text=text[:200],
-            source=source,
-            section_number=section
-        ))
-        
-        return citations
-    
+
+    def extract_legal_citation(self, chunk: RetrievedChunk) -> LegalCitation:
+        """Transforms a validated text chunk into a clean, unified LegalCitation structure."""
+        extracted_clause = self._extract_section(chunk.content)
+        source_label = chunk.source_file
+        if extracted_clause:
+            source_label = f"{chunk.source_file} ({extracted_clause})"
+            
+        return LegalCitation(
+            source_file=source_label,
+            page_number=chunk.page_number,
+            full_text=chunk.content.strip()
+        )
+
     async def compare_regulations(self, faa_context: str, easa_context: str, topic: str) -> str:
-        """مقارنة بين FAA و EASA"""
+        """Executes a dual-track comparative analysis prompting for FAA and SORA variations."""
         prompt = LEGAL_COMPARISON_PROMPT.format(
             topic=topic,
-            faa_context=faa_context[:3000],
-            easa_context=easa_context[:3000]
+            faa_context=faa_context[:3500],
+            easa_context=easa_context[:3500]
         )
         return await self.llm.generate(prompt, include_system=True)
-    
+
     async def analyze_direct(self, query: str, context: str) -> str:
-        """تحليل مباشر"""
-        prompt = f"""Answer based ONLY on this legal context:
-
-CONTEXT:
-{context[:4000]}
-
-QUESTION: {query}
-
-Cite specific sections. If not found, say so."""
+        """Generates a straightforward compliance evaluation against unified background facts."""
+        prompt = (
+            f"Answer the query based ONLY on the following extracted legal context:\n\n"
+            f"CONTEXT:\n{context[:4000]}\n\n"
+            f"QUESTION: {query}\n\n"
+            f"Cite specific subsections directly. If the context does not answer the question, state that clearly."
+        )
         return await self.llm.generate(prompt, include_system=True)
-    
-    def _deduplicate_citations(self, citations: List[LegalCitation]) -> List[LegalCitation]:
-        """إزالة الاقتباسات المكررة"""
-        seen = set()
-        unique = []
-        for cit in citations:
-            key = f"{cit.source.value}_{cit.section_number}"
-            if key not in seen:
-                seen.add(key)
-                unique.append(cit)
-        return unique
-    
-    async def build_final_answer(self, query: str, rag_results: List[Dict]) -> LegalAnswer:
-        """بناء الإجابة النهائية مع دمج المزيد من المصادر"""
-        
-        if not rag_results:
+
+    async def build_final_answer(self, query: str, chunks: List[RetrievedChunk]) -> LegalAnswer:
+        """
+        Orchestrates full response synthesis from strict structural RetrievedChunk formats.
+        Drives offline dynamic calibration to score query precision thresholds.
+        """
+        if not chunks:
+            logger.warning("agent_aborted_answer_synthesis_empty_chunks_pool")
             return LegalAnswer(
-                answer="No relevant information found.",
+                query=query,
+                answer="No relevant aviation regulatory constraints found in current index.",
                 citations=[],
                 confidence_score=0.0,
-                debug_info={"results_count": 0}
+                rag_available=True
             )
+
+        logger.info("agent_processing_retrieved_chunks", counts=len(chunks))
         
-        if self.debug_mode:
-            logger.info(f"Building answer from {len(rag_results)} chunks")
-        
-        context_parts = []
-        all_citations = []
-        faa_context = []
-        easa_context = []
-        
-        for result in rag_results[:8]:
-            content = result["page_content"]
-            source = result["metadata"].get("source", "Unknown")
-            score = result.get("relevance", result["metadata"].get("score", 0))
-            
-            context_parts.append(f"[Source: {source}] [Score: {score:.3f}]\n{content}\n")
-            
-            citations = self.extract_citations(content, source)
-            all_citations.extend(citations)
-            
-            if "FAA" in source:
-                faa_context.append(content)
-            elif "EASA" in source:
-                easa_context.append(content)
-        
-        context = "\n---\n".join(context_parts[:8])
-        
-        if len(faa_context) >= 2 or len(easa_context) >= 2:
-            answer = await self.compare_regulations(
-                "\n".join(faa_context[:4]),
-                "\n".join(easa_context[:4]),
-                query
+        context_blocks = []
+        citations_pool = []
+        faa_texts = []
+        sora_texts = []
+
+        # تفكيك ومعايرة الكتل المسترجعة حياً بناء على عقود الـ Object الجديدة
+        for idx, chunk in enumerate(chunks[:8]):
+            context_blocks.append(
+                f"[Source File: {chunk.source_file}] [Page: {chunk.page_number}] [Weight: {chunk.relevance_score:.2f}]\n"
+                f"{chunk.content}\n"
             )
-            strategy = "comparison_enhanced"
+            
+            # استخراج الاقتباس وتجهيزه لخط التقرير الجنائي الموحد
+            citation_obj = self.extract_legal_citation(chunk)
+            citations_pool.append(citation_obj)
+            
+            # فرز النصوص دلالياً لتحديد استراتيجية الـ LLM المعرفية
+            lowered_source = chunk.source_file.lower()
+            if "faa" in lowered_source or "part 107" in lowered_source or "ac_" in lowered_source:
+                faa_texts.append(chunk.content)
+            elif "sora" in lowered_source or "easa" in lowered_source:
+                sora_texts.append(chunk.content)
+
+        aggregated_context = "\n---\n".join(context_blocks)
+        
+        # تحديد الإستراتيجية: مقارنة دولية ثنائية أم تحليل أحادي مباشر
+        if len(faa_texts) >= 1 and len(sora_texts) >= 1:
+            strategy = "international_comparative"
+            synthesized_response = await self.compare_regulations(
+                faa_context="\n".join(faa_texts[:3]),
+                easa_context="\n".join(sora_texts[:3]),
+                topic=query
+            )
         else:
-            answer = await self.analyze_direct(query, context)
-            strategy = "direct"
-        
-        # حساب ثقة محسن
+            strategy = "direct_compliance_lookup"
+            synthesized_response = await self.analyze_direct(query, aggregated_context)
+
+        # حساب معدل الثقة الموزون هندسياً لحماية التنبؤات من التشتت
         weighted_scores = []
-        for i, r in enumerate(rag_results[:8]):
-            score = r.get("relevance", 0)
-            weight = 1.0 if i == 0 else 0.8 if i == 1 else 0.6 if i == 2 else 0.4
-            weighted_scores.append(score * weight)
+        for i, chunk in enumerate(chunks[:8]):
+            decay_weight = 1.0 if i == 0 else 0.8 if i == 1 else 0.5
+            weighted_scores.append(chunk.relevance_score * decay_weight)
         
-        avg_score = sum(weighted_scores) / max(len(weighted_scores), 1)
+        final_confidence = sum(weighted_scores) / max(len(weighted_scores), 1)
         
-        unique_citations = self._deduplicate_citations(all_citations)
-        
-        debug_info = {
-            "strategy": strategy,
-            "results_count": len(rag_results),
-            "faa_chunks": len(faa_context),
-            "easa_chunks": len(easa_context),
-            "avg_score": avg_score,
-            "total_citations": len(all_citations),
-            "unique_citations": len(unique_citations)
-        }
-        
-        if self.debug_mode:
-            logger.info(f"Strategy: {strategy}, Confidence: {avg_score:.3f}, Citations: {len(unique_citations)}")
+        logger.info("agent_answer_synthesis_complete", strategy=strategy, confidence=f"{final_confidence:.3f}")
         
         return LegalAnswer(
-            answer=answer,
-            citations=unique_citations[:8],
-            confidence_score=avg_score,
-            debug_info=debug_info
+            query=query,
+            answer=synthesized_response.strip(),
+            citations=citations_pool[:8],
+            confidence_score=max(0.0, min(1.0, float(final_confidence))),
+            rag_available=True
         )
-    
+
     def format_answer(self, legal_answer: LegalAnswer) -> str:
-        """تنسيق الإجابة النهائية"""
-        citations_text = "\n".join([f"- {str(cit)}" for cit in legal_answer.citations[:8]])
-        
+        """Standardizes layout into presentation-ready templates for the automated Report Generator."""
+        citations_block = "\n".join([f"- {cit.source_file}, Page {cit.page_number}" for cit in legal_answer.citations])
         return FINAL_ANSWER_TEMPLATE.format(
-            answer=legal_answer.answer[:2000],
-            citations=citations_text if citations_text else "No specific citations",
-            compliance_note="Review cited regulations for complete requirements.",
-            document_date="2024",
+            answer=legal_answer.answer,
+            citations=citations_block if citations_block else "No formal citations recorded.",
+            compliance_note="Review official FAA Part 107 and JARUS SORA frameworks for complete legal definitions.",
+            document_date="2026"
         )
+
+# =====================================================================
+# Stage 2 Architectural Dependency Comment Block:
+# Dynamic text generation layer acting as the direct legal brain for RAG routing.
+# Dependencies: src/uav_risk/stage2/rag/schemas.py -> RetrievedChunk, LegalAnswer, LegalCitation
+# Dependent Files: Wired seamlessly into src/uav_risk/stage2/rag/rag_core.py
+# =====================================================================

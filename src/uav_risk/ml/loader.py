@@ -36,8 +36,7 @@ class Stage1Bundle:
     shap_explainer: Optional[Any]   # Loaded SHAP TreeExplainer instance
     bundle_path: str                # File path from which the bundle was retrieved
     label_encoder: Optional[Any] = None
-    class_names: List[str] = field(default_factory=field(default_factory=list))
-
+    class_names: List[str] = field(default_factory=list)
     def get_model_version(self) -> str:
         """Dynamic retrieval of the model execution iteration version from metadata."""
         if isinstance(self.model_metadata, dict):

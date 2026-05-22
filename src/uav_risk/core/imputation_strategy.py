@@ -34,13 +34,13 @@ class ImputationStrategy:
         # 1. اشتقاق طاقة البطارية (Wh) مع تحصين كامل ضد الـ Prefixes لمنع الفشل الصامت
         if feature_name == "uav_battery_wh":
             mah = (
-                raw.get("uav_battery_capacity_mah") or 
-                raw.get("battery_capacity_mah") or 
+                raw.get("uav_battery_capacity_mah") or \
+                raw.get("battery_capacity_mah") or \
                 available_features.get("uav_battery_capacity_mah")
             )
             volts = (
-                raw.get("uav_battery_voltage_v") or 
-                raw.get("battery_voltage_v") or 
+                raw.get("uav_battery_voltage_v") or \
+                raw.get("battery_voltage_v") or \
                 available_features.get("uav_battery_voltage_v")
             )
             if mah and volts:
@@ -54,24 +54,23 @@ class ImputationStrategy:
         elif feature_name == "uav_rotorcraft_disk_area_m2":
             rotors = available_features.get("uav_rotorcraft_rotor_count")
             prop_dia = (
-                raw.get("uav_propeller_diameter_m") or 
-                raw.get("propeller_diameter_m") or 
+                raw.get("uav_propeller_diameter_m") or \
+                raw.get("propeller_diameter_m") or \
                 available_features.get("uav_propeller_diameter_m")
             )
             if rotors and prop_dia:
                 try:
                     radius = float(prop_dia) / 2.0
                     val = float(rotors) * 3.1415926535 * (radius ** 2)
-                    return float(val), f"Calculated area: {rotors} rotors * pi * (diameter {prop_dia} m / 2)²"
+                    return float(val), f"Calculated area: {rotors} rotors * pi * (diameter {prop_dia} m / 2)2"
                 except (ValueError, TypeError):
                     logger.error(f"Imputation Engine: Failed disk area calculation for rotors={rotors}, diameter={prop_dia}")
 
-        # 3. حساب حمولة القرص المروحي (مع حل ذكي ومستقل لمشكلة سباق التنفيذ الحلقي)
+        # 3. حساب حمولة القرص المروحي (مع حل ذكي لمشكلة سباق التنفيذ الحلقي)
         elif feature_name == "feat_disk_loading":
             mass = available_features.get("uav_mass_kg")
             disk_area = available_features.get("uav_rotorcraft_disk_area_m2")
             
-            # 🎯 حل المشكلة الجوهرية: إذا غابت المساحة بسبب الترتيب الأبجدي للحلقة، نشتقها هنا فوراً وتلازمياً!
             if not disk_area or disk_area <= 0:
                 derived_area_val, _ = self.get_imputed_value("uav_rotorcraft_disk_area_m2", available_features, raw)
                 if derived_area_val > 0:
@@ -82,9 +81,13 @@ class ImputationStrategy:
                 val = (float(mass) * 9.81) / float(disk_area)
                 return float(val), f"Derived physics with race-shield: (mass {mass} kg * 9.81) / disk area {disk_area} m²"
 
-        # 4. اشتقاق هبات الرياح الحية بناءً على سرعة الرياح المستمرة
+        # 4. اشتقاق هبات الرياح الحية (تم إصلاح الـ Prefix Mismatch لربط المتغيرات حياً)
         elif feature_name == "environment_weather_gust_mps":
-            wind = available_features.get("environment_weather_wind_mps")
+            wind = (
+                available_features.get("environment_weather_wind_speed_ms") or \
+                available_features.get("environment_weather_wind_mps") or \
+                available_features.get("environment_wind_speed_ms")
+            )
             if wind is not None and wind > 0:
                 val = wind * 1.4
                 return float(val), f"Aviation gust factor: wind {wind} m/s * 1.4"
@@ -97,12 +100,15 @@ class ImputationStrategy:
                 final_ratio = max(0.0, min(1.0, ratio))
                 return float(final_ratio), f"Bound ratio: ({rssi} dBm + 80) / 20 capped inside [0, 1]"
 
-        # 6. الحساب التراكمي لخطورة الطقس المركب (مع حل ذكي لحالة غياب ميزة الهبات حياً)
+        # 6. الحساب التراكمي لخطورة الطقس المركب (تم تصحيح جلب الرياح الصارم)
         elif feature_name == "feat_weather_severity":
-            wind = available_features.get("environment_weather_wind_mps", 0.0)
+            wind = (
+                available_features.get("environment_weather_wind_speed_ms") or \
+                available_features.get("environment_weather_wind_mps") or \
+                available_features.get("environment_wind_speed_ms") or 0.0
+            )
             gust = available_features.get("environment_weather_gust_mps")
             
-            # إذا لم تكن الهبات متوفرة بعد في المصفوفة، نقوم باشتقاقها فورياً لحماية المؤشر المركب من العمى
             if gust is None or gust <= 0:
                 derived_gust, _ = self.get_imputed_value("environment_weather_gust_mps", available_features, raw)
                 gust = derived_gust if derived_gust > 0 else wind
@@ -127,12 +133,9 @@ class ImputationStrategy:
                 except (ValueError, TypeError):
                     logger.error(f"Imputation Engine: Failed aspect ratio check for wingspan={wingspan}, area={wing_area}")
 
-        # شبكة الأمان المطلقة والمدروسة للميزات الفرعية والمحاكاة المتبقية من الدستور
         fallback_val = get_safe_value(feature_name)
         return float(fallback_val), "Used static safe fallback configuration from registry."
 
-# =====================================================================
-# Consistency check: All signatures stable, no conflicts found.
 # =====================================================================
 # Architectural Registry Block:
 # This file serves as the context-aware math derivation engine for physics.

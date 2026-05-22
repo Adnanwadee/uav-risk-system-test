@@ -1,123 +1,152 @@
-"""
-ACE System - Main API Entry Point (V15.5 - Apex Unified)
-===========================================================
-التحديثات:
-1. توحيد الربط: المسمى المعتمد الآن هو safety_graph ليتوافق مع api.py.
-2. النموذج المعتمد: الانتقال رسمياً لنموذج llama-3.3-70b-versatile.
-3. التوجيه المحدث: ربط الرواتر ببادئة /v2 لخدمة تطبيق Streamlit.
-"""
-
-import os
-import uuid
-import logging
-import asyncio
-from contextvars import ContextVar
+# File Path: src/uav_risk/api/main.py
 from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, Request
+import os
+from typing import Dict, Any, Optional
+import structlog
+from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from langgraph.checkpoint.memory import MemorySaver
+from fastapi.encoders import jsonable_encoder
 
-from uav_risk.stage1.loader import load_stage1_artifacts
-from uav_risk.stage2.llm.groq_client import GroqAsyncClient
-from uav_risk.stage2.llm.report_writer import SafetyReportWriter
-from uav_risk.stage2.rag.rag_core import AsyncRAGCore
-from uav_risk.stage2.agents.physics_agent import PhysicsAgent, DronePhysicalSpec
-from uav_risk.stage2.agents.temporal_agent import TemporalAgent
-from uav_risk.stage2.agents.legal_agent import LegalAgent
-from uav_risk.stage2.agents.consensus_agent import ConsensusAgent
-from uav_risk.stage2.graph.safety_agent import ACESafetyGraph 
+# الاستيرادات المطلقة من كافة طبقات النظام الجوي الموحد لضمان التوافق المعماري الحتمي
+from src.uav_risk.core.config import get_settings
+from src.uav_risk.core.logging import setup_logging, set_flight_id, set_request_id
+from src.uav_risk.core.contracts import MasterFlightPayload
+from src.uav_risk.ml.loader import Stage1Bundle, load_stage1_bundle
+from src.uav_risk.ml.feature_defs import FEATURE_DEFINITIONS
+from src.uav_risk.stage2.rag.rag_core import AsyncRAGCore
+from src.uav_risk.stage2.rag.config import GroqLLMConfig
+from src.uav_risk.stage2.rag.groq_llm import GroqLLM
+from src.uav_risk.stage2.llm.report_writer import ReportWriter
+from src.uav_risk.stage2.pipeline import run_ace_pipeline
 
-# إعداد السجلات المتقدمة
-request_id_context_var: ContextVar[str] = ContextVar("request_id", default="SYSTEM")
+# تهيئة نظام السجلات الموحد للمنظومة بناءً على بيئة التشغيل
+settings = get_settings()
+setup_logging(log_level=settings.LOG_LEVEL, environment=settings.ENVIRONMENT)
+logger = structlog.get_logger(__name__)
 
-class RequestIdFilter(logging.Filter):
-    def filter(self, record):
-        record.request_id = request_id_context_var.get()
-        return True
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(request_id)s] - %(name)s - %(levelname)s - %(message)s')
-for handler in logging.root.handlers:
-    handler.addFilter(RequestIdFilter())
-
-logger = logging.getLogger("ACE_CORE_API")
-MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "100"))
-global_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    request_id_context_var.set("SYS-BOOT")
-    logger.info("Initializing ACE Multi-Agent Ecosystem (V15.5 Apex)...")
+    """مدير دورة حياة السيرفر الذكي المسؤول عن تهيئة المكونات الثقيلة والفهارس الحقيقية."""
+    logger.info("Starting ACE UAV Risk Assessment System v4.5 [Aviation Production Mode]...", environment=settings.ENVIRONMENT)
     
+    # ─── 1. تحميل حزمة نموذج التعلم الآلي LIGHTGBM الحقيقية والأوزان المستقرة ───
     try:
-        # أ. تحميل نماذج المرحلة الأولى
-        artifacts_dir = os.getenv("UAV_ARTIFACTS_DIR", "artifacts")
-        app.state.artifacts = load_stage1_artifacts(artifacts_dir)
-        logger.info("Stage 1 ML Artifacts loaded.")
+        artifacts_dir = settings.UAV_ARTIFACTS_DIR
+        logger.info("loading_production_stage1_machine_learning_bundle", target_path=artifacts_dir)
+        app.state.stage1_bundle = load_stage1_bundle(artifacts_dir)
+        logger.info("stage1_machine_learning_bundle_loaded_success", feature_count=len(app.state.stage1_bundle.feature_names))
+    except Exception as bundle_err:
+        logger.critical("fatal_blocker_stage1_bundle_failed_to_initialize_crashing_server", error=str(bundle_err))
+        raise bundle_err
 
-        # ب. تهيئة البنية التحتية للمرحلة الثانية
-        model_name = os.getenv("LLM_MODEL_NAME", "llama-3.3-70b-versatile")
-        app.state.llm_client = GroqAsyncClient(model_name=model_name, temperature=0.0)
-        app.state.rag_core = AsyncRAGCore() 
-        logger.info(f"Cognitive Engine ({model_name}) & RAG Core online.")
+    # ─── 2. تحميل دستور ومواصفات الميزات الفيزيائية المعتمدة ───
+    app.state.feature_defs = FEATURE_DEFINITIONS
+    logger.info("aviation_constitutional_features_defs_anchored_successfully")
 
-        # ج. مواصفات الطائرة
-        default_spec = DronePhysicalSpec(
-            mass_kg=1.3, max_thrust_n=45.0, rotor_area_m2=0.25,
-            drag_coefficient=0.8, frontal_area_m2=0.05, max_wind_tolerance_ms=12.0,
-            battery_capacity_wh=50.0, hover_power_w=220.0, structural_load_limit_n=100.0
-        )
-
-        # د. تهيئة الوكلاء
-        p_agent = PhysicsAgent(spec=default_spec)
-        t_agent = TemporalAgent()
-        l_agent = LegalAgent(rag_index=app.state.rag_core, llm_client=app.state.llm_client)
-        c_agent = ConsensusAgent()
-
-        # هـ. بناء الـ LangGraph
-        orchestrator = ACESafetyGraph(
-            physics_agent=p_agent, temporal_agent=t_agent,
-            legal_agent=l_agent, consensus_agent=c_agent
-        )
+    # ─── 3. تهيئة وبناء محرك الاسترجاع المعزز بالقوانين الجوية حياً (RAG Core) ───
+    try:
+        groq_key = settings.GROQ_API_KEY.get_secret_value() if settings.GROQ_API_KEY else os.getenv("GROQ_API_KEY")
+        app.state.rag_core = AsyncRAGCore(groq_api_key=groq_key)
         
-        # [إصلاح حاسم]: استخدام safety_graph ليتوافق مع استدعاء الـ API
-        memory = MemorySaver()
-        app.state.safety_graph = orchestrator.compile(checkpointer=memory)
-        
-        app.state.report_writer = SafetyReportWriter(llm_client=app.state.llm_client)
-        logger.info("ACE Multi-Agent Graph is fully synchronized and FLIGHT-READY.")
-        
-    except Exception as e: 
-        logger.critical(f"FATAL BOOT ERROR: {e}", exc_info=True)
-        raise  
+        if hasattr(app.state.rag_core, "initialize") and callable(app.state.rag_core.initialize):
+            logger.info("assembling_local_faiss_vector_databases_and_ontology_rules")
+            await app.state.rag_core.initialize()
+            
+        status_payload = app.state.rag_core.get_status()
+        logger.info("rag_legislative_core_diagnostics_collected", status=status_payload)
+    except Exception as rag_err:
+        logger.warning("rag_initialization_failed_activating_autonomous_null_fallback", error=str(rag_err))
+        app.state.rag_core = AsyncRAGCore(groq_api_key=None)
+
+    # ─── 4. تهيئة بوابة معالجة اللغات الطبيعية سحابياً (Groq LLM) ───
+    try:
+        groq_key = settings.GROQ_API_KEY.get_secret_value() if settings.GROQ_API_KEY else os.getenv("GROQ_API_KEY")
+        if not groq_key:
+            raise ValueError("Groq Credentials Token string is null or missing from cloud cluster config environment.")
+            
+        # ✅ حل مشكلة الـ Deprecation: استبدال التسمية المُلغاة بنموذج التوليد والتقارير المستقر حياً
+        target_model = settings.AGENT_MODEL_NAME
+        if target_model == "llama3-70b-8192":
+            target_model = "llama-3.3-70b-versatile"
+            
+        llm_config = GroqLLMConfig(api_key=groq_key, model=target_model)
+        app.state.groq_llm = GroqLLM(config=llm_config)
+        logger.info("groq_cloud_llm_gateway_established_successfully", model_target=target_model)
+    except Exception as llm_err:
+        logger.error("groq_llm_handshake_failed_transitioning_to_template_backup_mode", error=str(llm_err))
+        app.state.groq_llm = None
+
+    # ─── 5. تهيئة مصنف وصائغ التقارير الهيكلية ───
+    app.state.report_writer = ReportWriter(llm=app.state.groq_llm)
+    
+    logger.info("ALL_ACE_SUB_SYSTEM_GATES_PASSED_SERVER_OPERATIONAL_READY")
     yield
+    
+    logger.info("Shutting down ACE UAV Risk Assessment System pipeline gates...")
+    if hasattr(app.state, 'rag_core') and app.state.rag_core:
+        await app.state.rag_core.shutdown()
+    logger.info("ACE_SYSTEM_SHUTDOWN_SEQUENCE_SUCCESSFULLY_TERMINATED")
 
-app = FastAPI(title="ACE API", version="15.5.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
+app = FastAPI(
+    title="ACE UAV Autonomous Risk Assessment Compliance API",
+    version="v4.5.0-Production",
+    lifespan=lifespan
 )
 
-# دمج الرواتر ببادئة النسخة الثانية لخدمة الـ UI المطور
-from uav_risk.stage2.api import router as stage2_router
-app.include_router(stage2_router, prefix="/v2")
 
-@app.get("/health")
-async def health_check():
-    state = app.state
-    components = {
-        "ml_artifacts": hasattr(state, "artifacts"),
-        "llm_client": hasattr(state, "llm_client"),
-        "rag_core": hasattr(state, "rag_core"),
-        "agent_graph": hasattr(state, "safety_graph")
+@app.get("/health", status_code=status.HTTP_200_OK)
+async def health(request: Request) -> Dict[str, Any]:
+    app_state = request.app.state
+    stage1_loaded = hasattr(app_state, 'stage1_bundle') and app_state.stage1_bundle is not None
+    rag_ready = hasattr(app_state, 'rag_core') and app_state.rag_core.is_ready() if hasattr(app_state, 'rag_core') else False
+    llm_ready = app_state.groq_llm is not None if hasattr(app_state, 'groq_llm') else False
+    
+    return {
+        "status": "healthy" if stage1_loaded and rag_ready and llm_ready else "degraded",
+        "stage1_loaded": stage1_loaded,
+        "rag_ready": rag_ready,
+        "llm_ready": llm_ready,
+        "feature_count": len(app_state.stage1_bundle.feature_names) if stage1_loaded else 0,
+        "system_version": "ACE-v4.5.0-Prod"
     }
-    return {"status": "ONLINE", "components": components}
-# أضف هذا في آخر سطر في ملف main.py
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+@app.post("/v2/evaluate", status_code=status.HTTP_200_OK)
+async def evaluate_flight(payload: MasterFlightPayload, request: Request) -> JSONResponse:
+    app_state = request.app.state
+    flight_id = payload.get_flight_id() or "FLIGHT-UNKNOWN-GATEWAY-INBOUND"
+    
+    with set_flight_id(flight_id), set_request_id(flight_id):
+        logger.info("inbound_flight_evaluation_request_received", flight_id=flight_id)
+        
+        if not hasattr(app_state, 'stage1_bundle') or app_state.stage1_bundle is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Aviation Engine Error: Stage-1 ML LightGBM model is not mounted."
+            )
+            
+        try:
+            pipeline_result = await run_ace_pipeline(
+                flight_id=flight_id,
+                payload=payload,
+                full_telemetry=payload.model_dump(),
+                stage1_bundle=app_state.stage1_bundle,
+                rag_core=app_state.rag_core,
+                groq_llm=app_state.groq_llm,
+                feature_defs=app_state.feature_defs,
+                report_writer=app_state.report_writer
+            )
+            return JSONResponse(content=jsonable_encoder(pipeline_result))
+            
+        except Exception as system_failure:
+            logger.critical("unhandled_critical_crash_inside_api_evaluation_gate", flight_id=flight_id, error=str(system_failure))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Sovereign Core Crash Sequence Activated: {str(system_failure)}"
+            )
+
+# =====================================================================
+# Consumed by: Production WSGI / ASGI Servers (Uvicorn / Gunicorn)
+# =====================================================================

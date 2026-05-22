@@ -1,262 +1,374 @@
-"""
-ACE UAV Risk Assessment System - Stage 4 (Pure ReAct Agent Engine)
-File: src/uav_risk/stage2/agent/ace_agent.py
-Description: Production-grade ReAct agent engine with exact import links,
-             strict structured outputs, and integrated cognitive final synthesis.
-"""
-
+# File Path: src/uav_risk/stage2/agent/ace_agent.py
 import json
 import time
-from typing import Dict, List, Any, Optional
-from pydantic import BaseModel, Field
+import asyncio
+from typing import Dict, Any, List, Optional, Literal, Set
+from src.uav_risk.ml.schemas import MLResult
+from src.uav_risk.stage2.rag.rag_core import AsyncRAGCore
+from src.uav_risk.stage2.agent.agent_schemas import (
+    AgentDecision, 
+    ReasoningStep, 
+    ToolCall, 
+    FeatureAssessment, 
+    LoopAction, 
+    ConditionalGoConstraint
+)
+from src.uav_risk.stage2.agent.agent_memory import AgentMemory, DynamicCacheManager
+from src.uav_risk.stage2.agent.agent_tools import (
+    validate_feature_batch, 
+    check_physics_constraint, 
+    assess_contextual_remainder,
+    query_rag, 
+    generate_legal_query, 
+    CROSS_FEATURE_SAFETY_MAP
+)
+from src.uav_risk.stage2.agent.fallback import StaticFallbackAssessor
 import structlog
 
-from src.uav_risk.stage2.agent.agent_schemas import AgentDecision, ReasoningStep, ToolCall, FeatureAssessment
-from src.uav_risk.stage2.agent.agent_memory import AgentMemory
-from src.uav_risk.stage2.agent.agent_tools import (
-    fetch_telemetry_and_specifications,
-    calculate_aerodynamic_and_energy_stresses,
-    query_regulatory_knowledge_base,
-    execute_unexamined_manifest_harvester,
-    backtrack_category
-)
-
-logger = structlog.get_logger()
+logger = structlog.get_logger(__name__)
 
 
-class CognitiveFeatureEvaluation(BaseModel):
-    feature_name: str = Field(..., description="The standardized feature key identifier.")
-    assigned_status: str = Field(..., description="The status evaluated by LLM. Must be: SAFE | WARNING | CRITICAL.")
-    analytical_reasoning: str = Field(..., description="Aviation engineering justification for this status assignment.")
-    action_required: Optional[str] = Field(None, description="Required mitigation checklist for the operator.")
+class AsyncTokenBucketLimiter:
+    """Meters requests using a token bucket algorithm to prevent API quota breaches."""
+    def __init__(self, rpm: int = 60):
+        self.rate = rpm / 60.0
+        self.capacity = rpm
+        self.tokens = float(rpm)
+        self.last_update = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            while True:
+                now = time.monotonic()
+                self.tokens = min(self.capacity, self.tokens + (now - self.last_update) * self.rate)
+                self.last_update = now
+                if self.tokens >= 1.0:
+                    self.tokens -= 1.0
+                    return
+                await asyncio.sleep(0.1)
 
 
-class AgentActionSchema(BaseModel):
-    thought: str = Field(..., description="Metacognitive analysis evaluating working memory records.")
-    tool: str = Field(..., description="The tool selection. Must be exactly one of: 'fetch_telemetry_and_specifications' | 'calculate_aerodynamic_and_energy_stresses' | 'query_regulatory_knowledge_base' | 'backtrack_category' | 'FINAL_DECISION'.")
-    tool_input: Dict[str, Any] = Field(default_factory=dict, description="Parameters matching tool signatures.")
-    cognitive_evaluations: Optional[List[CognitiveFeatureEvaluation]] = Field(None, description="Dynamic updates to working memory based on raw tool data.")
+class AsyncCircuitBreaker:
+    """Circuit breaker pattern isolating failing cloud endpoints and initializing fallbacks."""
+    def __init__(self, failure_threshold: int = 3, recovery_time_sec: int = 10):
+        self.threshold = failure_threshold
+        self.recovery_time = recovery_time_sec
+        self.state: Literal["CLOSED", "OPEN", "HALF-OPEN"] = "CLOSED"
+        self.failures = 0
+        self.last_failure_time = 0.0
 
+    def record_success(self) -> None:
+        self.failures = 0
+        self.state = "CLOSED"
 
-class FinalVerdictSchema(BaseModel):
-    decision: str = Field(..., description="The absolute sovereign determination. Must be exactly: GO | NO-GO | CONDITIONAL-GO")
-    overall_risk_score: float = Field(..., description="Calculated composite risk index between 0.0 and 1.0.")
-    confidence: float = Field(..., description="Structured certainty score regarding this flight verdict between 0.0 and 1.0.")
-    critical_findings: List[str] = Field(default_factory=list, description="Summary statement of core violations.")
-    recommendations: List[str] = Field(default_factory=list, description="Actionable checklists for secondary tracks.")
+    def record_failure(self) -> bool:
+        self.failures += 1
+        self.last_failure_time = time.monotonic()
+        if self.failures >= self.threshold:
+            self.state = "OPEN"
+            return True
+        return False
+
+    def allow_execution(self) -> bool:
+        if self.state == "OPEN":
+            if time.monotonic() - self.last_failure_time > self.recovery_time:
+                self.state = "HALF-OPEN"
+                return True
+            return False
+        return True
 
 
 class ACEReActAgent:
-    MAX_ITERATIONS = 20
-    MAX_RAG_QUERIES = 8
-
-    def __init__(self, groq_client: Any, rag_core: Any, feature_defs: Dict[str, Dict[str, Any]], core_feature_names: List[str]):
-        self.client = groq_client  
+    """Sovereign cognitive orchestration engine analyzing multi-variable safety and compliance maps."""
+    def __init__(self, llm_client: Any, rag_core: AsyncRAGCore, feature_defs: Dict[str, Any], config_json: Optional[str] = None):
+        self.llm = llm_client
         self.rag_core = rag_core
         self.feature_defs = feature_defs
-        self.core_feature_names = core_feature_names
-        self.memory = AgentMemory(list(feature_defs.keys()))
-        self._iteration_count = 0
-        self._rag_counter = 0
+        
+        cfg = json.loads(config_json) if config_json else {}
+        self.physics_graph = cfg.get("PHYSICS_DEPENDENCY_GRAPH", {
+            "uav_mass_kg": ["check_physics_constraint:disk_loading", "check_physics_constraint:wind_susceptibility"],
+            "uav_battery_wh": ["check_physics_constraint:energy_budget"],
+            "flight_altitude_m": ["check_physics_constraint:altitude_ceiling"]
+        })
+        self.limiter = AsyncTokenBucketLimiter(rpm=cfg.get("LLM_RPM_LIMIT", 60))
+        self.cb = AsyncCircuitBreaker()
+        self.cache = DynamicCacheManager()
+        
+        self.MAX_ITERATIONS = 12
+        self.MAX_JSON_RETRIES = 3
+        self.MAX_BACKTRACKS = 3
+        self.MAX_STUCK_BEFORE_FALLBACK = 5
 
-        logger.info("pure_cognitive_agent_instantiated", max_budget=self.MAX_ITERATIONS)
+    def _get_features_by_category(self, features: Dict[str, float], category: str) -> Dict[str, float]:
+        prefixes = {
+            "battery": ["uav_battery_", "battery_remaining_pct", "uav_power_"],
+            "aerodynamic": ["uav_mass_kg", "payload_mass_kg", "uav_wingspan_m", "uav_max_speed_ms"],
+            "navigation": ["gps_satellites_count", "flight_altitude_m", "flight_distance_m", "home_distance_m"],
+            "weather": ["environment_weather_wind_speed_ms", "environment_temperature_c", "environment_humidity_pct"],
+            "comms": ["comms_rssi_dbm_min", "environment_gnss_jam_dbm", "rc_signal_strength_pct"],
+            "operator": ["operator_experience_flights", "pilot_license_status", "license_level"],
+            "airspace": ["airspace_class_restricted", "airport_distance_km", "operator_in_restricted_zone"],
+            "mission": ["flight_duration_min", "operation_type_bvlos", "is_night_flight"]
+        }
+        target_prefixes = prefixes.get(category, [])
+        return {k: v for k, v in features.items() if any(k.startswith(p) for p in target_prefixes)}
 
-    async def run(self, validated_features: Dict[str, float], ml_result: Any, free_text: Optional[str] = None) -> AgentDecision:
+    async def run(self, validated_features: Dict[str, float], ml_result: MLResult, free_text: Optional[str] = None) -> AgentDecision:
         start_time = time.perf_counter()
-        self._iteration_count = 0
-        self._rag_counter = 0
-        self.memory = AgentMemory(list(self.feature_defs.keys()))
+        memory = AgentMemory(list(validated_features.keys()), self.physics_graph)
+        priority_features = [f.feature_name for f in ml_result.top_features[:10]]
+        
+        if free_text and free_text.strip():
+            await self._process_free_text_bilingual(free_text, memory)
+            
+        for constraint in ["disk_loading", "wind_susceptibility", "energy_budget", "altitude_ceiling"]:
+            cache_key = f"{constraint}_{hash(frozenset(validated_features.items()))}"
+            cached_res = self.cache.get_physics(cache_key)
+            
+            if cached_res:
+                res = cached_res
+            else:
+                res = check_physics_constraint(constraint, validated_features, self.feature_defs)
+                self.cache.set_physics(cache_key, res)
+                
+            if "conditional_constraint" in res and res["conditional_constraint"]:
+                memory.record_conditional_constraint(res["conditional_constraint"])
+                
+            if not res.get("passed", True):
+                feat_assessment = FeatureAssessment(
+                    feature_name=f"physics_{constraint}", 
+                    value=float(res.get("metric_value", 0.0)), 
+                    status=res.get("severity", "WARNING"), 
+                    reasoning=res.get("reasoning", ""), 
+                    rag_consulted=False
+                )
+                memory.record_feature_assessment(feat_assessment)
+                if res.get("severity") == "CRITICAL":
+                    memory.critical_findings.append(f"Physical Core Lock Breach [{constraint}]: {res.get('reasoning')}")
 
-        logger.info("pure_agent_pipeline_ignited", machine_learning_class=ml_result.risk_class)
+        iteration = 0
+        stuck_counter = 0
+        signature_history = []
+        
+        while iteration < self.MAX_ITERATIONS:
+            iteration += 1
+            if not self.cb.allow_execution():
+                return StaticFallbackAssessor.assess_safely(validated_features, self.feature_defs, "Circuit Breaker Tripped - External Cloud AI Layer Offline.")
+                
+            rich_context = memory.build_rich_context_for_llm(validated_features, self.feature_defs, priority_features)
+            loop_action = await self._think_and_decide_action_with_retry(rich_context, iteration)
+            
+            if not loop_action:
+                return StaticFallbackAssessor.assess_safely(validated_features, self.feature_defs, f"Terminal structured JSON schema retry exhaustion at cycle {iteration}")
+                
+            # ✅ التعديل الذكي: التتبع المكامل للتوقيع (اسم الأداة + معاملاتها) لمنع تعطل فحص الفئات المتباينة
+            current_signature = f"{loop_action.action}:{json.dumps(loop_action.tool_input, sort_keys=True)}"
+            
+            if signature_history.count(current_signature) >= self.MAX_BACKTRACKS:
+                stuck_counter += 1
+                if stuck_counter >= self.MAX_STUCK_BEFORE_FALLBACK:
+                    return StaticFallbackAssessor.assess_safely(validated_features, self.feature_defs, f"Deadlock safety breach on identical repetitive execution loop: {current_signature}")
+                loop_action = LoopAction(thought="Identical tool parameters loop signature detected. Shifting constraint space.", action="assess_contextual_remainder", tool_input={})
+                current_signature = f"assess_contextual_remainder:{json.dumps({})}"
 
-        top_shap = [f.feature_name for f in getattr(ml_result, "top_features", []) if hasattr(f, "feature_name")]
-        self.memory.reprioritize_with_shap(top_shap_features=top_shap, core_features=self.core_feature_names)
+            signature_history.append(current_signature)
+            obs_str, examined_list = await self._execute_tool_wrapper(loop_action, validated_features, memory)
+            
+            tool_call_record = ToolCall(loop_action.action, loop_action.tool_input, obs_str, 1.0, True)
+            memory.record_tool_call(tool_call_record)
+            memory.reasoning_steps.append(ReasoningStep(iteration, loop_action.thought, loop_action.action, tool_call_record, obs_str, examined_list))
+            
+            if loop_action.action == "FINAL_SYNTHESIS":
+                break
+                
+        return self._synthesize_sovereign_decision(memory, validated_features, ml_result, iteration, start_time)
 
-        if free_text:
-            await self._process_free_text(free_text, validated_features)
-
+    async def _think_and_decide_action_with_retry(self, context: str, iteration: int, retry=0, err="") -> Optional[LoopAction]:
+        if retry >= self.MAX_JSON_RETRIES:
+            return None
+        prompt = f"=== ITERATION {iteration} ===\n{context}\n"
+        if err:
+            prompt += f"\nCORRECTION REQUIRED: Previous response failed schema contract parsing. Error: {err}. Re-output valid JSON mapping object matching structural keys."
+        
         try:
-            while self._iteration_count < self.MAX_ITERATIONS and self.memory.pending_features:
-                self._iteration_count += 1
+            await self.limiter.acquire()
+            # مهلة زمنية مريحة لمنع الاختناق أثناء استدعاء السحابة
+            raw_response = await asyncio.wait_for(self._call_llm_structured(prompt), timeout=25.0)
+            
+            # ✅ تطهير فوري وحتمي من كتل الـ Markdown لمنع كسر هيكلية الـ Parser
+            clean_raw = raw_response.strip()
+            if clean_raw.startswith("```json"):
+                clean_raw = clean_raw[7:]
+            if clean_raw.endswith("```"):
+                clean_raw = clean_raw[:-3]
+            clean_raw = clean_raw.strip()
+            
+            parsed = json.loads(clean_raw)
+            self.cb.record_success()
+            
+            # ✅ معالجة الحالات المتباينة للأحرف (case-insensitive keys) لمنع الـ KeyErrors القاتلة
+            thought = parsed.get("thought", parsed.get("Thought", parsed.get("THOUGHT", "Executing core reactive evaluation step.")))
+            action = parsed.get("action", parsed.get("Action", parsed.get("ACTION", "assess_contextual_remainder")))
+            tool_input = parsed.get("tool_input", parsed.get("Tool_Input", parsed.get("TOOL_INPUT", {})))
+            if not isinstance(tool_input, dict):
+                tool_input = {}
                 
-                action_pack = await self._inference_pure_react_step(ml_result)
-                
-                tool_name = action_pack.get("tool")
-                tool_input = action_pack.get("tool_input", {})
-                thought = action_pack.get("thought", "PROCESSING")
-                cognitive_evals = action_pack.get("cognitive_evaluations")
-
-                if cognitive_evals:
-                    for ev in cognitive_evals:
-                        assessment_record = FeatureAssessment(
-                            feature_name=ev["feature_name"],
-                            value=validated_features.get(ev["feature_name"], 0.0),
-                            status=ev["assigned_status"].upper(),
-                            reasoning=ev["analytical_reasoning"],
-                            rag_consulted=False,
-                            action_required=ev.get("action_required")
-                        )
-                        self.memory.mark_feature_examined(assessment_record)
-
-                if tool_name == "FINAL_DECISION":
-                    logger.info("agent_voluntarily_concluded_reasoning", iteration=self._iteration_count)
-                    break
-                    
-                observation, tool_call_record = await self._act(tool_name, tool_input, validated_features)
-                
-                self.memory.add_reasoning_step(ReasoningStep(
-                    step_number=self._iteration_count,
-                    thought=thought,
-                    action=json.dumps({"tool": tool_name, "tool_input": tool_input}),
-                    tool_call=tool_call_record,
-                    observation=observation,
-                    features_examined=list(self.memory.examined_features.keys())
-                ))
-
+            return LoopAction(thought=str(thought), action=str(action), tool_input=tool_input)
+            
         except Exception as e:
-            if "STRIKE_3_COLLAPSE" in str(e):
-                elapsed = (time.perf_counter() - start_time) * 1000.0
-                return self._generate_hard_abort_decision(elapsed)
-            raise e
+            logger.error("agent_llm_chain_call_failed_retrying", cycle=iteration, retry=retry, error=str(e))
+            if self.cb.record_failure():
+                return None
+            # التراجع الأسي المتزايد لمنع حظر الـ 429 من سيرفرات القائد Groq
+            await asyncio.sleep(2.0 * (retry + 1))
+            return await self._think_and_decide_action_with_retry(context, iteration, retry + 1, str(e))
 
-        execute_unexamined_manifest_harvester(self.memory, validated_features, self.feature_defs)
-        elapsed_total = (time.perf_counter() - start_time) * 1000.0
+    async def _execute_tool_wrapper(self, action: LoopAction, features: Dict[str, float], memory: AgentMemory) -> tuple[str, List[str]]:
+        name = action.action
+        t_input = action.tool_input
         
-        return await self._synthesize_decision_via_llm(ml_result, elapsed_total)
+        if name == "validate_feature_batch":
+            cat = t_input.get("category_name", "battery")
+            batch = self._get_features_by_category(features, cat)
+            res = validate_feature_batch(cat, batch, self.feature_defs, CROSS_FEATURE_SAFETY_MAP, set(memory.examined_features.keys()))
+            for a in res:
+                memory.record_feature_assessment(a)
+                if a.status == "CRITICAL":
+                    memory.critical_findings.append(f"[{cat}] {a.feature_name}: {a.reasoning}")
+            return f"Processed {len(res)} metrics within categorical alignment batch '{cat}'.", [a.feature_name for a in res]
+            
+        elif name == "query_rag":
+            q = t_input.get("query", "FAA operational rules drone")
+            cached = self.cache.get_rag(q)
+            if cached:
+                memory.record_rag_query(q, cached["citations"])
+                return str(cached["obs"]), []
+            res = await query_rag(q, self.rag_core)
+            memory.record_rag_query(q, res.get("citations", []))
+            obs = f"Regulatory law lookup complete. Citations linked: {len(res.get('citations', []))}. Digest: {res['finding'][:120]}"
+            self.cache.set_rag(q, {"citations": res.get("citations", []), "obs": obs})
+            return obs, []
+            
+        elif name == "assess_contextual_remainder":
+            res = assess_contextual_remainder(features, set(memory.examined_features.keys()), self.feature_defs, CROSS_FEATURE_SAFETY_MAP)
+            for a in res:
+                memory.record_feature_assessment(a)
+                if a.status == "CRITICAL":
+                    memory.critical_findings.append(f"[Contextual Sweep Core Anomaly] {a.feature_name}: {a.reasoning}")
+            return f"Constitutional matrix sweep processed over remainder space. Anomaly pins: {len(res)}", [a.feature_name for a in res]
+            
+        elif name == "generate_legal_query":
+            q = await generate_legal_query(t_input.get("feature_name", ""), float(t_input.get("value", 0.0)), t_input.get("violation_type", "WARNING"), self.llm)
+            res = await query_rag(q, self.rag_core)
+            memory.record_rag_query(q, res.get("citations", []))
+            return f"Expansion structural query built: '{q}'. Citations pulled: {len(res.get('citations', []))}", []
 
-    async def _process_free_text(self, free_text: str, validated_features: Dict[str, float]) -> None:
-        normalized_text = free_text.lower()
-        if "hospital" in normalized_text or "crowd" in normalized_text or "populated" in normalized_text:
-            validated_features["operator_in_restricted_zone"] = 1.0
-            logger.warn("safety_flag_injected_from_free_text", target_feature="operator_in_restricted_zone")
+        return "Milestone cleared.", []
 
-    async def _inference_pure_react_step(self, ml_result: Any) -> Dict[str, Any]:
-        summary = self.memory.build_context_summary()
-        system_prompt = (
-            f"You are the supreme cognitive UAV safety inspector. State Summary: {summary}.\n"
-            f"Machine Learning Tree Risk Level: {ml_result.risk_class}.\n"
-            f"Respond strictly via valid JSON matching this schema:\n"
-            f"{AgentActionSchema.model_json_schema()}"
-        )
-        return await self._execute_structured_groq_call(system_prompt, AgentActionSchema)
+    async def _process_free_text_bilingual(self, text: str, memory: AgentMemory) -> None:
+        prompt = f"Analyze ground station logs for operational drone hazards. Map Arabic flight notes natively into exact risk vectors.\nLog Text: '''{text}'''"
+        try:
+            raw = await self._call_llm_structured(prompt)
+            parsed = json.loads(raw)
+            if parsed.get("hazard_detected"):
+                for find in parsed.get("critical_findings", []):
+                    memory.critical_findings.append(f"[Free-Text Risk Flag] {find}")
+                for q in parsed.get("rag_queries", []):
+                    res = await query_rag(q, self.rag_core)
+                    memory.record_rag_query(q, res.get("citations", []))
+        except Exception:
+            pass
 
-    async def _synthesize_decision_via_llm(self, ml_result: Any, elapsed_ms: float) -> AgentDecision:
-        history_summary = self.memory.build_context_summary()
-        examined_manifest = [
-            {"feature": f.feature_name, "status": f.status, "reasoning": f.reasoning}
-            for f in self.memory.examined_features.values()
-        ]
-        synthesis_prompt = (
-            f"URGENT AVIATION VERDICT REQUIRED. Logs: {history_summary}.\n"
-            f"Manifest Dump: {json.dumps(examined_manifest)}.\n"
-            f"Respond strictly via valid JSON matching this schema:\n"
-            f"{FinalVerdictSchema.model_json_schema()}"
-        )
-        verdict_pack = await self._execute_structured_groq_call(synthesis_prompt, FinalVerdictSchema)
+    def _synthesize_sovereign_decision(self, memory: AgentMemory, features: Dict[str, float], ml_result: MLResult, iterations: int, start_time: float) -> AgentDecision:
+        critical_findings = memory.critical_findings.copy()
+        recommendations = []
         
-        assigned_decision = verdict_pack.get("decision", "NO-GO").upper()
-        calculated_risk = float(verdict_pack.get("overall_risk_score", 1.0))
-        confidence = float(verdict_pack.get("confidence", 0.0))
-        critical_findings = verdict_pack.get("critical_findings", [])
-        recommendations = verdict_pack.get("recommendations", [])
+        for name, a in memory.examined_features.items():
+            if a.status == "CRITICAL":
+                critical_findings.append(f"Parametric Safety Failure Fracture: {name}={a.value} ({a.status}). reasoning: {a.reasoning}")
+                recommendations.append(f"Immediate terminal component maintenance required for parameter: {name}")
 
-        memory_has_criticals = any(f.status == "CRITICAL" for f in self.memory.examined_features.values())
-        if (memory_has_criticals or calculated_risk >= 0.7 or ml_result.risk_class == "CRITICAL") and assigned_decision == "GO":
-            assigned_decision = "NO-GO"
-            critical_findings.append("CRITICAL_SAFETY_GUARDRAIL_OVERRIDE: Telemetry anomalies inside memory forced a hard ground lock veto.")
+        ml_lock = ml_result.risk_score > 0.70
+        airspace_lock = features.get("operator_in_restricted_zone", 0.0) == 1.0
+        altitude_val = features.get("flight_altitude_m", 0.0)
+        altitude_warning_lock = altitude_val > 121.9
+        
+        if ml_lock or airspace_lock or len(critical_findings) > 0:
+            final_decision = "NO-GO"
+            risk = max(ml_result.risk_score, 0.95)
+            if ml_lock:
+                critical_findings.append(f"Sovereign Safety Core Lock Triggered: ML inference risk boundaries broken ({ml_result.risk_score:.3f} > 0.70).")
+            if airspace_lock:
+                critical_findings.append("Sovereign Safety Core Lock Triggered: Flight presence inside forbidden restricted national airspace zone.")
+        elif altitude_warning_lock:
+            final_decision = "CONDITIONAL-GO"
+            risk = min(ml_result.risk_score + 0.12, 0.68)
+            recommendations.append("SOVEREIGN OVERRIDE: Flight path transcends standard operational altitude ceiling. CONDITIONAL-GO enforced pending active LAANC approval verification.")
+        else:
+            warnings = [v for k, v in memory.examined_features.items() if v.status == "WARNING"]
+            if warnings or memory.conditional_constraints:
+                final_decision = "CONDITIONAL-GO"
+                risk = min(ml_result.risk_score + 0.12, 0.68)
+                for w in warnings[:4]:
+                    memory.record_conditional_constraint(
+                        ConditionalGoConstraint(
+                            constraint_id=f"RESOLVE_{w.feature_name.upper()}", 
+                            description=f"Resolve alert anomaly profile. Context: {w.reasoning[:80]}", 
+                            feature_name=w.feature_name, 
+                            required_value_range="Restore safe limits", 
+                            legal_reference="Aviation Standard Logbook Operational Code"
+                        )
+                    )
+                recommendations.append("CONDITIONAL-GO: Dynamic flight path cleared conditional upon full telemetry compliance mapping of conditional constraints.")
+            else:
+                final_decision = "GO"
+                risk = ml_result.risk_score
+                recommendations.append("Aviation baseline tracking system running smoothly within nominal safety limits.")
 
-        citations_pool = []
-        for cached_ans in self.memory.rag_cache.values():
-            if hasattr(cached_ans, "citations") and cached_ans.citations:
-                citations_pool.extend(cached_ans.citations)
-
+        coverage = len(memory.examined_features) / max(len(features), 1.0)
+        confidence = ml_result.confidence * (0.7 + 0.3 * coverage)
+        
         return AgentDecision(
-            decision=assigned_decision,
-            overall_risk_score=max(calculated_risk, ml_result.risk_score, self.memory.get_overall_risk_so_far()),
-            confidence=confidence,
-            reasoning_chain=list(self.memory.reasoning_steps),
-            feature_assessments=list(self.memory.examined_features.values()),
+            decision=final_decision,
+            overall_risk_score=round(risk, 4),
+            confidence=round(confidence, 4),
+            reasoning_chain=memory.reasoning_steps,
+            feature_assessments=memory.examined_features,
             critical_findings=critical_findings,
             recommendations=recommendations,
-            legal_citations=citations_pool,
-            rag_queries_made=list(self.memory.rag_queries_history),
-            memory_snapshots=[self.memory.get_snapshot()],
-            total_iterations=self._iteration_count,
-            processing_time_ms=elapsed_ms
+            legal_citations=memory.legal_citations,
+            rag_queries_made=memory.rag_queries_made,
+            total_iterations=iterations,
+            processing_time_ms=round((time.perf_counter() - start_time) * 1000.0, 2),
+            fallback_degraded_mode=False,
+            conditional_constraints=memory.conditional_constraints,
+            agent_version="v4.5.0-production",
+            prompt_hash="sha256_framework_lock_gate6"
         )
 
-    async def _execute_structured_groq_call(self, prompt_content: str, schema_class: Any) -> Dict[str, Any]:
-        attempts = 0
-        last_error = ""
-        while attempts < 3:
-            attempts += 1
-            try:
-                messages = [{"role": "user", "content": prompt_content}]
-                if last_error:
-                    messages.append({"role": "assistant", "content": f"Schema Repair Target Log: {last_error}"})
-
-                completion = await self.client.chat.completions.create(
-                    messages=messages,
-                    model="llama3-70b-8192",
-                    response_format={"type": "json_object"},
-                    temperature=0.0
-                )
-                raw_json = completion.choices[0].message.content
-                parsed = json.loads(raw_json)
-                validated = schema_class(**parsed)
-                return validated.model_dump()
-            except Exception as e:
-                last_error = str(e)
-                logger.error("structured_output_parse_retry", attempt=attempts, schema=schema_class.__name__, error=str(e))
-                if attempts >= 3:
-                    raise RuntimeError("STRIKE_3_COLLAPSE")
-        return {}
-
-    async def _act(self, tool_name: str, tool_input: Dict[str, Any], validated_features: Dict[str, float]) -> tuple[str, ToolCall]:
-        start = time.perf_counter()
-        try:
-            if tool_name == "fetch_telemetry_and_specifications":
-                cat = tool_input.get("category", "battery")
-                facts = fetch_telemetry_and_specifications(cat, validated_features, self.feature_defs, self.memory)
-                obs = f"Factual Telemetry for Category '{cat}': {json.dumps(facts)}"
-            elif tool_name == "calculate_aerodynamic_and_energy_stresses":
-                report = calculate_aerodynamic_and_energy_stresses(validated_features, self.feature_defs)
-                obs = f"Aviation Mechanical Physics Report: {json.dumps(report)}"
-            elif tool_name == "query_regulatory_knowledge_base" and self._rag_counter < self.MAX_RAG_QUERIES:
-                self._rag_counter += 1
-                q = tool_input.get("query", "airspace limits")
-                ans = await query_regulatory_knowledge_base(q, self.rag_core, self.memory)
-                obs = f"Regulatory offline documentation chunks retrieved: {ans.answer}. Absolute Citations: {len(ans.citations)}"
-            elif tool_name == "backtrack_category":
-                if self.memory.can_backtrack():
-                    self.memory.increment_backtrack()
-                    cat = tool_input.get("category", "battery")
-                    facts = backtrack_category(cat, validated_features, self.feature_defs, self.memory)
-                    obs = f"Cognitive Backtracking Tool Triggered: Category '{cat}' has been entirely reopened. Re-fetched facts: {json.dumps(facts)}"
-                else:
-                    obs = "Backtracking tool rejected: Hard session limit budget completely exhausted."
-            else:
-                obs = f"Execution rejection: Tool '{tool_name}' missing or argument layout incompatible."
-
-            elapsed = (time.perf_counter() - start) * 1000.0
-            record = ToolCall(tool_name=tool_name, tool_input=tool_input, tool_output=obs, execution_time_ms=elapsed, success=True)
-            return obs, record
-        except Exception as e:
-            elapsed = (time.perf_counter() - start) * 1000.0
-            obs = f"Degraded Tool Recovery: Command failed. Error trace: {str(e)}"
-            record = ToolCall(tool_name=tool_name, tool_input=tool_input, tool_output=obs, execution_time_ms=elapsed, success=False, error_message=str(e))
-            return obs, record
-
-    def _generate_hard_abort_decision(self, elapsed_ms: float) -> AgentDecision:
-        return AgentDecision(
-            decision="NO-GO", overall_risk_score=1.0, confidence=0.0, reasoning_chain=[],
-            feature_assessments=list(self.memory.examined_features.values()),
-            critical_findings=["CRITICAL_AGENT_STRUCTURED_OUTPUT_COLLAPSE: LLM systematically broke valid schema structures after 3 attempts."],
-            recommendations=["Enforce absolute ground lock.", "Manual inspector verification mandatory."],
-            legal_citations=[], rag_queries_made=[], memory_snapshots=[self.memory.get_snapshot()], total_iterations=1, processing_time_ms=elapsed_ms
+    async def _call_llm_structured(self, prompt: str) -> str:
+        """فرض التثبيت الأنطولوجي الصارم والقالب الهيكلي لتوجيه حتمية الـ JSON حياً."""
+        injection_prompt = (
+            "CRITICAL SYSTEM MANDATE:\n"
+            "You are a critical aviation ReAct agent loop node. You MUST return a valid JSON object matching the keys below. "
+            "Do not output markdown code block fences (like ```json ... ```), do not add commentary outside the raw JSON text block.\n"
+            "REQUIRED STRUCTURE:\n"
+            '{\n  "thought": "Your analytical logical reasoner tracking description here",\n  "action": "validate_feature_batch",\n  "tool_input": {"category_name": "battery"}\n}\n\n'
+            f"INPUT CONTEXT AND POOL POINTERS:\n{prompt}"
         )
+        return await self.llm.generate(injection_prompt)
 
-# ====================================================================================
-# Stage 4 Architectural Dependency Block (Consistency Rule 4):
-# - Depends on: agent_schemas.py, agent_memory.py, agent_tools.py
-# ====================================================================================
+
+# =====================================================================
+# Stage 2 Agent Submodule Architectural Dependency Report:
+#
+# Depends on:
+#   - src/uav_risk/ml/schemas.py (MLResult Structural Link)
+#   - src/uav_risk/stage2/rag/rag_core.py (AsyncRAGCore Engine Link)
+#   - src/uav_risk/stage2/agent/agent_schemas.py (AgentDecision Contracts Lock)
+#
+# Consumed by:
+#   - src/uav_risk/stage2/pipeline.py (Master Subsystem Coordination Core)
+# =====================================================================

@@ -1,222 +1,183 @@
-"""
-ACE UAV Risk Assessment System - Stage 4 (Agent Memory Engine)
-File: src/uav_risk/stage2/agent/agent_memory.py
-Description: Production-grade, hyper-focused session working memory for tracking 
-             198 features without leakage, caching RAG metrics, and locking backtracking loops.
-"""
-
-from typing import Dict, List, Any, Optional
-import structlog
-from src.uav_risk.stage2.agent.agent_schemas import FeatureAssessment, ReasoningStep
-from src.uav_risk.stage2.rag.schemas import LegalAnswer
-
-# إعداد السجلات المنظمة القياسية للامتثال الجوي
-logger = structlog.get_logger()
-
+# File Path: src/uav_risk/stage2/agent/agent_memory.py
+import hashlib
+import time
+from typing import Any, Dict, List, Optional, Set
+from src.uav_risk.stage2.agent.agent_schemas import (
+    ConditionalGoConstraint,
+    FeatureAssessment,
+    ReasoningStep,
+    ToolCall,
+)
 
 class AgentMemory:
-    """
-    محرك الذاكرة الشغالة (Working Memory Engine) لوكيل الـ ReAct الموحد.
-    يضمن التغطية الشاملة لـ 198 ميزة كاملة، إدارة الكاش التنظيمي، والتحكم الفولاذي بميزانية التراجع.
-    """
-
-    def __init__(self, all_feature_names: List[str]):
-        """
-        تهيئة الذاكرة وحشو مصفوفة التتبع الحتمية بكافة المتغيرات الهندسية.
+    """إدارة الذاكرة العاملة السلبية المحدثة؛ تمنع التضخم التربيعي للرموز وتستخرج القيود حياً."""
+    
+    def __init__(self, all_feature_names: List[str], dynamic_dependency_graph: Dict[str, List[str]]):
+        """Initializes the short-term sliding context and execution registries.
         
         Args:
-            all_feature_names (List[str]): القائمة الكاملة لأسماء الـ 198 ميزة المستخرجة من الدستور.
+            all_feature_names: Complete list of the 198 feature vector keys.
+            dynamic_dependency_graph: Maps features to downstream physics or RAG targets.
         """
-        # الحاوية المركزية لجميع التقييمات التشغيلية التي تمت حياً لمنع التكرار الحسابي
         self.examined_features: Dict[str, FeatureAssessment] = {}
-        
-        # سجل السقوط الجنائي الحتمي؛ يقتنص أي خرق حرج للـ Core Hardware/Regulations
         self.critical_findings: List[str] = []
-        
-        # ذاكرة الكاش التنظيمية المحلية لمنع استنزاف نافذة الكلمات والـ API Rate Limits للـ RAG
-        self.rag_cache: Dict[str, LegalAnswer] = {}
-        
-        # السلسلة التاريخية المكتملة لخطوات تفكير وحركات الوكيل (Reasoning Logs)
         self.reasoning_steps: List[ReasoningStep] = []
+        self.rag_queries_made: List[str] = []
+        self.legal_citations: List[Any] = []
+        self.tool_history: List[ToolCall] = []
+        self.conditional_constraints: List[ConditionalGoConstraint] = []
         
-        # مصفوفة الانتظار الحتمية الحامية؛ تضمن عدم إسقاط أو نسيان أي ميزة من الـ 198
-        self.pending_features: List[str] = sorted(list(all_feature_names))
-        
-        # إجمالي المستودع الهندسي المربوط بالسيستم للتحقق من عدم حدوث أي تسرب دلالي
-        self._total_features_manifest: List[str] = list(self.pending_features)
-        
-        # الموجز النصي عالي الكثافة المحدث تلقائياً لتغذية عقل النموذج في الدورات التالية
-        self.context_summary: str = ""
-        
-        # السجل التاريخي لكافة الكويريات التشريعية الموجهة للفهارس المتجهية
-        self.rag_queries_history: List[str] = []
-        
-        # صمام الأمان الميكانيكي المضاف: عداد التحكم الصارم لمنع استنزاف ميزانية الدورات
-        self._backtrack_count: int = 0
+        self._all_feature_names: Set[str] = set(all_feature_names)
+        self._backtrack_registry: Dict[str, int] = {}
+        self._executed_physics_checks: Set[str] = set()
+        self._pending_rag_queries: List[str] = []
+        self._dependency_graph: Dict[str, List[str]] = dynamic_dependency_graph
 
-        logger.info(
-            "agent_memory_initialized",
-            total_features_registered=len(self._total_features_manifest),
-            backtrack_limit=2,
-            initial_state="CLEAN"
-        )
+    def record_feature_assessment(self, assessment: FeatureAssessment) -> None:
+        """Stores a telemetry assessment and automatically updates pending analytical targets."""
+        self.examined_features[assessment.feature_name] = assessment
+        if assessment.status in ("CRITICAL", "WARNING"):
+            related_actions = self._dependency_graph.get(assessment.feature_name, [])
+            for action in related_actions:
+                if "query_rag:" in action:
+                    topic = action.split("query_rag:")[1]
+                    query = f"{assessment.feature_name}={assessment.value}: criteria for {topic}"
+                    if query not in self._pending_rag_queries:
+                        self._pending_rag_queries.append(query)
 
-    def reprioritize_with_shap(self, top_shap_features: List[str], core_features: List[str]) -> None:
-        """
-        إعادة ترتيب مصفوفة الانتظار (Queue Reprioritization) بناءً على الأوزان الإحصائية والدستور.
-        تضمن البدء الفوري بالفحص الفكري لأعلى 10 ميزات تأثيراً حسب SHAP، تليها الميزات الحتمية.
-        
-        Args:
-            top_shap_features (List[str]): ميزات شجرة القرار الأعلى وزناً القادمة من Stage-1 ML Result.
-            core_features (List[str]): قائمة الـ 40 ميزة الحتمية المعرفة بكتلة النظام المركزية.
-        """
-        # 1. فرز وتصفية ميزات SHAP المتواجدة فعلياً بالدستور والمتبقية في الانتظار
-        shap_ordered = [f for f in top_shap_features if f in self.pending_features]
-        
-        # 2. فرز وتصفية ميزات الـ Core الحتمية المتبقية والتي لم تذكر في أعلى الـ SHAP
-        core_ordered = [f for f in core_features if f in self.pending_features and f not in shap_ordered]
-        
-        # 3. تجميع الميزات الثانوية المتبقية (158 ميزة محاكاة إحصائية) في ذيل المصفوفة
-        secondary_ordered = [f for f in self.pending_features if f not in shap_ordered and f not in core_ordered]
-        
-        # 4. التحديث الحتمي لمصفوفة الانتظار الحية
-        self.pending_features = shap_ordered + core_ordered + secondary_ordered
-        
-        logger.info(
-            "agent_memory_queue_reprioritized",
-            shap_count=len(shap_ordered),
-            core_count=len(core_ordered),
-            secondary_count=len(secondary_ordered),
-            total_queue_len=len(self.pending_features)
-        )
+    def record_conditional_constraint(self, constraint: ConditionalGoConstraint) -> None:
+        """حقن وحفظ قيود الموافقة المشروطة المستخرجة حياً من الفحوصات الفيزيائية."""
+        if constraint not in self.conditional_constraints:
+            self.conditional_constraints.append(constraint)
 
-    def mark_feature_examined(self, assessment: FeatureAssessment) -> None:
-        """
-        تسجيل الكائن التشغيلي للميزة وسحب اسمها فوراً وبشكل قطعي من قائمة الانتظار الحتمية.
-        إذا ثبت كسر المتغير للحدود الحرجة، يتم قفله داخل سجل التحقيق الجنائي كـ CRITICAL.
-        """
-        name = assessment.feature_name
-        self.examined_features[name] = assessment
-        
-        # معالجة الخروقات الحرجة وعزلها الفوري لحماية منطق القرار السيادي
-        if assessment.status == "CRITICAL":
-            log_entry = f"Feature [{name}] (Value: {assessment.value}) CRITICAL - Reason: {assessment.reasoning}"
-            if log_entry not in self.critical_findings:
-                self.critical_findings.append(log_entry)
-                logger.warning("critical_aviation_anomaly_logged", feature=name, value=assessment.value)
-        
-        # السحب الفوري القطعي من مصفوفة الانتظار لمنع حدوث "العمى المعرفي" أو إهمال أي ميزة
-        if name in self.pending_features:
-            self.pending_features.remove(name)
+    def record_tool_call(self, call: ToolCall) -> None:
+        """Tracks tool metrics and increments the backtrack registry upon repetition loop signatures."""
+        if self._is_duplicate_call(call):
+            self._backtrack_registry[call.tool_name] = self._backtrack_registry.get(call.tool_name, 0) + 1
+        else:
+            self._backtrack_registry[call.tool_name] = 0
+            
+        self.tool_history.append(call)
+        if "check_physics_constraint" in call.tool_name:
+            constraint = call.tool_input.get("constraint_name", "")
+            if constraint:
+                self._executed_physics_checks.add(str(constraint))
 
-    def is_feature_examined(self, feature_name: str) -> bool:
-        """التحقق السريع مما إذا كانت الميزة خضعت للفحص والتقييم الفكري مسبقاً."""
-        return feature_name in self.examined_features
-
-    def get_unexamined_by_category(self, category: str, feature_defs: Dict[str, Dict[str, Any]]) -> List[str]:
-        """
-        استخراج وتجميع الميزات التابعة لقطاع دلالي معين والتي لا تزال معلقة في طابور الانتظار.
-        تُستدعى أوتوماتيكياً بواسطة أداة الجرف المجمع (Batch Validation Tool) لحفظ سياق الكلمات.
-        """
-        return [
-            name for name in self.pending_features
-            if feature_defs.get(name, {}).get("category") == category
+    def record_rag_query(self, query: str, citations: List[Any]) -> None:
+        """Logs completed regulatory searches and clears matched predictive paths."""
+        self.rag_queries_made.append(query)
+        self.legal_citations.extend(citations)
+        # Prune the pending queue matching the evaluated topic fragment
+        query_topic = query.split(":")[-1].strip() if ":" in query else query
+        self._pending_rag_queries = [
+            q for q in self._pending_rag_queries if not q.endswith(query_topic)
         ]
 
-    def add_reasoning_step(self, step: ReasoningStep) -> None:
-        """أرشفة خطوة الـ ReAct loop الحية بداخل مسار الأثر الاستدلالي للامتثال الجوي."""
-        self.reasoning_steps.append(step)
+    def get_backtrack_count(self, tool_name: str) -> int:
+        """Returns consecutive calls made to the same tool with identical parameters."""
+        return self._backtrack_registry.get(tool_name, 0)
 
-    def cache_rag_result(self, query: str, result: LegalAnswer) -> None:
-        """تخزين مخرجات استعلام الـ RAG محلياً لمنع التكرار الحسابي وحفظ الـ Rate Limits للـ API."""
-        self.rag_cache[query] = result
-        if query not in self.rag_queries_history:
-            self.rag_queries_history.append(query)
+    def get_unexamined_features(self) -> Set[str]:
+        """Calculates the remainder of the 198 feature space that lacks constitutional evaluation."""
+        return self._all_feature_names - set(self.examined_features.keys())
 
-    def get_cached_rag(self, query: str) -> Optional[LegalAnswer]:
-        """استرجاع الإجابة التشريعية المخزنة فوراً عند رصد تطابق دلالي للكويري (Cache Hit)."""
-        return self.rag_cache.get(query)
+    def is_physics_check_done(self, constraint_name: str) -> bool:
+        """Verifies if an essential physical node check has passed the gateway pipeline."""
+        return constraint_name in self._executed_physics_checks
 
-    def can_backtrack(self) -> bool:
-        """
-        حارس الميزانية: فحص منطقي صارم يقفل بروتوكول التراجع المعرفي عند استهلاك محاولتين.
-        يضمن الالتزام الحتمي بميزانية الدورات الـ 20 المتاحة للرحلة كاملة.
-        """
-        return self._backtrack_count < 2
-
-    def increment_backtrack(self) -> None:
-        """زيادة عداد التراجع بمقدار دورة واحدة عند تفعيل درع التراجع المعرفي المجمع لقطاع فيزيائي."""
-        self._backtrack_count += 1
-        logger.info(
-            "cognitive_backtracking_incremented",
-            current_backtrack_count=self._backtrack_count,
-            budget_status="LOCKED" if self._backtrack_count >= 2 else "AVAILABLE"
-        )
-
-    def build_context_summary(self, total_features_count: int = 198) -> str:
-        """
-        صياغة الـ Context Summary عالي الكثافة الدلالية لحقنه في الموجه التالي للـ LLM.
-        يلخص بدقة حجم الإنجاز، النواقص، رصيد التراجع المتبقي، وأحدث الخروقات المكتشفة حياً.
-        """
-        examined_count = len(self.examined_features)
-        critical_count = sum(1 for f in self.examined_features.values() if f.status == "CRITICAL")
-        warning_count = sum(1 for f in self.examined_features.values() if f.status == "WARNING")
-        safe_count = sum(1 for f in self.examined_features.values() if f.status == "SAFE")
+    def build_rich_context_for_llm(
+        self, 
+        validated_features: Dict[str, float], 
+        feature_defs: Dict[str, Any], 
+        priority_features: List[str]
+    ) -> str:
+        """Generates a compressed sliding token summary optimizing context footprint.
         
-        self.context_summary = (
-            f"Progress: {examined_count}/{total_features_count} verified. "
-            f"Queue size: {len(self.pending_features)} pending evaluation. "
-            f"Current Matrix: {critical_count} CRITICAL breaches, {warning_count} WARNINGS, {safe_count} SAFE nodes. "
-            f"Backtrack Counter: {self._backtrack_count}/2 burned. "
-            f"Active Core Anomalies: {self.critical_findings[-3:] if self.critical_findings else 'None'}."
+        Maintains awareness by printing strict historical telemetry constraints,
+        active anomalies, and only the last 2 reasoning cycles.
+        """
+        lines = ["=== HIGH-PRIORITY FEATURES (SHAP-Ranked Real-Values) ==="]
+        for fname in priority_features[:10]:
+            val = validated_features.get(fname)
+            if val is None:
+                continue
+            fdef = feature_defs.get(fname, {})
+            examined = fname in self.examined_features
+            status = self.examined_features[fname].status if examined else "NOT_CHECKED"
+            lines.append(
+                f"  - {fname}: VALUE={val:.4f} | "
+                f"SAFE_RANGE=[{fdef.get('safe_min', 'N/A')}, {fdef.get('safe_max', 'N/A')}] | "
+                f"STATUS={status}"
+            )
+            
+        if self.critical_findings:
+            lines.append("\n=== ACTIVE CRITICAL FINDINGS ===")
+            for finding in self.critical_findings[-5:]:
+                lines.append(f"  🚨 {finding}")
+                
+        if self.conditional_constraints:
+            lines.append("\n=== ACTIVE CONDITIONAL GO CONSTRAINTS ===")
+            for c in self.conditional_constraints:
+                lines.append(f"  ⚠️ {c.constraint_id}: {c.description} (Target Range: {c.required_value_range})")
+                
+        if self._pending_rag_queries:
+            lines.append("\n=== SUGGESTED NEXT RAG QUERIES ===")
+            for q in self._pending_rag_queries[:3]:
+                lines.append(f"  → {q}")
+                
+        if self.reasoning_steps:
+            lines.append("\n=== SLIDING REASONING HISTORY (Last 2 Cycles) ===")
+            for step in self.reasoning_steps[-2:]:
+                lines.append(
+                    f"  Step {step.step_number}: Thought: {step.thought[:80]}... | "
+                    f"Action: {step.action} -> Obs: {step.observation[:120]}..."
+                )
+                
+        lines.append(
+            f"\n=== PROGRESS: Examined {len(self.examined_features)}/{len(self._all_feature_names)} | "
+            f"RAG Calls: {len(self.rag_queries_made)}"
         )
-        return self.context_summary
+        return "\n".join(lines)
 
-    def get_snapshot(self) -> Dict[str, Any]:
-        """إنتاج لقطة هيكلية فورية (Factual Snapshot) لحالة الجلسة الحية لحقنها بكتل الأدلة الجنائية."""
-        return {
-            "examined_count": len(self.examined_features),
-            "pending_count": len(self.pending_features),
-            "backtrack_count": self._backtrack_count,
-            "critical_findings_manifest": list(self.critical_findings),
-            "rag_queries_total": len(self.rag_queries_history),
-            "cache_size": len(self.rag_cache)
-        }
-
-    def get_overall_risk_so_far(self) -> float:
-        """
-        الحساب الرياضي الاستباقي لمعدل خطر الرحلة الجوية بناءً على الاختراقات المخزنة بالذاكرة.
-        يتم عزل الأوزان وتقييد النتيجة نهائياً عند السقف الآمن 1.0.
-        """
-        critical_count = sum(1 for f in self.examined_features.values() if f.status == "CRITICAL")
-        warning_count = sum(1 for f in self.examined_features.values() if f.status == "WARNING")
+    def _is_duplicate_call(self, current_call: ToolCall) -> bool:
+        """Determines if the exact tool invocation payload matches its immediate history signature."""
+        if not self.tool_history:
+            return False
+        prev = [c for c in self.tool_history if c.tool_name == current_call.tool_name]
+        if not prev:
+            return False
         
-        composite_risk = (critical_count * 0.3) + (warning_count * 0.1)
-        return min(1.0, composite_risk)
-
-    def get_statistics(self) -> Dict[str, Any]:
-        """مصفوفة العدادات القياسية للوحة التحكم ومحرك كتابة التقارير الختامية."""
-        return {
-            "total_examined": len(self.examined_features),
-            "critical_count": sum(1 for f in self.examined_features.values() if f.status == "CRITICAL"),
-            "warning_count": sum(1 for f in self.examined_features.values() if f.status == "WARNING"),
-            "safe_count": sum(1 for f in self.examined_features.values() if f.status == "SAFE"),
-            "rag_queries_executed": len(self.rag_queries_history),
-            "backtrack_count": self._backtrack_count
-        }
+        h1 = hashlib.md5(str(sorted(prev[-1].tool_input.items())).encode()).hexdigest()
+        h2 = hashlib.md5(str(sorted(current_call.tool_input.items())).encode()).hexdigest()
+        return h1 == h2
 
 
-# ====================================================================================
-# Stage 4 Architectural Dependency Block (Consistency Rule 4):
+class DynamicCacheManager:
+    """مدير الكاش غير التزامني للعمليات الحتمية المدمجة واستعلامات RAG المتشابهة."""
+    
+    def __init__(self) -> None:
+        self._physics_cache: Dict[str, Dict[str, Any]] = {}
+        self._rag_cache: Dict[str, Dict[str, Any]] = {}
+
+    def get_physics(self, key: str) -> Optional[Dict[str, Any]]:
+        return self._physics_cache.get(key)
+
+    def set_physics(self, key: str, value: Dict[str, Any]) -> None:
+        self._physics_cache[key] = value
+
+    def get_rag(self, query: str) -> Optional[Dict[str, Any]]:
+        return self._rag_cache.get(query)
+
+    def set_rag(self, query: str, value: Dict[str, Any]) -> None:
+        self._rag_cache[query] = value
+
+# =====================================================================
+# Stage 2 Memory Submodule Architectural Dependency Report:
 #
-# This file: src/uav_risk/stage2/agent/agent_memory.py
-# - Depends on:
-#   1. src/uav_risk/stage2/agent/agent_schemas.py (FeatureAssessment, ReasoningStep)
-#   2. src/uav_risk/stage2/rag/schemas.py (LegalAnswer)
-# - Is consumed by:
-#   1. src/uav_risk/stage2/agent/agent_tools.py (Physics & RAG Tactical Tools)
-#   2. src/uav_risk/stage2/agent/ace_agent.py (Core ReAct Controller)
-#   3. tests/unit/test_ace_agent.py (8-Gate Verification Suite)
+# Depends on:
+#   - src/uav_risk/stage2/agent/agent_schemas.py (ConditionalGoConstraint, FeatureAssessment, ReasoningStep, ToolCall)
 #
-# All class interfaces, data models, and signatures are tightly locked.
-# ====================================================================================
+# Consumed by:
+#   - src/uav_risk/stage2/agent/ace_agent.py
+#   - tests/unit/test_ace_agent.py
+# =====================================================================

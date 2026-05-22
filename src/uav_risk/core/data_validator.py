@@ -55,7 +55,7 @@ class DataValidator:
     
     def __init__(self) -> None:
         self.all_feature_names = get_all_feature_names()
-        # 🎯 الحل الهندسي الحاسم: مواءمة القفل الصارم ديناميكياً مع الميزات الفعلية المتاحة في مصفوفة أعمدة النموذج
+        # مواءمة القفل الصارم ديناميكياً مع الميزات الفعلية المتاحة في مصفوفة أعمدة النموذج
         self.core_features = set(get_core_features()).intersection(set(self.all_feature_names))
         from uav_risk.core.imputation_strategy import ImputationStrategy
         self.imputation_strategy = ImputationStrategy()
@@ -110,7 +110,7 @@ class DataValidator:
                     if missing_feature in result.missing_core_features:
                         result.missing_core_features.remove(missing_feature)
 
-        # الخطوة 3: الحساب الديناميكي والمحصن لجميع الميزات المشتقة المركبة (feat_*)
+        # الخطوة 3: الحساب الديناميكي لجميع الميزات المشتقة المركبة (feat_*)
         for name in self.all_feature_names:
             if name.startswith("feat_"):
                 imputed_val, reason = self.imputation_strategy.get_imputed_value(
@@ -126,7 +126,7 @@ class DataValidator:
                     correction_reason=reason, is_core_feature=False
                 ))
 
-        # الخطوة 4: شبكة الأمان الأخيرة لضمان تماسك وخلو مصفوفة الـ 198 ميزة من القيم الشاذة (NaN)
+        # الخطوة 4: شبكة الأمان الأخيرة لضمان تماسك مصفوفة الـ 198 ميزة من القيم الشاذة (NaN)
         self._final_safety_check(partial_validated, result)
         result.validated_features = partial_validated
         
@@ -184,6 +184,16 @@ class DataValidator:
         final_val = val_float
         reasons = []
 
+        # حماية فيزيائية: إذا كانت الميزة من الـ 40 الأساسية وهي خارج المدى الآمن (Warning) مررها كاملة بلا تعديل
+        if is_core:
+            if (safe_min is not None and final_val < safe_min) or (safe_max is not None and final_val > safe_max):
+                return FeatureValidationRecord(
+                    feature_name=name, original_value=raw_value, final_value=final_val,
+                    status="PROVIDED", was_missing=False, was_out_of_range=True, was_invalid_type=False,
+                    correction_reason="CORE OPERATIONAL WARNING: Preserved raw value natively for cognitive and ML safety review.",
+                    is_core_feature=is_core
+                )
+
         if safe_min is not None and final_val < safe_min:
             final_val = float(safe_min)
             reasons.append(f"Clipped to min ({safe_min})")
@@ -225,8 +235,6 @@ class DataValidator:
         all_provided = sum(1 for r in records if r.status in ["PROVIDED", "CORRECTED", "DERIVED"])
         return min(1.0, (core_provided / len(core_records)) * 0.70 + (all_provided / len(self.all_feature_names)) * 0.30)
 
-# =====================================================================
-# Consistency check: All signatures stable, no conflicts found.
 # =====================================================================
 # Architectural Registry Block:
 # This file serves as the strict pipeline gatekeeper enforcing dynamic core features lock compliance.

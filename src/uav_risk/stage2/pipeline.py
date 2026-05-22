@@ -1,132 +1,223 @@
-"""
-ACE System Master Pipeline (V15.0 - Absolute Apex / Mission Critical)
-===================================================================
-الدور: المايسترو الذي يربط المرحلة الأولى (ML) والمرحلة الثانية (Agents) في تدفق واحد متكامل.
-
-التكاملات العبقرية في V15:
-1. الاستيعاب الكامل: يمرر الـ 50 عاموداً كاملة لجميع الوكلاء (No Data Evaporation).
-2. استشارة الـ ML: يستدعي المرحلة الأولى كمستشار بنسبة 10% فقط.
-3. التدقيق الجنائي: يبني حزمة الأدلة (Evidence Pack) ويفعل نظام التقارير المطور.
-4. الصلابة: معالجة شاملة للأخطاء (Circuit Breaker Aware) وتطهير نهائي للبيانات.
-"""
-
-import os
-import time
+# File Path: src/uav_risk/stage2/pipeline.py
 import asyncio
-import logging
-from typing import Dict, Any, Optional
+import json
+import time
+from typing import Dict, Any, List, Tuple, Optional
+import numpy as np
+import structlog
+from pydantic import BaseModel, Field
 
-# ─── 1. استيراد المحركات والعقود ───
-from uav_risk.stage2.input_contract import MasterFlightPayload
-from uav_risk.stage2.schemas import ConsensusReport
-from uav_risk.stage2.policies.deterministic_core import DeterministicCore
-from uav_risk.stage1.infer import run_stage1_inference
-from uav_risk.stage2.evidence import EvidenceBuilder
-from uav_risk.utils.json_sanitize import sanitize_for_json
+# الاستيرادات المطلقة لجميع المراحل الخمسة للنظام الجوي لضمان الامتثال المعماري
+from src.uav_risk.core.contracts import MasterFlightPayload
+from src.uav_risk.core.data_validator import DataValidator, ValidationResult
+from src.uav_risk.core.imputation_strategy import ImputationStrategy
+from src.uav_risk.core.feature_router import FeatureRouter
+from src.uav_risk.ml.loader import Stage1Bundle
+from src.uav_risk.ml.inference import run_stage1_inference
+from src.uav_risk.ml.schemas import MLResult
+from src.uav_risk.stage2.rag.rag_core import AsyncRAGCore
+from src.uav_risk.stage2.rag.groq_llm import GroqLLM
+from src.uav_risk.stage2.agent.agent_schemas import AgentDecision
+from src.uav_risk.stage2.agent.ace_agent import ACEReActAgent
+from src.uav_risk.stage2.evidence import EvidenceBuilder, AuditEvidencePack
+from src.uav_risk.stage2.llm.report_writer import ReportWriter
 
-logger = logging.getLogger("ACE_Master_Pipeline")
+logger = structlog.get_logger(__name__)
+
+
+class VetoResult(BaseModel):
+    vetoed: bool = Field(..., description="مؤشر يوضح ما إذا تم تفعيل حظر الطيران القطعي أم لا")
+    reason: str = Field(..., description="السبب التنظيمي أو الفيزيائي المفصل للحظر")
+
+
+class DeterministicCore:
+    def pre_flight_veto_check(self, tier0_data: dict) -> VetoResult:
+        logger.info("tier0_deterministic_veto_check_initiated", components=list(tier0_data.keys()))
+        if tier0_data.get("in_restricted_zone") and float(tier0_data["in_restricted_zone"]) > 0:
+            return VetoResult(vetoed=True, reason="Absolute Veto: UAV trajectory breaches designated national no-fly restriction zones.")
+        if tier0_data.get("altitude_m") and float(tier0_data["altitude_m"]) > 400.0:
+            return VetoResult(vetoed=True, reason="Absolute Veto: Operational altitude ceiling breached strict physical emergency threshold (> 400m).")
+        return VetoResult(vetoed=False, reason="Cleared Tier-0 constraints.")
+
+
+def sanitize_for_json(data: Any) -> Any:
+    """مطهّر هيكلي عميق يحول كافة كتل البيانات وأنواع NumPy والـ Enums إلى أنواع JSON متوافقة بدقة."""
+    if isinstance(data, dict):
+        return {k: sanitize_for_json(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [sanitize_for_json(v) for v in data]
+    elif isinstance(data, np.ndarray):
+        return sanitize_for_json(data.tolist())
+    elif isinstance(data, (np.float64, np.float32, np.float16)):
+        return float(data)
+    elif isinstance(data, (np.int64, np.int32, np.int16, np.int8)):
+        return int(data)
+    elif isinstance(data, (np.bool_)):
+        return bool(data)
+    elif hasattr(data, 'value'):
+        return data.value
+    elif hasattr(data, '__dict__'):
+        try:
+            return sanitize_for_json(data.__dict__)
+        except Exception:
+            return str(data)
+    else:
+        return data
+
+
+def _build_veto_response(flight_id: str, veto_result: VetoResult, total_time_ms: float) -> dict:
+    return sanitize_for_json({
+        "flight_id": flight_id,
+        "decision": "NO-GO",
+        "risk_score": 1.0,
+        "ml_risk_class": "High Risk",
+        "ml_risk_score": 1.0,
+        "confidence": 1.0,
+        "critical_findings": [veto_result.reason],
+        "recommendations": ["IMMEDIATE GROUNDING MANDATED BY TIER-0 DETERMINISTIC VETO CORE."],
+        "shap_explanation": [],
+        "legal_citations": [],
+        "report_markdown": f"# ⛔ تقرير حظر طيران فوري قطعي\n\n**السبب:** {veto_result.reason}",
+        "audit_passed": True,
+        "data_quality_score": 1.0,
+        "features_examined_by_agent": 0,
+        "rag_queries_made": 0,
+        "processing_time_ms": total_time_ms,
+        "pipeline_version": "ace_v4.5_veto"
+    })
+
+
+def _build_error_fallback_response(flight_id: str, reason: str, total_time_ms: float) -> dict:
+    return sanitize_for_json({
+        "flight_id": flight_id,
+        "decision": "NO-GO",
+        "risk_score": 0.99,
+        "ml_risk_class": "High Risk",
+        "ml_risk_score": 0.99,
+        "confidence": 1.0,
+        "critical_findings": [f"Pipeline Execution Failure Sequence Activated: {reason}"],
+        "recommendations": ["CRITICAL ADAPTIVE INTELLIGENCE FAILURE."],
+        "shap_explanation": [],
+        "legal_citations": [],
+        "report_markdown": f"# ⚠️ تنبيه خط الأنابيب المركزي: وضع الطوارئ الحركي\n\n**طبيعة العطل:** {reason}",
+        "audit_passed": False,
+        "data_quality_score": 0.0,
+        "features_examined_by_agent": 0,
+        "rag_queries_made": 0,
+        "processing_time_ms": total_time_ms,
+        "pipeline_version": "ace_v4.5_fallback"
+    })
+
 
 async def run_ace_pipeline(
     flight_id: str,
     payload: MasterFlightPayload,
-    full_telemetry: Dict[str, Any], # القاموس الكامل للـ 50 عاموداً
-    graph_app: Any,                # LangGraph Compiled App
-    report_writer: Any             # SafetyReportWriter
-) -> Dict[str, Any]:
-    """
-    تشغيل السلسلة الكاملة لتقييم المخاطر (End-to-End).
-    """
-    t_start = time.perf_counter()
+    full_telemetry: dict,
+    stage1_bundle: Stage1Bundle,
+    rag_core: AsyncRAGCore,
+    groq_llm: GroqLLM,
+    feature_defs: dict,
+    report_writer: ReportWriter
+) -> dict:
+    logger.info("run_ace_pipeline_sequence_initiated", flight_id=flight_id)
+    start_time = time.perf_counter()
     
     try:
-        # ── الخطوة 1: البوابة الحتمية (Tier-0 Gateway) ──
-        # التحقق من سلامة هيكل البيانات فقط (Schema Validation)
-        veto_check = DeterministicCore.pre_flight_veto_check(full_telemetry)
-        if veto_check.is_veto:
-            logger.warning(f"[{flight_id}] Tier-0 Veto Triggered: {veto_check.reason}")
-            return _build_veto_response(flight_id, veto_check)
-
-        # ── الخطوة 2: استشارة الـ ML (Stage 1 Inference) ──
-        # تشغيل الموديل الإحصائي كمستشار بنسبة 10%
-        # نقوم بحقن النتيجة داخل القاموس لكي يراها وكيل الإجماع (Consensus Agent)
-        ml_consultant_result = run_stage1_inference(full_telemetry)
-        full_telemetry["stage1_ml_risk_score"] = ml_consultant_result.risk_score
-        full_telemetry["stage1_ml_confidence"] = ml_consultant_result.confidence
-
-        # ── الخطوة 3: تشغيل مجلس الوكلاء (ACE LangGraph) ──
-        # إدخال الـ 50 عاموداً في "عروق" النظام (AgentState)
-        initial_state = {
-            "flight_id": flight_id,
-            "telemetry": full_telemetry,
-            "messages": [],
-            "iteration_count": 0,
-            "graph_start_time_ms": t_start * 1000
-        }
-
-        # تشغيل الغراف مع نظام الـ Thread ID لمنع تداخل الرحلات
-        config = {"configurable": {"thread_id": flight_id}}
-        final_graph_state = await graph_app.ainvoke(initial_state, config=config)
+        # STEP 1 — Tier-0 Veto Verification
+        tier0_inputs = payload.to_tier0_dict()
+        veto_checker = DeterministicCore()
+        veto = veto_checker.pre_flight_veto_check(tier0_inputs)
         
-        consensus: ConsensusReport = final_graph_state.get("consensus_report")
-        if not consensus:
-            raise RuntimeError("Council failed to reach a consensus report.")
-
-        # ── الخطوة 4: بناء حزمة الأدلة والتقرير الاحترافي ──
-        pipeline_time_ms = (time.perf_counter() - t_start) * 1000
+        if veto.vetoed:
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+            return _build_veto_response(flight_id, veto, elapsed_ms)
+            
+        logger.info("pipeline_gate_tier0_cleared", flight_id=flight_id)
         
-        # بناء الأدلة الجنائية (Evidence Pack) التي طلبناها
-        evidence_pack = EvidenceBuilder.build_final_pack(
-            flight_id=flight_id,
-            payload=payload,
-            consensus_report=consensus,
-            full_telemetry=full_telemetry,
-            processing_time_ms=pipeline_time_ms
-        )
+        # STEP 2 — Production Data Validation
+        flat_features = payload.flatten_for_ml()
+        validator = DataValidator()
+        validation_result = validator.validate_and_store(flat_features)
+        
+        # STEP 3 — Feature Routing
+        feature_mapping = stage1_bundle.feature_mapping
+        router = FeatureRouter(feature_defs, feature_mapping)
+        feature_vector = router.route_to_vector(validation_result.validated_features)
+        context_pool = router.route_to_context_pool(validation_result.validated_features)
+        
+        # STEP 4 — Machine Learning Inference
+        ml_result = run_stage1_inference(bundle=stage1_bundle, feature_vector=feature_vector, feature_names=stage1_bundle.feature_names, compute_shap=True)
+        logger.info("pipeline_gate_ml_inference_success", risk_score=ml_result.risk_score)
+        
+        # STEP 5 — Adaptive ACE ReAct Agent
+        agent_engine = ACEReActAgent(llm_client=groq_llm, rag_core=rag_core, feature_defs=feature_defs, config_json=None)
+        try:
+            agent_decision = await asyncio.wait_for(agent_engine.run(validated_features=validation_result.validated_features, ml_result=ml_result, free_text=payload.free_text), timeout=60.0)
+            logger.info("pipeline_gate_agent_reasoning_success", decision=agent_decision.decision)
+        except asyncio.TimeoutError:
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+            return _build_error_fallback_response(flight_id, "Sovereign ReAct Agent Thinking Loop Timeout.", elapsed_ms)
+            
+        # STEP 6 — Secure Digital Evidence Building
+        evidence_pack = EvidenceBuilder.build_final_pack(flight_id=flight_id, validated_features=validation_result.validated_features, validation_result=validation_result, ml_result=ml_result, agent_decision=agent_decision, raw_telemetry=full_telemetry)
+        
+        # STEP 7 — Structurally Grounded Report Generation
+        current_elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+        try:
+            report_outcome = await asyncio.wait_for(report_writer.generate_comprehensive_report(flight_id=flight_id, telemetry_dict=full_telemetry, agent_decision=agent_decision, ml_result=ml_result, evidence_pack=evidence_pack, total_pipeline_time_ms=current_elapsed_ms), timeout=25.0)
+        except Exception as report_exc:
+            logger.error("report_generation_failed_using_inline_markdown_error", error=str(report_exc))
+            report_outcome = {"report_markdown": f"# ⛔ خطأ في توليد التقرير السحابي\n\n**تفاصيل العطل:** {str(report_exc)}", "audit_passed": False}
+            
+        # STEP 8 — Master Payload Consolidation
+        total_pipeline_time_ms = (time.perf_counter() - start_time) * 1000.0
+        
+        citations_unpacked = []
+        if agent_decision.legal_citations:
+            for citation in agent_decision.legal_citations:
+                if hasattr(citation, '__dict__'):
+                    citations_unpacked.append(citation.__dict__)
+                elif isinstance(citation, dict):
+                    citations_unpacked.append(citation)
+                    
+        shap_clean = []
+        if hasattr(ml_result, 'top_features') and ml_result.top_features:
+            for f in ml_result.top_features[:5]:
+                shap_clean.append({
+                    "feature_name": getattr(f, 'feature_name', str(f)),
+                    "shap_value": getattr(f, 'shap_value', 0.0),
+                    "direction": str(getattr(f, 'direction', 'UNKNOWN'))
+                })
+        
+        # ✅ التصحيح الحتمي: قياس طول المصفوفة بدلاً من التحويل الأعمى لمنع الـ TypeError
+        queries_count = len(agent_decision.rag_queries_made) if isinstance(agent_decision.rag_queries_made, list) else int(agent_decision.rag_queries_made or 0)
 
-        # توليد التقارير الملحمية (Markdown & JSON)
-        report_md = await report_writer.generate_comprehensive_report(
-            report=consensus,
-            flight_id=flight_id,
-            full_telemetry=full_telemetry
-        )
-
-        # ── الخطوة 5: تجميع النتيجة النهائية المطهرة ──
-        final_output = {
-            "status": "SUCCESS",
+        master_output = {
             "flight_id": flight_id,
-            "decision": consensus.final_decision.value,
-            "report_markdown": report_md,
-            "structured_data": evidence_pack.model_dump(),
-            "metrics": {
-                "total_time_ms": pipeline_time_ms,
-                "confidence": consensus.calibrated_confidence_score,
-                "ml_consultant_contribution": "10%"
-            }
+            "decision": str(agent_decision.decision),
+            "risk_score": float(agent_decision.overall_risk_score),
+            "ml_risk_class": str(ml_result.risk_class.value if hasattr(ml_result.risk_class, 'value') else ml_result.risk_class),
+            "ml_risk_score": float(ml_result.risk_score),
+            "confidence": float(agent_decision.confidence),
+            "critical_findings": agent_decision.critical_findings,
+            "recommendations": agent_decision.recommendations,
+            "shap_explanation": shap_clean,
+            "legal_citations": citations_unpacked,
+            "report_markdown": report_outcome["report_markdown"],
+            "audit_passed": bool(report_outcome.get("audit_passed", False)),
+            "data_quality_score": float(validation_result.overall_data_quality_score),
+            "features_examined_by_agent": len(agent_decision.feature_assessments) if agent_decision.feature_assessments else 0,
+            "rag_queries_made": queries_count,
+            "processing_time_ms": float(total_pipeline_time_ms),
+            "pipeline_version": "ACE-v4.5.0-Production-CoreMaster"
         }
+        
+        return sanitize_for_json(master_output)
+        
+    except Exception as pipeline_fatal_exc:
+        total_failed_time_ms = (time.perf_counter() - start_time) * 1000.0
+        return _build_error_fallback_response(flight_id, f"Fatal Master Pipeline Interruption: {str(pipeline_fatal_exc)}", total_failed_time_ms)
 
-        # التطهير الأخير لضمان سلامة الـ JSON
-        return sanitize_for_json(final_output)
-
-    except Exception as e:
-        logger.critical(f"[{flight_id}] Pipeline Catastrophic Failure: {e}", exc_info=True)
-        return _build_error_fallback(flight_id, str(e))
-
-def _build_veto_response(flight_id: str, veto: Any) -> Dict[str, Any]:
-    """بناء رد سريع في حالة فشل البوابة الأولية."""
-    return {
-        "status": "VETO",
-        "flight_id": flight_id,
-        "decision": "NO-GO",
-        "reason": veto.reason,
-        "policy_reference": veto.policy_reference
-    }
-
-def _build_error_fallback(flight_id: str, error_msg: str) -> Dict[str, Any]:
-    """رد الطوارئ في حالة حدوث خطأ غير متوقع في النظام."""
-    return {
-        "status": "SYSTEM_ERROR",
-        "flight_id": flight_id,
-        "decision": "NO-GO",
-        "error_details": error_msg,
-        "instructions": "Manual override required. Check ACE logs."
-    }
+# =====================================================================
+# Consumed by: src/uav_risk/api/main.py
+# =====================================================================

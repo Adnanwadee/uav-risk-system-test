@@ -9,7 +9,11 @@ import json
 import joblib
 import structlog
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+import numpy as np
+import math
+from uav_risk.ml import feature_defs
+from uav_risk.core import data_validator
 
 # إعداد نظام التتبع والـ Logger المركزي للمنظومة
 logger = structlog.get_logger(__name__)
@@ -87,6 +91,24 @@ def load_stage1_bundle(artifacts_dir: str) -> Stage1Bundle:
         validate_bundle(raw_bundle, policy_config_data)
         
         extracted_feature_names = raw_bundle.get("feature_names", raw_feature_mapping.get("feature_names", []))
+
+        # Enforce artifact-authoritative feature ordering and presence
+        artifact_order = feature_defs.get_all_feature_names()
+        if artifact_order:
+            if extracted_feature_names != artifact_order:
+                error_msg = (
+                    "Feature ordering mismatch: extracted bundle feature_names do not match artifact-authoritative mapping."
+                )
+                logger.critical("Bundle feature mapping validation failed", error=error_msg)
+                raise ModelLoadError(error_msg)
+
+        # Ensure all mandatory core features exist in the bundle mapping
+        core_feats = feature_defs.get_core_features()
+        missing_core = [f for f in core_feats if f not in extracted_feature_names]
+        if missing_core:
+            error_msg = f"Bundle missing required core features: {missing_core}"
+            logger.critical("Bundle validation failed - core features absent", missing=missing_core)
+            raise ModelLoadError(error_msg)
         generated_feature_mapping = {name: idx for idx, name in enumerate(extracted_feature_names)}
         
         extracted_training_stats = {
@@ -135,6 +157,93 @@ def validate_bundle(bundle_data: dict, policy_config: dict) -> None:
         raise ValueError("Bundle validation failed: Configuration alignment must match triple categories")
         
     logger.debug("Structural verification constraints successfully cleared")
+
+
+def assemble_feature_vector_from_dict(input_mapping: Dict[str, Any], bundle: Stage1Bundle) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """
+    Given a user-provided mapping of feature_name->value and a loaded Stage1Bundle,
+    produce a numeric numpy feature vector ordered exactly as `bundle.feature_names`.
+
+    Behavior:
+    - If a core feature value is missing or non-numeric -> raises ModelLoadError
+    - For non-core features missing in input -> fill from `feature_defs.get_safe_value()`
+    - If input_mapping contains keys not in feature_names, they are collected as `free_text` (string)
+    Returns (feature_vector, metadata) where metadata contains lists: 'imputed', 'provided', 'free_text'
+    """
+    if not isinstance(input_mapping, dict):
+        raise ModelLoadError("Input mapping must be a dict of feature_name->value")
+
+    feature_names = bundle.feature_names
+    if not feature_names or len(feature_names) == 0:
+        raise ModelLoadError("Bundle has no feature names to assemble vector")
+
+    name_to_idx = {n: i for i, n in enumerate(feature_names)}
+    vec = np.zeros(len(feature_names), dtype=float)
+    imputed = []
+    provided = []
+    free_text_parts = []
+
+    # Run core validation and enrichment early so we can apply derived values
+    try:
+        vr = data_validator.validate_and_enrich(input_mapping)
+    except Exception as e:
+        raise ModelLoadError(f"Validation error: {e}")
+
+    if not vr.is_usable:
+        raise ModelLoadError(f"Core validation failed: {vr.errors}")
+
+    enriched = vr.validated_features
+
+    # treat any unknown keys as free-text intended for the agent
+    for key, val in input_mapping.items():
+        if key not in name_to_idx:
+            # collect free-textizable entries
+            if isinstance(val, str):
+                free_text_parts.append(f"{key}: {val}")
+            else:
+                free_text_parts.append(f"{key}: {repr(val)}")
+
+    # populate vector
+    core_feats = feature_defs.get_core_features()
+    for i, fname in enumerate(feature_names):
+        if fname in input_mapping:
+            raw = input_mapping[fname]
+            try:
+                num = float(raw)
+                if math.isfinite(num):
+                    vec[i] = num
+                    provided.append(fname)
+                    continue
+            except Exception:
+                # fall through to use enriched or safe
+                pass
+
+        # if enriched has a value (core or derived), use it
+        if fname in enriched:
+            try:
+                num = float(enriched[fname])
+                vec[i] = num
+                # mark as provided if originally in input, else imputed
+                if fname in input_mapping:
+                    provided.append(fname)
+                else:
+                    imputed.append(fname)
+                continue
+            except Exception:
+                pass
+
+        # fallback to safe registry
+        vec[i] = feature_defs.get_safe_value(fname)
+        imputed.append(fname)
+
+    metadata = {
+        "imputed": imputed,
+        "provided": provided,
+        "free_text": "\n".join(free_text_parts),
+        "validator_warnings": vr.warnings,
+        "validator_errors": vr.errors
+    }
+    return vec, metadata
 
 # =====================================================================
 # Architectural Registry Block:

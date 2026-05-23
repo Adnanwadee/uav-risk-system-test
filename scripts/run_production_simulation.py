@@ -23,7 +23,7 @@ from uav_risk.ml.feature_defs import get_all_feature_names, get_feature_definiti
 from uav_risk.ml.schemas import MLResult, RiskClass, FeatureImportance
 from uav_risk.ml.loader import Stage1Bundle
 from uav_risk.ml.inference import run_stage1_inference
-from src.uav_risk.stage2.agent.ace_agent import ACEReActAgent
+from uav_risk.stage2.agent.ace_agent import ACEReActAgent
 
 # إعداد الـ Logger المنظم للمنظومة
 logger = structlog.get_logger("Forensic_Harness")

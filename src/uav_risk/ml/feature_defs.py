@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 import os
 import math
-from typing import Dict, Any, Optional
+from pathlib import Path
+from typing import Dict, Any, Optional, Tuple
 
 # تدوين الاسم المستعار لهيكل بيانات الميزة المعياري
 FeatureDefinition = Dict[str, Any]
@@ -819,6 +820,46 @@ def get_all_feature_definitions() -> Dict[str, FeatureDefinition]:
     for name in MISSING_INDICATOR_NAMES:
         all_defs[name] = MISSING_INDICATOR_PATTERN.copy()
         all_defs[name]["name"] = name
+
+    # If artifact mapping exists, produce an ordered dict that exactly follows it
+    try:
+        repo_root = Path(__file__).resolve().parents[3]
+        mapping_path = repo_root / "artifacts" / "stage1_feature_mapping.json"
+        if mapping_path.exists():
+            with open(mapping_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict) and "feature_names" in raw:
+                art_list = list(raw["feature_names"])
+            elif isinstance(raw, list):
+                art_list = list(raw)
+            else:
+                art_list = []
+
+            if art_list:
+                ordered_defs: Dict[str, FeatureDefinition] = {}
+                for name in art_list:
+                    if name in all_defs:
+                        ordered_defs[name] = all_defs[name]
+                    else:
+                        entry = {
+                            "name": name,
+                            "unit": "unknown",
+                            "description": "(inferred placeholder from artifact mapping)",
+                            "safe_min": None,
+                            "safe_max": None,
+                            "critical_low": None,
+                            "critical_high": None,
+                            "is_core": False,
+                            "source": "artifact:stage1_feature_mapping.json"
+                        }
+                        if name in SAFE_VALUES_REGISTRY:
+                            entry["safe_min"] = float(SAFE_VALUES_REGISTRY[name])
+                            entry["safe_max"] = float(SAFE_VALUES_REGISTRY[name])
+                        ordered_defs[name] = entry
+                return ordered_defs
+    except Exception:
+        pass
+
     return all_defs
 
 
@@ -833,21 +874,60 @@ def get_all_feature_names() -> list[str]:
     الدالة الأهم ربطاً بالـ ML. تضمن حتمية وثبات ترتيب الـ 198 ميزة كلياً لمنع انزياح المؤشرات.
     تبحث أولاً في ملف تصفيف الميزات الخاص بـ LightGBM لضمان المحاكاة المطلقة.
     """
-    mapping_path = "/workspaces/uav-risk-system-test/artifacts/stage1_feature_mapping.json"
-    if os.path.exists(mapping_path):
-        try:
-            with open(mapping_path, 'r', encoding='utf-8') as f:
-                raw_mapping = json.load(f)
-            if isinstance(raw_mapping, dict) and "feature_names" in raw_mapping:
-                return list(raw_mapping["feature_names"])
-            if isinstance(raw_mapping, list):
-                return list(raw_mapping)
-        except Exception:
-            pass
-            
-    # السقوط الآمن الحتمي (Deterministic Alphabetical Fallback) عند غياب القطع البرمجية للـ Artifacts
-    # يعيد قائمة مرتبة أبجدياً طولها 198 ميزة بالضبط بشكل قاطع وحتمي لثبات المعمارية
-    return sorted(list(get_all_feature_definitions().keys()))
+    # locate artifact file relative to repository root
+    repo_root = Path(__file__).resolve().parents[3]
+    mapping_path = repo_root / "artifacts" / "stage1_feature_mapping.json"
+    if mapping_path.exists():
+        with open(mapping_path, "r", encoding="utf-8") as f:
+            raw_mapping = json.load(f)
+        # Accept either {"feature_names": [...]} or a plain list
+        if isinstance(raw_mapping, dict) and "feature_names" in raw_mapping:
+            return list(raw_mapping["feature_names"])
+        if isinstance(raw_mapping, list):
+            return list(raw_mapping)
+
+    # Deterministic fallback: return keys from the SSoT feature defs in stable insertion order
+    return list(get_all_feature_definitions().keys())
+
+
+def validate_feature_registry_against_artifact(strict: bool = True) -> Tuple[bool, str]:
+    """Validate that the in-code feature registry matches the artifact mapping exactly.
+
+    Returns (ok, message). If `strict` is True, mismatches should be treated as failures.
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    mapping_path = repo_root / "artifacts" / "stage1_feature_mapping.json"
+    code_names = get_all_feature_definitions().keys()
+    code_list = list(code_names)
+
+    if not mapping_path.exists():
+        msg = f"Artifact mapping not found at {mapping_path}"
+        if strict:
+            return False, msg
+        return True, msg
+
+    with open(mapping_path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+
+    if isinstance(raw, dict) and "feature_names" in raw:
+        art_list = list(raw["feature_names"])
+    elif isinstance(raw, list):
+        art_list = list(raw)
+    else:
+        return False, "Unknown artifact format for feature mapping"
+
+    if code_list == art_list:
+        return True, "Feature registry matches artifact mapping exactly"
+
+    # prepare helpful diff message
+    if len(code_list) != len(art_list):
+        return False, f"Length mismatch: code={len(code_list)} artifact={len(art_list)}"
+
+    for i, (c, a) in enumerate(zip(code_list, art_list)):
+        if c != a:
+            return False, f"Mismatch at pos {i}: code='{c}' != artifact='{a}'"
+
+    return False, "Unknown mismatch"
 
 
 def get_core_features() -> list[str]:
@@ -917,6 +997,52 @@ def validate_feature_value(feature_name: str, value: Any) -> tuple[bool, str]:
         return True, f"WARNING: {feature_name} = {num_value} above safe maximum limit {defn['safe_max']}"
         
     return True, f"PASS: {feature_name} = {num_value} remains within flight limitations envelope."
+
+
+def validate_core_feature_ranges(feature_names: list[str], feature_vector: list[float], strict: bool = True) -> tuple[bool, str]:
+    """
+    Validates the 40 core features against their safe and critical bounds.
+    - `feature_names`: ordered list of names corresponding to `feature_vector` indices.
+    - `feature_vector`: sequence of numeric values matching `feature_names` order.
+    Returns (ok, message). If `strict` is True, any critical violation fails.
+    """
+    if len(feature_names) != len(feature_vector):
+        return False, "Feature names and vector length mismatch"
+
+    name_to_idx = {n: i for i, n in enumerate(feature_names)}
+    cores = get_core_features()
+    messages = []
+
+    for core in cores:
+        if core not in name_to_idx:
+            return False, f"Core feature missing: {core}"
+        idx = name_to_idx[core]
+        try:
+            val = float(feature_vector[idx])
+        except Exception:
+            return False, f"Core feature '{core}' has non-numeric value at index {idx}"
+
+        defn = get_feature_definition(core)
+        if defn is None:
+            # No definition available; skip range checks but warn
+            messages.append(f"WARN: no def for core feature {core}")
+            continue
+
+        # Critical violations cause failure when strict
+        if defn.get("critical_low") is not None and val < defn["critical_low"]:
+            return False, f"CRITICAL: {core}={val} < critical_low {defn['critical_low']}"
+        if defn.get("critical_high") is not None and val > defn["critical_high"]:
+            return False, f"CRITICAL: {core}={val} > critical_high {defn['critical_high']}"
+
+        # Safe bounds produce warnings but do not fail strict unless desired
+        if defn.get("safe_min") is not None and val < defn["safe_min"]:
+            messages.append(f"WARN: {core}={val} below safe_min {defn['safe_min']}")
+        if defn.get("safe_max") is not None and val > defn["safe_max"]:
+            messages.append(f"WARN: {core}={val} above safe_max {defn['safe_max']}")
+
+    if messages:
+        return True, "; ".join(messages)
+    return True, "All core features within safe bounds"
 
 
 def get_features_by_category(category: str) -> list[str]:

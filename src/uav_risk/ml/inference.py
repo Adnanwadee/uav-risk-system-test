@@ -21,6 +21,7 @@ from uav_risk.ml.schemas import (
     calculate_risk_score, 
     probabilities_to_dict
 )
+from uav_risk.ml import feature_defs
 from uav_risk.ml.loader import Stage1Bundle
 from uav_risk.ml.shap_explain import ShapExplainer
 
@@ -63,6 +64,23 @@ def run_stage1_inference(
             actual_model_columns = [f"Column_{i}" for i in range(198)]
             
         df_model_input = pd.DataFrame(X_processed, columns=actual_model_columns)
+
+        # Enforce presence and non-missing values for the canonical core features (fail-fast)
+        core_features = feature_defs.get_core_features()
+        for core in core_features:
+            if core not in actual_model_columns:
+                raise ValueError(f"Core feature missing from model columns: {core}")
+            idx = actual_model_columns.index(core)
+            val = X_processed[0, idx]
+            if np.isnan(val) or np.isinf(val):
+                raise ValueError(f"Core feature '{core}' has invalid/missing value: {val}")
+
+        # Validate core feature ranges (critical violations abort)
+        ok, msg = feature_defs.validate_core_feature_ranges(actual_model_columns, X_processed[0].tolist(), strict=True)
+        if not ok:
+            raise ValueError(f"Core feature range validation failed: {msg}")
+        if msg and msg.startswith("WARN"):
+            logger.warning("Core feature range warnings", detail=msg)
 
         # تنفيذ التنبؤ المباشر من جراف نموذج LightGBM
         try:

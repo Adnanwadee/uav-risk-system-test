@@ -1,3 +1,145 @@
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Dict, Any, List, Tuple, Optional
+import math
+
+from uav_risk.ml import feature_defs
+
+
+@dataclass
+class ValidationResult:
+    is_usable: bool
+    validated_features: Dict[str, float]
+    errors: List[str]
+    warnings: List[str]
+
+
+def _to_float(value: Any) -> Tuple[Optional[float], Optional[str]]:
+    try:
+        num = float(value)
+        if not math.isfinite(num):
+            return None, "non-finite"
+        return num, None
+    except Exception:
+        return None, "not-numeric"
+
+
+def validate_core_numeric_fields(input_mapping: Dict[str, Any], strict_bounds: Optional[Dict[str, Tuple[Optional[float], Optional[float]]]] = None) -> ValidationResult:
+    """
+    Validate the canonical core features are present and within bounds.
+
+    - input_mapping: mapping of feature_name -> raw value (user or preprocessor)
+    - strict_bounds: optional override of (safe_min, safe_max) or (critical_low, critical_high)
+
+    Returns ValidationResult indicating usability, converted floats, errors and warnings.
+    """
+    cores = feature_defs.get_core_features()
+    validated: Dict[str, float] = {}
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    for feat in cores:
+        if feat not in input_mapping:
+            errors.append(f"missing core feature: {feat}")
+            continue
+
+        raw = input_mapping[feat]
+        num, err = _to_float(raw)
+        if err is not None:
+            errors.append(f"core feature '{feat}' invalid: {err} (value={raw})")
+            continue
+
+        # fetch definition
+        defn = feature_defs.get_feature_definition(feat) or {}
+
+        # allow override bounds
+        safe_min = None
+        safe_max = None
+        critical_low = defn.get("critical_low")
+        critical_high = defn.get("critical_high")
+        if strict_bounds and feat in strict_bounds:
+            safe_min, safe_max = strict_bounds[feat]
+        else:
+            safe_min = defn.get("safe_min")
+            safe_max = defn.get("safe_max")
+
+        # Check critical violations
+        if critical_low is not None and num < critical_low:
+            errors.append(f"CRITICAL: {feat}={num} < critical_low {critical_low}")
+            continue
+        if critical_high is not None and num > critical_high:
+            errors.append(f"CRITICAL: {feat}={num} > critical_high {critical_high}")
+            continue
+
+        # Safe bounds -> warnings
+        if safe_min is not None and num < safe_min:
+            warnings.append(f"{feat}={num} below safe_min {safe_min}")
+        if safe_max is not None and num > safe_max:
+            warnings.append(f"{feat}={num} above safe_max {safe_max}")
+
+        validated[feat] = num
+
+    is_usable = len(errors) == 0
+    return ValidationResult(is_usable=is_usable, validated_features=validated, errors=errors, warnings=warnings)
+
+
+def solve_physical_consistency(validated_features: Dict[str, float]) -> Dict[str, float]:
+    """Compute derived physical features and return an enriched features dict.
+
+    Examples of derived features:
+    - `air_density_kg_m3` approximated from altitude (simple exponential decay)
+    - `uav_battery_wh` computed from `uav_battery_capacity_mah` and `uav_battery_voltage_v` if missing
+    """
+    out = dict(validated_features)
+
+    # derive air density from altitude (AGL) using a simple scale height model
+    alt_m = out.get("mission_altitude_m") or out.get("airspace_altitude_agl_min_m") or 0.0
+    try:
+        alt = float(alt_m)
+    except Exception:
+        alt = 0.0
+    # scale height ~8500 m, sea-level density 1.225 kg/m^3
+    rho = 1.225 * math.exp(-alt / 8500.0)
+    out["air_density_kg_m3"] = round(rho, 4)
+
+    # compute battery Wh if capacity (mAh) and voltage (V) present
+    if "uav_battery_capacity_mah" in out and "uav_battery_voltage_v" in out:
+        try:
+            mah = float(out["uav_battery_capacity_mah"])
+            v = float(out["uav_battery_voltage_v"])
+            wh = (mah / 1000.0) * v
+            out.setdefault("uav_battery_wh", round(wh, 2))
+        except Exception:
+            pass
+
+    # reserve utilization: if uav_battery_wh and mission_time_budget_s and battery_model_hover_power_w present
+    if "uav_battery_wh" in out and "mission_time_budget_s" in out and "uav_battery_model_hover_power_w" in out:
+        try:
+            wh = float(out["uav_battery_wh"])
+            t_s = float(out["mission_time_budget_s"])
+            power_w = float(out["uav_battery_model_hover_power_w"])
+            # energy needed approx = power * time (hrs)
+            needed_wh = power_w * (t_s / 3600.0)
+            reserve_util = min(max((needed_wh / wh) if wh > 0 else 1.0, 0.0), 1.0)
+            out["feat_reserve_utilization"] = round(reserve_util, 4)
+        except Exception:
+            pass
+
+    return out
+
+
+def validate_and_enrich(input_mapping: Dict[str, Any], strict_bounds: Optional[Dict[str, Tuple[Optional[float], Optional[float]]]] = None) -> ValidationResult:
+    """Convenience: validate core features and enrich derived fields.
+
+    Returns ValidationResult with validated_features extended by derived values when usable.
+    """
+    vr = validate_core_numeric_fields(input_mapping, strict_bounds=strict_bounds)
+    if not vr.is_usable:
+        return vr
+
+    enriched = solve_physical_consistency(vr.validated_features)
+    vr.validated_features = enriched
+    return vr
 """
 Module: uav_risk.core.data_validator
 Purpose: Advanced high-integrity data validation core enforcing a strict core features lock down

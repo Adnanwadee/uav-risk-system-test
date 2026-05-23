@@ -8,16 +8,16 @@ from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 
 # الاستيرادات المطلقة من كافة طبقات النظام الجوي الموحد لضمان التوافق المعماري الحتمي
-from src.uav_risk.core.config import get_settings
-from src.uav_risk.core.logging import setup_logging, set_flight_id, set_request_id
-from src.uav_risk.core.contracts import MasterFlightPayload
-from src.uav_risk.ml.loader import Stage1Bundle, load_stage1_bundle
-from src.uav_risk.ml.feature_defs import FEATURE_DEFINITIONS
-from src.uav_risk.stage2.rag.rag_core import AsyncRAGCore
-from src.uav_risk.stage2.rag.config import GroqLLMConfig
-from src.uav_risk.stage2.rag.groq_llm import GroqLLM
-from src.uav_risk.stage2.llm.report_writer import ReportWriter
-from src.uav_risk.stage2.pipeline import run_ace_pipeline
+from uav_risk.core.config import get_settings
+from uav_risk.core.logging import setup_logging, set_flight_id, set_request_id
+from uav_risk.core.contracts import MasterFlightPayload
+from uav_risk.ml.loader import Stage1Bundle, load_stage1_bundle, assemble_feature_vector_from_dict
+from uav_risk.ml.feature_defs import FEATURE_DEFINITIONS
+from uav_risk.stage2.rag.rag_core import AsyncRAGCore
+from uav_risk.stage2.rag.config import GroqLLMConfig
+from uav_risk.stage2.rag.groq_llm import GroqLLM
+from uav_risk.stage2.llm.report_writer import ReportWriter
+from uav_risk.stage2.pipeline import run_ace_pipeline
 
 # تهيئة نظام السجلات الموحد للمنظومة بناءً على بيئة التشغيل
 settings = get_settings()
@@ -128,6 +128,10 @@ async def evaluate_flight(payload: MasterFlightPayload, request: Request) -> JSO
             )
             
         try:
+            # Assemble feature vector early and pass precomputed results to pipeline
+            input_map = payload.model_dump()
+            feature_vec, fv_meta = assemble_feature_vector_from_dict(input_map, app_state.stage1_bundle)
+
             pipeline_result = await run_ace_pipeline(
                 flight_id=flight_id,
                 payload=payload,
@@ -136,7 +140,9 @@ async def evaluate_flight(payload: MasterFlightPayload, request: Request) -> JSO
                 rag_core=app_state.rag_core,
                 groq_llm=app_state.groq_llm,
                 feature_defs=app_state.feature_defs,
-                report_writer=app_state.report_writer
+                report_writer=app_state.report_writer,
+                precomputed_feature_vector=feature_vec,
+                precomputed_validation_result=None
             )
             return JSONResponse(content=jsonable_encoder(pipeline_result))
             

@@ -8,19 +8,19 @@ import structlog
 from pydantic import BaseModel, Field
 
 # الاستيرادات المطلقة لجميع المراحل الخمسة للنظام الجوي لضمان الامتثال المعماري
-from src.uav_risk.core.contracts import MasterFlightPayload
-from src.uav_risk.core.data_validator import DataValidator, ValidationResult
-from src.uav_risk.core.imputation_strategy import ImputationStrategy
-from src.uav_risk.core.feature_router import FeatureRouter
-from src.uav_risk.ml.loader import Stage1Bundle
-from src.uav_risk.ml.inference import run_stage1_inference
-from src.uav_risk.ml.schemas import MLResult
-from src.uav_risk.stage2.rag.rag_core import AsyncRAGCore
-from src.uav_risk.stage2.rag.groq_llm import GroqLLM
-from src.uav_risk.stage2.agent.agent_schemas import AgentDecision
-from src.uav_risk.stage2.agent.ace_agent import ACEReActAgent
-from src.uav_risk.stage2.evidence import EvidenceBuilder, AuditEvidencePack
-from src.uav_risk.stage2.llm.report_writer import ReportWriter
+from uav_risk.core.contracts import MasterFlightPayload
+from uav_risk.core.data_validator import validate_and_enrich, ValidationResult
+from uav_risk.core.imputation_strategy import ImputationStrategy
+from uav_risk.core.feature_router import FeatureRouter
+from uav_risk.ml.loader import Stage1Bundle
+from uav_risk.ml.inference import run_stage1_inference
+from uav_risk.ml.schemas import MLResult
+from uav_risk.stage2.rag.rag_core import AsyncRAGCore
+from uav_risk.stage2.rag.groq_llm import GroqLLM
+from uav_risk.stage2.agent.agent_schemas import AgentDecision
+from uav_risk.stage2.agent.ace_agent import ACEReActAgent
+from uav_risk.stage2.evidence import EvidenceBuilder, AuditEvidencePack
+from uav_risk.stage2.llm.report_writer import ReportWriter
 
 logger = structlog.get_logger(__name__)
 
@@ -118,6 +118,8 @@ async def run_ace_pipeline(
     groq_llm: GroqLLM,
     feature_defs: dict,
     report_writer: ReportWriter
+    , precomputed_feature_vector: Optional[np.ndarray] = None
+    , precomputed_validation_result: Optional[ValidationResult] = None
 ) -> dict:
     logger.info("run_ace_pipeline_sequence_initiated", flight_id=flight_id)
     start_time = time.perf_counter()
@@ -135,15 +137,25 @@ async def run_ace_pipeline(
         logger.info("pipeline_gate_tier0_cleared", flight_id=flight_id)
         
         # STEP 2 — Production Data Validation
-        flat_features = payload.flatten_for_ml()
-        validator = DataValidator()
-        validation_result = validator.validate_and_store(flat_features)
+        if precomputed_validation_result is not None:
+            validation_result = precomputed_validation_result
+            flat_features = validation_result.validated_features
+        else:
+            flat_features = payload.flatten_for_ml()
+            validation_result = validate_and_enrich(flat_features)
+            if not validation_result.is_usable:
+                elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+                return _build_error_fallback_response(flight_id, f"Validation failed: {validation_result.errors}", elapsed_ms)
         
-        # STEP 3 — Feature Routing
-        feature_mapping = stage1_bundle.feature_mapping
-        router = FeatureRouter(feature_defs, feature_mapping)
-        feature_vector = router.route_to_vector(validation_result.validated_features)
-        context_pool = router.route_to_context_pool(validation_result.validated_features)
+        # STEP 3 — Feature Routing (use precomputed vector if provided)
+        if precomputed_feature_vector is not None:
+            feature_vector = precomputed_feature_vector
+            context_pool = {}
+        else:
+            feature_mapping = stage1_bundle.feature_mapping
+            router = FeatureRouter(feature_defs, feature_mapping)
+            feature_vector = router.route_to_vector(validation_result.validated_features)
+            context_pool = router.route_to_context_pool(validation_result.validated_features)
         
         # STEP 4 — Machine Learning Inference
         ml_result = run_stage1_inference(bundle=stage1_bundle, feature_vector=feature_vector, feature_names=stage1_bundle.feature_names, compute_shap=True)

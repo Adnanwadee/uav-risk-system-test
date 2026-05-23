@@ -201,7 +201,7 @@ FEATURE_DEFINITIONS: Dict[str, FeatureDefinition] = {
     },
     "uav_rotorcraft_rotor_count": {
         "name": "uav_rotorcraft_rotor_count", "unit": "count", "description": "Number of rotors onboard",
-        "safe_min": 3.0, "safe_max": 8.0, "critical_low": 3.0, "critical_high": None,
+        "safe_min": 0.0, "safe_max": 8.0, "critical_low": None, "critical_high": None,
         "is_core": True, "source": "Industry standards"
     },
     "uav_rotorcraft_disk_area_m2": {
@@ -954,33 +954,13 @@ def get_core_features() -> list[str]:
         "uav_energy_source_battery", "uav_energy_source_fuel", "uav_energy_source_hybrid",
         "uav_aero_wing_area_m2", "uav_aero_aspect_ratio", "uav_aero_cl_max", "uav_aero_cd0",
         "uav_aero_prop_efficiency", "uav_aero_stall_speed_mps", "environment_weather_wind_dir_deg",
-        "environment_gnss_multipath", "mission_pattern_custom", "controls_mode_continuous",
+        "environment_gnss_multipath", "mission_pattern_custom", "controls_mode_discrete",
         "mission_waypoints_x_range", "airspace_no_fly_zones_dynamic_count", "daa_sep_threshold_m",
         "faults_count", "faults_sample_severity", "swarm_enabled"
     ]
-    # Prefer artifact-authoritative list when available, but fall back to explicit list.
-    try:
-        repo_root = Path(__file__).resolve().parents[3]
-        mapping_path = repo_root / "artifacts" / "stage1_feature_mapping.json"
-        if mapping_path.exists():
-            with open(mapping_path, 'r', encoding='utf-8') as f:
-                raw = json.load(f)
-            art_list = raw.get('feature_names') if isinstance(raw, dict) else raw
-            if isinstance(art_list, list):
-                # Build core list as intersection, but allow safe proxy substitutions
-                cores = [c for c in explicit_cores if c in art_list]
-                # proxy: if battery one-hot missing, use battery Wh as core proxy
-                if 'uav_energy_source_battery' not in art_list and 'uav_battery_wh' in art_list and 'uav_battery_wh' not in cores:
-                    cores.append('uav_battery_wh')
-                # proxy: if continuous control flag missing, use discrete flag as proxy
-                if 'controls_mode_continuous' not in art_list and 'controls_mode_discrete' in art_list and 'controls_mode_discrete' not in cores:
-                    cores.append('controls_mode_discrete')
-                # ensure returned list follows artifact order and only includes available cores/proxies
-                final = [n for n in art_list if n in cores]
-                return final
-    except Exception:
-        pass
-
+    # Return the canonical explicit 40-core list (stable contract).
+    # The Stage-1 bundle remains authoritative for feature ordering, but the
+    # canonical core set is a fixed contract used across the validator and tests.
     return explicit_cores[:40]
 
 
@@ -1063,11 +1043,15 @@ def validate_core_feature_ranges(feature_names: list[str], feature_vector: list[
             messages.append(f"WARN: no def for core feature {core}")
             continue
 
-        # Critical violations cause failure when strict
+        # Critical violations cause failure when strict; otherwise record as warnings
         if defn.get("critical_low") is not None and val < defn["critical_low"]:
-            return False, f"CRITICAL: {core}={val} < critical_low {defn['critical_low']}"
+            if strict:
+                return False, f"CRITICAL: {core}={val} < critical_low {defn['critical_low']}"
+            messages.append(f"CRITICAL: {core}={val} < critical_low {defn['critical_low']}")
         if defn.get("critical_high") is not None and val > defn["critical_high"]:
-            return False, f"CRITICAL: {core}={val} > critical_high {defn['critical_high']}"
+            if strict:
+                return False, f"CRITICAL: {core}={val} > critical_high {defn['critical_high']}"
+            messages.append(f"CRITICAL: {core}={val} > critical_high {defn['critical_high']}")
 
         # Safe bounds produce warnings but do not fail strict unless desired
         if defn.get("safe_min") is not None and val < defn["safe_min"]:

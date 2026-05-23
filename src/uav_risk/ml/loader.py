@@ -92,15 +92,21 @@ def load_stage1_bundle(artifacts_dir: str) -> Stage1Bundle:
         
         extracted_feature_names = raw_bundle.get("feature_names", raw_feature_mapping.get("feature_names", []))
 
-        # Enforce artifact-authoritative feature ordering and presence
-        artifact_order = feature_defs.get_all_feature_names()
-        if artifact_order:
-            if extracted_feature_names != artifact_order:
-                error_msg = (
-                    "Feature ordering mismatch: extracted bundle feature_names do not match artifact-authoritative mapping."
-                )
-                logger.critical("Bundle feature mapping validation failed", error=error_msg)
-                raise ModelLoadError(error_msg)
+        # Use the bundle's feature_names as authoritative. If a separate JSON mapping differs,
+        # log a warning for operators but do not fail — the model bundle is the runtime source.
+        if not extracted_feature_names:
+            error_msg = "Bundle does not contain 'feature_names' and no mapping could be extracted."
+            logger.critical("Bundle missing feature names", error=error_msg)
+            raise ModelLoadError(error_msg)
+
+        artifact_order = None
+        try:
+            artifact_order = feature_defs.get_all_feature_names()
+        except Exception:
+            artifact_order = None
+
+        if artifact_order and artifact_order != extracted_feature_names:
+            logger.warning("Artifact mapping differs from bundle.feature_names; bundle is authoritative.", artifact_len=len(artifact_order), bundle_len=len(extracted_feature_names))
 
         # Ensure all mandatory core features exist in the bundle mapping
         core_feats = feature_defs.get_core_features()

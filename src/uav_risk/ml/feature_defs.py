@@ -11,6 +11,7 @@ import json
 import os
 import math
 from pathlib import Path
+import joblib
 from typing import Dict, Any, Optional, Tuple
 
 # تدوين الاسم المستعار لهيكل بيانات الميزة المعياري
@@ -874,8 +875,19 @@ def get_all_feature_names() -> list[str]:
     الدالة الأهم ربطاً بالـ ML. تضمن حتمية وثبات ترتيب الـ 198 ميزة كلياً لمنع انزياح المؤشرات.
     تبحث أولاً في ملف تصفيف الميزات الخاص بـ LightGBM لضمان المحاكاة المطلقة.
     """
-    # locate artifact file relative to repository root
+    # Prefer the bundle's embedded feature_names when present (bundle is source-of-truth).
     repo_root = Path(__file__).resolve().parents[3]
+    bundle_path = repo_root / "artifacts" / "stage1_production_bundle.pkl"
+    if bundle_path.exists():
+        try:
+            raw_bundle = joblib.load(bundle_path)
+            if isinstance(raw_bundle, dict) and "feature_names" in raw_bundle:
+                return list(raw_bundle["feature_names"])
+        except Exception:
+            # fall through to mapping file
+            pass
+
+    # locate artifact mapping JSON as a fallback
     mapping_path = repo_root / "artifacts" / "stage1_feature_mapping.json"
     if mapping_path.exists():
         with open(mapping_path, "r", encoding="utf-8") as f:

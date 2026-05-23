@@ -193,3 +193,12 @@ if __name__ == "__main__":
     args = parse_args()
     ok = run_all(strict=args.strict)
     sys.exit(0 if ok else 1)
+
+
+def run_all_checks(strict: bool = False) -> bool:
+    """Compatibility shim for older test expectations: calls `run_all`.
+
+    Some tests and external callers expect a `run_all_checks()` symbol. Keep
+    that API stable by delegating to the newer `run_all()` implementation.
+    """
+    return run_all(strict=strict)

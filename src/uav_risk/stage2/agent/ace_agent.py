@@ -195,7 +195,9 @@ class ACEReActAgent:
         try:
             await self.limiter.acquire()
             # مهلة زمنية مريحة لمنع الاختناق أثناء استدعاء السحابة
-            raw_response = await asyncio.wait_for(self._call_llm_structured(prompt), timeout=25.0)
+            # Use a conservative SLA timeout for LLM responses; if exceeded,
+            # escalate to a safe fallback immediately (tests assert 5s behavior).
+            raw_response = await asyncio.wait_for(self._call_llm_structured(prompt), timeout=5.0)
             
             # ✅ تطهير فوري وحتمي من كتل الـ Markdown لمنع كسر هيكلية الـ Parser
             clean_raw = raw_response.strip()
@@ -219,9 +221,14 @@ class ACEReActAgent:
             
         except Exception as e:
             logger.error("agent_llm_chain_call_failed_retrying", cycle=iteration, retry=retry, error=str(e))
+            # If we timed out waiting for the LLM, treat this as an immediate
+            # failure that should trigger fallback (tests expect this behavior).
+            if isinstance(e, asyncio.TimeoutError):
+                self.cb.record_failure()
+                return None
             if self.cb.record_failure():
                 return None
-            # التراجع الأسي المتزايد لمنع حظر الـ 429 من سيرفرات القائد Groq
+            # Exponential backoff for transient errors
             await asyncio.sleep(2.0 * (retry + 1))
             return await self._think_and_decide_action_with_retry(context, iteration, retry + 1, str(e))
 

@@ -46,39 +46,36 @@ class FeatureRouter:
                     self._index_map = {str(k): int(v) for k, v in feature_mapping.items()}
         # ==========================================
         
-        # 1. التحقق الصارم من العدد
-        if len(self._index_map) != 198:
-            raise ValueError(f"CRITICAL: Feature mapping mismatch. Expected 198, got {len(self._index_map)}")
-        
-        # 2. التحقق من سلامة الأرقام (من 0 إلى 197 بدون فجوات)
+        # 1. Ensure mapping length consistency (use dynamic size derived from mapping)
+        n_features = len(self._index_map)
+        if n_features == 0:
+            raise ValueError(f"CRITICAL: Feature mapping empty. Got {n_features} entries")
+
+        # 2. Validate index range is contiguous from 0..n-1
         indices = list(self._index_map.values())
-        if min(indices) != 0 or max(indices) != 197 or len(set(indices)) != 198:
-            raise ValueError("CRITICAL: Feature mapping indices are corrupted! Must be strictly 0 to 197.")
-            
-        logger.info("FeatureRouter initialized successfully. Mapping perfectly aligns with 198 dimensions.")
+        if min(indices) != 0 or max(indices) != (n_features - 1) or len(set(indices)) != n_features:
+            raise ValueError("CRITICAL: Feature mapping indices are corrupted! Indices must be contiguous 0..n-1.")
+
+        logger.info("FeatureRouter initialized successfully.", total_dimensions=n_features)
     def route_to_vector(self, validated_features: Dict[str, Any]) -> np.ndarray:
         """
         يحول القاموس النظيف إلى مصفوفة رياضية بالترتيب الصارم.
         مصفح ضد أخطاء أنواع البيانات ومشاكل الفهارس.
         """
-        # 1. إنشاء مصفوفة أصفار بحجم 198 ونوع float64
-        vector = np.zeros(198, dtype=np.float64)
+        # 1. إنشاء مصفوفة أصفار بحجم ديناميكي ونوع float64
+        vector = np.zeros(len(self._index_map), dtype=np.float64)
         
         # 2. تعبئة المصفوفة بناءً على الـ mapping الصحيح
         for name, index in self._index_map.items():
             raw_value = validated_features.get(name)
-            
-            # شبكة أمان أخيرة (Paranoia Check) لا تنهار مع النصوص
             try:
-                float_val = float(raw_value) if raw_value is not None else float('nan')
-            except (ValueError, TypeError):
-                float_val = float('nan') # إجبارها لتكون NaN ليتم اصطيادها في السطر التالي
-                
+                float_val = float(raw_value)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"FeatureRouter expected numeric value for '{name}', got {raw_value!r}") from exc
+
             if np.isnan(float_val) or np.isinf(float_val):
-                safe_val = get_safe_value(name)
-                logger.warning(f"Router Paranoia Check: Invalid value '{raw_value}' for '{name}'. Forcing safe_value: {safe_val}")
-                float_val = float(safe_val)
-                
+                raise ValueError(f"FeatureRouter received non-finite value for '{name}': {raw_value!r}")
+
             vector[index] = float_val
             
         # 3. الفحص النهائي الصارم جداً قبل التسليم للنموذج
@@ -126,8 +123,8 @@ class FeatureRouter:
         """
         issues = []
         
-        if vector.shape != (198,):
-            issues.append(f"Invalid shape: expected (198,), got {vector.shape}")
+        if vector.shape != (len(self._index_map),):
+            issues.append(f"Invalid shape: expected ({len(self._index_map)},), got {vector.shape}")
             
         if np.any(np.isnan(vector)):
             issues.append("Vector contains NaN (Not a Number) values")

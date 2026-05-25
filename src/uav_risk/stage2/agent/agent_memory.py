@@ -2,7 +2,7 @@
 import hashlib
 import time
 from typing import Any, Dict, List, Optional, Set
-from src.uav_risk.stage2.agent.agent_schemas import (
+from uav_risk.stage2.agent.agent_schemas import (
     ConditionalGoConstraint,
     FeatureAssessment,
     ReasoningStep,

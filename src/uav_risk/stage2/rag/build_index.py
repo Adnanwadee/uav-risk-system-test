@@ -9,6 +9,10 @@ import json
 import time
 from typing import Dict, Any
 import structlog
+import hmac
+import hashlib
+import base64
+from datetime import datetime
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -132,6 +136,17 @@ def build_rag_index(
         
         os.makedirs(index_dir, exist_ok=True)
         vector_db.save_local(index_dir)
+        # بعد الحفظ، أنشئ توقيع HMAC للملفات الأساسية داخل الفهرس
+        try:
+            from uav_risk.stage2.rag.key_manager import get_signing_key
+            signing_key = get_signing_key()
+            if signing_key:
+                sign_faiss_index(index_dir, signing_key)
+                logger.info("index_signed", index_dir=index_dir)
+            else:
+                logger.warning("no_faiss_signing_key_present_index_unsigned", index_dir=index_dir)
+        except Exception as sig_exc:
+            logger.error("index_signing_failed", error=str(sig_exc))
         
         # كتابة ملف الميتا-داتا المرجعي لحفظ التاريخ والتدقيق
         metadata_payload = {
@@ -144,7 +159,9 @@ def build_rag_index(
 
         # 6. الفحص الجنائي التلقائي المدمج لضمان سلامة جودة الأبعاد واسترجاع البيانات [cite: 6]
         logger.info("running_integrated_sanity_verification")
-        verified_db = FAISS.load_local(index_dir, embeddings, allow_dangerous_deserialization=True)
+        # تحقق من التوقيع قبل التحميل؛ دالة التحقق ترفع SecurityError عند عدم المطابقة
+        from uav_risk.stage2.rag.build_index import verify_and_safely_load_faiss
+        verified_db = verify_and_safely_load_faiss(index_dir, embeddings)
         test_query = "drone maximum altitude operation"
         test_results = verified_db.similarity_search(test_query, k=3)
 
@@ -173,3 +190,122 @@ def build_rag_index(
 # Dependencies: src/uav_risk/stage2/rag/config.py
 # Dependent Files: Verified during server lifespan setup via tests/unit/test_rag_core.py
 # =====================================================================
+
+
+class SecurityError(Exception):
+    pass
+
+
+def _collect_index_file_paths(index_dir: str):
+    """Return a sorted list of file paths that constitute the FAISS index on disk."""
+    files = []
+    for root, _, filenames in os.walk(index_dir):
+        for fn in sorted(filenames):
+            # ignore signature file itself when calculating digest
+            if fn in ("index.signature",):
+                continue
+            files.append(os.path.join(root, fn))
+    return files
+
+
+def calculate_file_signature(file_path: str, key: bytes) -> str:
+    """Calculate HMAC-SHA256 over a single file and return hex digest."""
+    h = hmac.new(key, digestmod=hashlib.sha256)
+    with open(file_path, "rb") as fh:
+        while True:
+            chunk = fh.read(8192)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def sign_faiss_index(index_dir: str, key: bytes) -> None:
+    """Create a signature file for the FAISS index directory using HMAC-SHA256.
+
+    The signature is computed deterministically over all files (sorted by path)
+    present in the index directory, excluding the signature file itself.
+    """
+    files = _collect_index_file_paths(index_dir)
+    if not files:
+        raise RuntimeError("No files found to sign in index directory")
+
+    # Compute HMAC over concatenated file contents in deterministic order
+    h = hmac.new(key, digestmod=hashlib.sha256)
+    for fp in files:
+        with open(fp, "rb") as fh:
+            while True:
+                chunk = fh.read(8192)
+                if not chunk:
+                    break
+                h.update(chunk)
+
+    signature_hex = h.hexdigest()
+    sig_payload = {
+        "signature": signature_hex,
+        "algo": "HMAC-SHA256",
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "files": [os.path.relpath(p, index_dir) for p in files]
+    }
+
+    sig_path = os.path.join(index_dir, "index.signature")
+    with open(sig_path, "w", encoding="utf-8") as sf:
+        json.dump(sig_payload, sf, indent=2)
+
+
+def verify_and_safely_load_faiss(index_dir: str, embeddings) -> FAISS:
+    """Verify signature of index directory and load FAISS only on success.
+
+    Behavior:
+      - If `FAISS_SIGNING_KEY` env exists: enforce verification and raise SecurityError on mismatch.
+      - If key absent but `FAISS_ALLOW_UNSIGNED` == "1": allow load with warning.
+      - Otherwise: raise SecurityError preventing load.
+    """
+    sig_path = os.path.join(index_dir, "index.signature")
+    key_env = os.getenv("FAISS_SIGNING_KEY")
+    allow_unsigned = os.getenv("FAISS_ALLOW_UNSIGNED", "0") == "1"
+
+    if not key_env:
+        if allow_unsigned:
+            logger.warning("loading_unsigned_index_allowed_by_env", index_dir=index_dir)
+            return FAISS.load_local(folder_path=index_dir, embeddings=embeddings, allow_dangerous_deserialization=False)
+        else:
+            raise SecurityError("FAISS signing key not present and unsigned indexes not allowed")
+
+    key = key_env.encode("utf-8")
+
+    # perform signature-only verification first
+    verify_index_signature(index_dir, key)
+
+    # load the FAISS index safely now that signature verified
+    return FAISS.load_local(folder_path=index_dir, embeddings=embeddings, allow_dangerous_deserialization=False)
+
+
+def verify_index_signature(index_dir: str, key: bytes) -> bool:
+    """Verify only the signature of an index directory. Returns True or raises SecurityError."""
+    sig_path = os.path.join(index_dir, "index.signature")
+    if not os.path.exists(sig_path):
+        raise SecurityError(f"Signature file missing for index at {index_dir}")
+
+    with open(sig_path, "r", encoding="utf-8") as sf:
+        payload = json.load(sf)
+    expected_sig = payload.get("signature")
+    if not expected_sig:
+        raise SecurityError("Signature file malformed or missing 'signature' field")
+
+    # compute digest over files
+    files = _collect_index_file_paths(index_dir)
+    h = hmac.new(key, digestmod=hashlib.sha256)
+    for fp in files:
+        with open(fp, "rb") as fh:
+            while True:
+                chunk = fh.read(8192)
+                if not chunk:
+                    break
+                h.update(chunk)
+
+    actual_sig = h.hexdigest()
+    if not hmac.compare_digest(actual_sig, expected_sig):
+        raise SecurityError("FAISS index signature mismatch - possible tampering detected")
+
+    return True

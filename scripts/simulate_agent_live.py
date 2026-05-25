@@ -9,10 +9,10 @@ from dotenv import load_dotenv
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from groq import AsyncGroq
-from src.uav_risk.ml.schemas import MLResult
-from src.uav_risk.ml.inference import FeatureImportance
-from src.uav_risk.stage2.agent.ace_agent import ACEReActAgent
-from src.uav_risk.stage2.rag.rag_core import AsyncRAGCore
+from uav_risk.ml.schemas import MLResult
+from uav_risk.ml.inference import FeatureImportance
+from uav_risk.stage2.agent.ace_agent import ACEReActAgent
+from uav_risk.stage2.rag.rag_core import AsyncRAGCore
 
 load_dotenv()
 
@@ -53,7 +53,7 @@ async def execute_live_cognitive_simulation() -> None:
     feature_defs = {
         "uav_mass_kg": {"critical_min": 0.5, "critical_max": 25.0, "safe_min": 1.0, "safe_max": 7.0, "is_core": True},
         "operator_in_restricted_zone": {"critical_min": 0.0, "critical_max": 0.0, "safe_min": 0.0, "safe_max": 0.0, "is_core": True},
-        "environment_weather_wind_speed_ms": {"critical_min": 0.0, "critical_max": 20.0, "safe_min": 0.0, "safe_max": 12.0, "is_core": True},
+        "environment_weather_wind_mps": {"critical_min": 0.0, "critical_max": 20.0, "safe_min": 0.0, "safe_max": 12.0, "is_core": True},
         "payload_mass_kg": {"critical_min": 0.0, "critical_max": 10.0, "safe_min": 0.0, "safe_max": 2.0, "is_core": False},
         "uav_battery_wh": {"critical_min": 50.0, "critical_max": 2000.0, "safe_min": 100.0, "safe_max": 1500.0, "is_core": True},
         "battery_remaining_pct": {"critical_min": 20.0, "critical_max": 100.0, "safe_min": 30.0, "safe_max": 100.0, "is_core": True},
@@ -61,9 +61,9 @@ async def execute_live_cognitive_simulation() -> None:
     }
 
     live_telemetry = {
-        "uav_mass_kg": 4.5, "operator_in_restricted_zone": 0.0, "environment_weather_wind_speed_ms": 4.0,
+        "uav_mass_kg": 4.5, "operator_in_restricted_zone": 0.0, "environment_weather_wind_mps": 4.0,
         "payload_mass_kg": 1.2, "uav_battery_wh": 500.0, "battery_remaining_pct": 88.0, "flight_altitude_m": 125.5,
-        "uav_rotorcraft_disk_area_m2": 1.0, "uav_max_speed_ms": 22.0
+        "uav_rotorcraft_disk_area_m2": 1.0, "uav_max_speed_mps": 22.0
     }
 
     mock_ml_result = MLResult(

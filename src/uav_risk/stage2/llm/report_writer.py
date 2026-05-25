@@ -6,12 +6,13 @@ import structlog
 import json
 
 # الاستيراد المطلق للعقود والروابط البرمجية لضمان ثبات التوقيع المعماري ومنع الانزياح
-from src.uav_risk.stage2.rag.groq_llm import GroqLLM
-from src.uav_risk.ml.schemas import MLResult
-from src.uav_risk.stage2.agent.agent_schemas import AgentDecision
-from src.uav_risk.stage2.evidence import AuditEvidencePack
+from uav_risk.stage2.rag.groq_llm import GroqLLM
+from uav_risk.ml.schemas import MLResult
+from uav_risk.stage2.agent.agent_schemas import AgentDecision
+from uav_risk.stage2.evidence import AuditEvidencePack
 
 logger = structlog.get_logger(__name__)
+from uav_risk.utils.json_sanitize import strict_aviation_json_sanitizer
 
 
 class ReportVerifier:
@@ -158,11 +159,14 @@ class ReportWriter:
 
     def _build_agentic_report_prompt(self, evidence_json: dict) -> str:
         """يصيغ موجه النظام الصارم للـ LLM لفرض القالب الهيكلي الموحد ومنع الابتكار النصي."""
+        # sanitize the evidence json to ensure LLM prompt contains serializable primitives only
+        safe_json = strict_aviation_json_sanitizer(evidence_json)
+
         return f"""You are a strict technical reporting pipeline asset. Your single purpose is to format the given corporate flight safety facts into a professional Markdown compliance audit report.
 CRITICAL MANDATE: Do not synthesize, assume, or extrapolate any figures or rules. Every sentence must explicitly maps to the JSON ground-truth fields provided below.
 
 GROUND-TRUTH ENVELOPE:
-{json.dumps(evidence_json, indent=2, ensure_ascii=False)}
+    {json.dumps(safe_json, indent=2, ensure_ascii=False)}
 
 REQUIRED STRATIFIED OUTPUT FORMAT (OUTPUT ONLY THIS MARKDOWN BLOCK):
 # تقرير تقييم سلامة الرحلة — {evidence_json['flight_id']}

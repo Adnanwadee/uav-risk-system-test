@@ -1,90 +1,73 @@
-"""
-Aviation-Grade JSON Sanitizer (V14.0 - ACE Master Integration)
-===========================================================
-الدور: التطهير النهائي للبيانات قبل إرسالها للـ UI أو حفظها في قاعدة البيانات.
-التحديثات لـ V14.0:
-1. دعم NaN/Inf الشامل: التعامل مع sentinels المفقودة في الـ 50 عاموداً.
-2. تطهير عودي عميق: حماية ضد الدوران اللا نهائي في حزم الأدلة الضخمة.
-3. دعم ML & NumPy: تحويل أنواع بيانات الوكلاء (Physics/ML) إلى أنواع JSON قياسية.
-"""
+"""Utilities to sanitize complex Python objects into JSON-safe primitives.
 
-from __future__ import annotations
-import math
-import decimal
-import datetime
-import uuid
-import logging
+Goals:
+- Convert dataclasses, enums, numpy types, and other non-serializable objects
+  into primitives (str, int, float, bool, list, dict).
+- Limit free-text lengths and remove suspicious control sequences.
+"""
 from typing import Any
-import numpy as np
+import dataclasses
+import math
+import numpy as _np
 
-logger = logging.getLogger("DataSanitizer")
 
-def sanitize_for_json(obj: Any, _seen: set[int] | None = None) -> Any:
-    """
-    تطهير البيانات بشكل عودي لضمان سلامة الـ JSON بنسبة 100% وفق معيار RFC-8259.
-    يضمن عدم حدوث كراش (TypeError) عند إرسال الـ 50 عاموداً.
-    """
-    if _seen is None:
-        _seen = set()
-
-    if obj is None:
+def _convert_value(v: Any) -> Any:
+    # None
+    if v is None:
+        return None
+    # Primitive types
+    if isinstance(v, (str, int, float, bool)):
+        # truncate long strings
+        if isinstance(v, str) and len(v) > 2000:
+            return v[:2000]
+        # convert NaN/Inf
+        if isinstance(v, float):
+            if math.isnan(v) or math.isinf(v):
+                return None
+        return v
+    # numpy types
+    if isinstance(v, (_np.generic,)):
+        try:
+            return v.item()
+        except Exception:
+            return float(v)
+    # dataclasses
+    if dataclasses.is_dataclass(v):
+        return sanitize_dataclass(v)
+    # dict
+    if isinstance(v, dict):
+        return {str(k): sanitize_value(vv) for k, vv in v.items()}
+    # list/tuple
+    if isinstance(v, (list, tuple, set)):
+        return [sanitize_value(x) for x in list(v)]
+    # fallback to string
+    try:
+        return str(v)
+    except Exception:
         return None
 
-    # 1. حماية من الدوران اللا نهائي (Recursion Guard)
-    # ضروري جداً لأن حزمة الأدلة (Evidence Pack) أصبحت ضخمة جداً
-    obj_id = id(obj)
-    if obj_id in _seen:
-        return "[CIRCULAR_REFERENCE_REDACTED]"
-    
-    # نضيف الكائنات القابلة للتكرار فقط إلى set الحماية
-    if isinstance(obj, (dict, list, set, tuple)):
-        _seen.add(obj_id)
 
-    # 2. معالجة الأرقام (الفيزياء والـ ML)
-    if isinstance(obj, (float, np.floating)):
-        # [تعديل حاسم]: تحويل NaN الناتج عن البيانات المفقودة في toolbox إلى null
-        if not math.isfinite(obj):
-            return None 
-        return float(obj)
+def sanitize_dataclass(obj: Any) -> Any:
+    out = {}
+    for f in dataclasses.fields(obj):
+        try:
+            val = getattr(obj, f.name)
+            out[f.name] = sanitize_value(val)
+        except Exception:
+            out[f.name] = None
+    return out
 
-    if isinstance(obj, (int, np.integer)):
-        return int(obj)
-        
-    if isinstance(obj, (bool, np.bool_)):
-        return bool(obj)
 
-    if isinstance(obj, decimal.Decimal):
-        return float(obj)
-
-    # 3. معالجة النصوص والبيانات الخام
-    if isinstance(obj, str):
-        return obj
-
-    if isinstance(obj, bytes):
-        # فك تشفير البيانات الخام لضمان عدم كسر الـ API
-        return obj.decode("utf-8", errors="replace")
-
-    # 4. المصفوفات والقوائم (نتائج Monte Carlo والـ RAG)
-    if isinstance(obj, np.ndarray):
-        return [sanitize_for_json(v, _seen) for v in obj.tolist()]
-        
-    if isinstance(obj, (list, tuple, set)):
-        return [sanitize_for_json(v, _seen) for v in obj]
-
-    # 5. القواميس (التدقيق الكامل للـ 50 عاموداً)
-    if isinstance(obj, dict):
-        return {str(k): sanitize_for_json(v, _seen) for k, v in obj.items()}
-
-    # 6. الكائنات الزمنية (Report Timestamps)
-    if isinstance(obj, (datetime.datetime, datetime.date)):
-        return obj.isoformat()
-        
-    if isinstance(obj, uuid.UUID):
-        return str(obj)
-
-    # 7. التراجع الآمن (Fallback)
-    # بدلاً من الانهيار، نحول الكائن المجهول إلى نص للتدقيق
+def sanitize_value(v: Any) -> Any:
     try:
-        return str(obj)
-    except:
-        return "[UNSERIALIZABLE_DATA]"
+        return _convert_value(v)
+    except Exception:
+        try:
+            return str(v)
+        except Exception:
+            return None
+
+
+def strict_aviation_json_sanitizer(payload: Any) -> Any:
+    """Main entry point — returns a JSON-safe representation of `payload`."""
+    return sanitize_value(payload)

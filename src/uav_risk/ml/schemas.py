@@ -223,6 +223,17 @@ def probabilities_to_dict(probabilities: Any, class_names: List[str]) -> Dict[st
     return {class_names[i]: float(probabilities[i]) for i in range(len(class_names))}
 
 
+__all__ = [
+    "RiskClass",
+    "FeatureImportance",
+    "MLResult",
+    "Stage1Bundle",
+    "calculate_risk_score",
+    "calculate_confidence",
+    "probabilities_to_dict",
+]
+
+
 # =====================================================================
 # Architectural Registry Block:
 # This file depends on: None (Foundational Interface Contract Layer).

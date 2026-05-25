@@ -4,7 +4,7 @@
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
-from src.uav_risk.stage2.rag.schemas import LegalCitation
+from uav_risk.stage2.rag.schemas import LegalCitation
 
 class StuckReason(Enum):
     """Reasons for the agent execution loop getting stuck or failing to progress."""

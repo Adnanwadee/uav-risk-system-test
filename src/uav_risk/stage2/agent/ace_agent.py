@@ -3,9 +3,9 @@ import json
 import time
 import asyncio
 from typing import Dict, Any, List, Optional, Literal, Set
-from src.uav_risk.ml.schemas import MLResult
-from src.uav_risk.stage2.rag.rag_core import AsyncRAGCore
-from src.uav_risk.stage2.agent.agent_schemas import (
+from uav_risk.ml.schemas import MLResult
+from uav_risk.stage2.rag.rag_core import AsyncRAGCore
+from uav_risk.stage2.agent.agent_schemas import (
     AgentDecision, 
     ReasoningStep, 
     ToolCall, 
@@ -13,8 +13,8 @@ from src.uav_risk.stage2.agent.agent_schemas import (
     LoopAction, 
     ConditionalGoConstraint
 )
-from src.uav_risk.stage2.agent.agent_memory import AgentMemory, DynamicCacheManager
-from src.uav_risk.stage2.agent.agent_tools import (
+from uav_risk.stage2.agent.agent_memory import AgentMemory, DynamicCacheManager
+from uav_risk.stage2.agent.agent_tools import (
     validate_feature_batch, 
     check_physics_constraint, 
     assess_contextual_remainder,
@@ -22,8 +22,9 @@ from src.uav_risk.stage2.agent.agent_tools import (
     generate_legal_query, 
     CROSS_FEATURE_SAFETY_MAP
 )
-from src.uav_risk.stage2.agent.fallback import StaticFallbackAssessor
+from uav_risk.stage2.agent.fallback import StaticFallbackAssessor
 import structlog
+from uav_risk.utils.json_sanitize import strict_aviation_json_sanitizer
 
 logger = structlog.get_logger(__name__)
 
@@ -104,9 +105,9 @@ class ACEReActAgent:
     def _get_features_by_category(self, features: Dict[str, float], category: str) -> Dict[str, float]:
         prefixes = {
             "battery": ["uav_battery_", "battery_remaining_pct", "uav_power_"],
-            "aerodynamic": ["uav_mass_kg", "payload_mass_kg", "uav_wingspan_m", "uav_max_speed_ms"],
+            "aerodynamic": ["uav_mass_kg", "uav_payload_mass_kg", "uav_wingspan_m", "uav_max_speed_mps"],
             "navigation": ["gps_satellites_count", "flight_altitude_m", "flight_distance_m", "home_distance_m"],
-            "weather": ["environment_weather_wind_speed_ms", "environment_temperature_c", "environment_humidity_pct"],
+            "weather": ["environment_weather_wind_mps", "environment_temperature_c", "environment_humidity_pct"],
             "comms": ["comms_rssi_dbm_min", "environment_gnss_jam_dbm", "rc_signal_strength_pct"],
             "operator": ["operator_experience_flights", "pilot_license_status", "license_level"],
             "airspace": ["airspace_class_restricted", "airport_distance_km", "operator_in_restricted_zone"],
@@ -121,7 +122,10 @@ class ACEReActAgent:
         priority_features = [f.feature_name for f in ml_result.top_features[:10]]
         
         if free_text and free_text.strip():
-            await self._process_free_text_bilingual(free_text, memory)
+            if self._is_safe_free_text(free_text):
+                await self._process_free_text_bilingual(free_text, memory)
+            else:
+                logger.warning("free_text_rejected_by_guard", reason="unsafe content detected")
             
         for constraint in ["disk_loading", "wind_susceptibility", "energy_budget", "altitude_ceiling"]:
             cache_key = f"{constraint}_{hash(frozenset(validated_features.items()))}"
@@ -279,14 +283,28 @@ class ACEReActAgent:
         try:
             raw = await self._call_llm_structured(prompt)
             parsed = json.loads(raw)
+            parsed = strict_aviation_json_sanitizer(parsed)
             if parsed.get("hazard_detected"):
                 for find in parsed.get("critical_findings", []):
-                    memory.critical_findings.append(f"[Free-Text Risk Flag] {find}")
+                    memory.critical_findings.append(f"[Free-Text Risk Flag] {str(find)[:400]}")
                 for q in parsed.get("rag_queries", []):
-                    res = await query_rag(q, self.rag_core)
-                    memory.record_rag_query(q, res.get("citations", []))
+                    # sanitize query string
+                    q_s = str(q)[:1000]
+                    res = await query_rag(q_s, self.rag_core)
+                    memory.record_rag_query(q_s, res.get("citations", []))
         except Exception:
             pass
+
+    def _is_safe_free_text(self, text: str) -> bool:
+        t = text.lower()
+        # reject URLs, code fences, long injections
+        if "http://" in t or "https://" in t:
+            return False
+        if "```" in t or "<script" in t or "eval(" in t or "{{" in t:
+            return False
+        if len(t) > 5000:
+            return False
+        return True
 
     def _synthesize_sovereign_decision(self, memory: AgentMemory, features: Dict[str, float], ml_result: MLResult, iterations: int, start_time: float) -> AgentDecision:
         critical_findings = memory.critical_findings.copy()

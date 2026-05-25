@@ -10,6 +10,7 @@ import uuid
 import logging
 from typing import Optional, Any, Dict, Annotated
 from pydantic import BaseModel, ConfigDict, Field, BeforeValidator
+from uav_risk.ml.feature_defs import get_core_features
 
 # إعداد محرك السجلات المركزي لطبقة العقود
 logger = logging.getLogger(__name__)
@@ -230,6 +231,14 @@ class MasterFlightPayload(BaseModel):
     model_config = ConfigDict(extra="allow")
     
     flight_id: Optional[str] = None
+
+    # Drone selection and operator-provided profile data.
+    # The catalog reference lives in src/uav_risk/schema/uav_catalog.json.
+    drone_profile_id: Optional[str] = None
+    drone_profile_name: Optional[str] = None
+    uav_model_id: Optional[str] = None
+    uav_model_spec: Optional[Dict[str, Any]] = None
+
     uav: UAVSpecs = Field(default_factory=UAVSpecs)
     mission: MissionParams = Field(default_factory=MissionParams)
     environment: EnvironmentData = Field(default_factory=EnvironmentData)
@@ -245,7 +254,7 @@ class MasterFlightPayload(BaseModel):
             self.flight_id = f"flt_{uuid.uuid4().hex[:8]}"
         return self.flight_id
 
-    def flatten_for_ml(self) -> dict[str, Any]:
+    def flatten_for_ml(self, primary_only: bool = True) -> dict[str, Any]:
         """
         تقوم بتسطيح الكائنات المتداخلة وربطها بالبادئات المعتمدة هندسياً،
         مع حماية الحقول المشتركة لمنع حدوث التكرار المزدوج للأسماء.
@@ -287,6 +296,9 @@ class MasterFlightPayload(BaseModel):
                 flat_dict[key] = value
                 
         logger.debug(f"[{self.get_flight_id()}] Flattened payload into {len(flat_dict)} strongly-typed features.")
+        if primary_only:
+            cores = set(get_core_features())
+            return {k: v for k, v in flat_dict.items() if k in cores}
         return flat_dict
 
     def to_tier0_dict(self) -> dict[str, Any]:
@@ -308,9 +320,13 @@ class MasterFlightPayload(BaseModel):
                 battery_wh = None
 
         tier0_data = {
+            "drone_profile_id": self.drone_profile_id,
+            "drone_profile_name": self.drone_profile_name,
+            "uav_model_id": self.uav_model_id,
+            "uav_model_spec": self.uav_model_spec,
             "altitude_m": flat.get("mission_altitude_m") or flat.get("airspace_altitude_agl_max_m"),
             "battery_wh": battery_wh,
-            "wind_speed_ms": flat.get("environment_weather_wind_mps"),
+            "wind_speed_mps": flat.get("environment_weather_wind_mps"),
             "gps_fix_quality": flat.get("gps_fix_quality"),
             "in_restricted_zone": flat.get("operator_in_restricted_zone") or flat.get("airspace_no_fly_zones_count")
         }

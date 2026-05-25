@@ -53,7 +53,7 @@ class ShapExplainer:
         Calculates the exact SHAP value matrix for a processed state vector and sorts drivers by absolute impact.
         
         Args:
-            X (np.ndarray): Preprocessed feature matrix of exact shape (1, 198).
+            X (np.ndarray): Preprocessed feature matrix of shape (1, n_features) matching `feature_names`.
             top_n (int): Number of driving features to extract for the agent.
             predicted_class_idx (int): Index of the target class to explain (corresponds to highest probability).
             
@@ -130,7 +130,7 @@ class ShapExplainer:
         Returns:
             Dict containing two explicit lists: "risk_increasing" and "risk_decreasing".
         """
-        # جلب كافة المؤثرات الـ 198 لتشريح كامل للرحلة
+        # Retrieve explanations for all registered features to produce a full decision breakdown
         all_features = self.explain(X, top_n=len(self.feature_names), predicted_class_idx=predicted_class_idx)
         
         drivers_map = {

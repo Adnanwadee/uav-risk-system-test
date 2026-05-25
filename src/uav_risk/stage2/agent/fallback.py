@@ -2,7 +2,7 @@
 import math
 import time
 from typing import Any, Dict, List
-from src.uav_risk.stage2.agent.agent_schemas import AgentDecision, FeatureAssessment
+from uav_risk.stage2.agent.agent_schemas import AgentDecision, FeatureAssessment
 
 class StaticFallbackAssessor:
     """الدرع الحتمي المستقل الحامي للمنظومة الجوية؛ يعمل محلياً بالرياضيات البحتة وعزل تام للـ LLM."""

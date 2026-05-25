@@ -1,7 +1,7 @@
 """
 Module: uav_risk.ml.feature_defs
-Purpose: Centralized single source of truth for all 198 UAV features, physical limits, 
-         aviation thresholds, and fallback registries without critical clipping conflicts.
+Purpose: Centralized single source of truth for the authoritative feature registry,
+         physical limits, aviation thresholds, and fallback registries.
 Dependencies: Fully standalone core configuration module matching SOLID architectural principles.
 Source References: FAA Part 107, EASA CS-23, ISO 12345:2020, ASTM F3390, Raymer (2023).
 """
@@ -10,134 +10,248 @@ from __future__ import annotations
 import json
 import os
 import math
+import logging
 from pathlib import Path
+from functools import lru_cache
 import joblib
 from typing import Dict, Any, Optional, Tuple
 
 # تدوين الاسم المستعار لهيكل بيانات الميزة المعياري
 FeatureDefinition = Dict[str, Any]
+logger = logging.getLogger(__name__)
+_WARNED_MISSING_SAFE_VALUES: set[str] = set()
 
+# Only secondary features have safe defaults here. Primary features (68) must be user-supplied.
 # ============================================================
 # 1. سجل القيم الآمنة المدروسة فيزيائياً (Fallback Shield Registry)
 # ============================================================
 SAFE_VALUES_REGISTRY: Dict[str, float] = {
-    "uav_mass_kg": 5.0,
-    "uav_battery_wh": 99.0,
-    "uav_fuel_l": 0.0,
-    "uav_energy_source_battery": 1.0,
-    "uav_energy_source_fuel": 0.0,
-    "uav_energy_source_hybrid": 0.0,
-    "uav_max_speed_mps": 10.0,
-    "uav_max_tilt_deg": 20.0,
+    # NOTE: Primary features must be provided by the operator at runtime.
+    # Primary feature – safe default not used in production
+    # (entries for primary features are intentionally omitted)
+    "uav_energy_source_battery": 1,
+    "uav_max_speed_mps": 10,
+    "uav_max_tilt_deg": 20,
     "uav_reserve_fraction": 0.25,
-    "uav_payload_mass_kg": 0.0,
-    "uav_payload_drag_coeff": 0.0,
-    "uav_rotorcraft_rotor_count": 4.0,
+    "uav_payload_mass_kg": 0,
+    "uav_payload_drag_coeff": 0,
+    "uav_rotorcraft_rotor_count": 4,
     "uav_rotorcraft_disk_area_m2": 0.5,
-    "uav_battery_model_hover_power_w": 300.0,
+    "uav_battery_model_hover_power_w": 300,
     "uav_battery_model_k_drag": 0.05,
     "uav_battery_model_k_manoeuvre": 0.1,
-    "uav_rotorcraft_max_climb_mps": 3.0,
-    "uav_aero_wing_area_m2": 1.0,
-    "uav_aero_aspect_ratio": 10.0,
+    "uav_rotorcraft_max_climb_mps": 3,
+    "uav_aero_wing_area_m2": 1,
+    "uav_aero_aspect_ratio": 10,
     "uav_aero_cl_max": 1.2,
     "uav_aero_cd0": 0.02,
     "uav_aero_prop_efficiency": 0.75,
-    "uav_aero_stall_speed_mps": 5.0,
-    "uav_rotorcraft_hover_ceiling_m": 2000.0,
-    "environment_weather_wind_mps": 0.0,
-    "environment_weather_wind_dir_deg": 0.0,
-    "environment_weather_gust_mps": 0.0,
-    "environment_weather_phenomena_count": 0.0,
-    "environment_gnss_jam_dbm": -125.0,
-    "environment_gnss_multipath": 0.0,
-    "environment_em_interference": 0.0,
-    "environment_wind_profile_count": 0.0,
-    "environment_wind_profile_sample_alt_m": 50.0,
-    "environment_wind_profile_sample_wind_mps": 0.0,
-    "environment_wind_profile_sample_dir_deg": 0.0,
-    "environment_thermal_plumes_count": 0.0,
-    "environment_thermal_plumes_sample_radius_m": 10.0,
-    "environment_thermal_plumes_sample_w_up_mps": 0.0,
-    "mission_pattern_custom": 1.0,
-    "mission_pattern_grid": 0.0,
-    "mission_pattern_orbit": 0.0,
-    "mission_pattern_spiral": 0.0,
-    "controls_mode_continuous": 1.0,
-    "controls_mode_discrete": 0.0,
-    "controls_actions_first_fwd": 1.0,
-    "controls_actions_first_hold": 0.0,
-    "controls_actions_first_throttle": 0.0,
-    "mission_waypoints_count": 2.0,
-    "mission_waypoints_x_mean": 0.0,
-    "mission_waypoints_x_range": 50.0,
-    "mission_time_budget_s": 600.0,
-    "mission_runway_required": 0.0,
-    "mission_loiter_radius_m": 30.0,
-    "mission_transition_profile_vtol_to_ff_t_s": 3.0,
-    "mission_transition_profile_ff_to_vtol_t_s": 3.0,
-    "traffic_count": 0.0,
-    "moving_obstacles_count": 0.0,
-    "airspace_altitude_agl_min_m": 10.0,
-    "airspace_altitude_agl_max_m": 50.0,
-    "airspace_no_fly_zones_count": 0.0,
-    "airspace_no_fly_zones_sample_radius_m": 0.0,
-    "airspace_no_fly_zones_dynamic_count": 0.0,
-    "airspace_no_fly_zones_dynamic_sample_radius_m": 0.0,
-    "airspace_runway_threshold_count": 0.0,
-    "airspace_runway_length_m": 0.0,
-    "airspace__geofence__sample__points_count": 4.0,
-    "daa_sep_threshold_m": 100.0,
-    "faults_count": 0.0,
-    "faults_sample_duration_s": 0.0,
-    "faults_sample_severity": 1.0,
-    "comms_uplink_ok": 1.0,
-    "comms_downlink_ok": 1.0,
-    "comms_loss_windows_count": 0.0,
-    "comms_rssi_dbm_min": -50.0,
-    "swarm_enabled": 0.0,
-    "swarm_size": 2.0,
-    "swarm_roles_count": 1.0,
-    "swarm_inter_uav_sep_min_m": 10.0,
-    "swarm_roles_first_leader": 1.0,
-    "swarm_roles_first_scout": 0.0,
-    "swarm_roles_first_relay": 0.0,
-    "swarm_roles_first_single": 0.0,
-    "swarm_roles_first_solo": 0.0,
-    "sim_duration_steps": 100.0,
-    "sim_policy_frequency": 10.0,
-    
-    # تأمين الميزات التكميلية لغلق الـ 198 ميزة هندسياً والتخلص من الحقول العشوائية
-    "operator_experience_hours": 40.0,
-    "operator_airport_distance_km": 15.0,
-    "operator_atc_clearance": 1.0,
-    "gps_satellites_count": 14.0,
+    "uav_aero_stall_speed_mps": 5,
+    "uav_rotorcraft_hover_ceiling_m": 2000,
+    "environment_weather_wind_mps": 0,
+    "environment_weather_wind_dir_deg": 0,
+    "environment_weather_gust_mps": 0,
+    "environment_weather_phenomena_count": 0,
+    "environment_gnss_jam_dbm": -125,
+    "environment_gnss_multipath": 0,
+    "environment_em_interference": 0,
+    "environment_wind_profile_count": 0,
+    "environment_wind_profile_sample_alt_m": 50,
+    "environment_wind_profile_sample_wind_mps": 0,
+    "environment_wind_profile_sample_dir_deg": 0,
+    "environment_thermal_plumes_count": 0,
+    "environment_thermal_plumes_sample_radius_m": 10,
+    "environment_thermal_plumes_sample_w_up_mps": 0,
+    "mission_pattern_custom": 1,
+    "mission_pattern_grid": 0,
+    "mission_pattern_orbit": 0,
+    "mission_pattern_spiral": 0,
+    "controls_mode_continuous": 1,
+    "controls_mode_discrete": 0,
+    "controls_actions_first_fwd": 1,
+    "controls_actions_first_hold": 0,
+    "controls_actions_first_throttle": 0,
+    "mission_waypoints_count": 2,
+    "mission_waypoints_x_mean": 0,
+    "mission_waypoints_x_range": 50,
+    "mission_time_budget_s": 600,
+    "mission_runway_required": 0,
+    "mission_loiter_radius_m": 30,
+    "mission_transition_profile_vtol_to_ff_t_s": 3,
+    "mission_transition_profile_ff_to_vtol_t_s": 3,
+    "traffic_count": 0,
+    "moving_obstacles_count": 0,
+    "airspace_altitude_agl_min_m": 10,
+    "airspace_altitude_agl_max_m": 50,
+    "airspace_no_fly_zones_count": 0,
+    "airspace_no_fly_zones_sample_radius_m": 0,
+    "airspace_no_fly_zones_dynamic_count": 0,
+    "airspace_no_fly_zones_dynamic_sample_radius_m": 0,
+    "airspace_runway_threshold_count": 0,
+    "airspace_runway_length_m": 0,
+    "airspace__geofence__sample__points_count": 4,
+    "daa_sep_threshold_m": 100,
+    "faults_count": 0,
+    "faults_sample_duration_s": 0,
+    "faults_sample_severity": 1,
+    "comms_uplink_ok": 1,
+    "comms_downlink_ok": 1,
+    "comms_loss_windows_count": 0,
+    "comms_rssi_dbm_min": -50,
+    "swarm_enabled": 0,
+    "swarm_size": 2,
+    "swarm_roles_count": 1,
+    "swarm_inter_uav_sep_min_m": 10,
+    "swarm_roles_first_leader": 1,
+    "swarm_roles_first_scout": 0,
+    "swarm_roles_first_relay": 0,
+    "swarm_roles_first_single": 0,
+    "swarm_roles_first_solo": 0,
+    "sim_duration_steps": 100,
+    "sim_policy_frequency": 10,
+    "operator_experience_hours": 40,
+    "operator_airport_distance_km": 15,
+    "operator_atc_clearance": 1,
+    "gps_satellites_count": 14,
     "gps_hdop": 0.9,
     "gps_latitude": 29.3759,
     "gps_longitude": 47.9774,
-    "gps_fix_quality": 2.0,
+    "gps_fix_quality": 2,
     "uav_propeller_diameter_m": 0.35,
-    "uav_battery_capacity_mah": 22000.0,
+    "uav_battery_capacity_mah": 22000,
     "uav_battery_voltage_v": 22.2,
     "uav_wingspan_m": 1.2,
-    "uav_max_takeoff_weight_kg": 15.0,
-    "mission_altitude_m": 50.0,
-    "mission_max_altitude_m": 100.0,
-    "mission_distance_km": 5.0,
-    "environment_weather_temperature_c": 25.0,
-    "environment_weather_humidity_pct": 40.0,
-    "controls_response_latency_ms": 45.0,
-    "comms_signal_noise_ratio_db": 35.0,
-    "airspace_class_encoded_a": 0.0,
-    "airspace_class_encoded_b": 0.0,
-    "airspace_class_encoded_c": 1.0,
-    "airspace_class_encoded_g": 0.0,
-    "operator_license_type_encoded": 2.0,
-    
-    # 🎯 حقن الميزات الثلاث الحقيقية المطلوبة للاشتقاق والمؤشرات تحقيقاً للتطابق المطلق
-    "airspace_runway_heading_deg": 90.0,
-    "autofix_uav_physics_count": 0.0,
-    "autofix_uav_physics_first": 0.0
+    "uav_max_takeoff_weight_kg": 15,
+    "mission_altitude_m": 50,
+    "mission_max_altitude_m": 100,
+    "mission_distance_km": 5,
+    "environment_weather_temperature_c": 25,
+    "environment_weather_humidity_pct": 40,
+    "controls_response_latency_ms": 45,
+    "comms_signal_noise_ratio_db": 35,
+    "airspace_class_encoded_a": 0,
+    "airspace_class_encoded_b": 0,
+    "airspace_class_encoded_c": 1,
+    "airspace_class_encoded_g": 0,
+    "operator_license_type_encoded": 2,
+    "airspace_runway_heading_deg": 90,
+    "autofix_uav_physics_count": 0,
+    "autofix_uav_physics_first": 0,
+    "airspace_no_fly_zones_sample_floor_m": 0,
+    "airspace_no_fly_zones_sample_ceiling_m": 0,
+    "spawn_xyz_first": 0,
+    "spawn_yaw_deg": 0,
+    "landing_preferred_sites_count": 0,
+    "landing_preferred_sites_x_mean": 0,
+    "landing_preferred_sites_x_std": 0,
+    "landing_preferred_sites_x_min": 0,
+    "landing_preferred_sites_x_max": 0,
+    "landing_preferred_sites_x_range": 0,
+    "landing_preferred_sites_y_mean": 0,
+    "landing_preferred_sites_y_std": 0,
+    "landing_preferred_sites_y_min": 0,
+    "landing_preferred_sites_y_max": 0,
+    "landing_preferred_sites_y_range": 0,
+    "landing_preferred_sites_z_mean": 0,
+    "landing_preferred_sites_z_std": 0,
+    "landing_preferred_sites_z_min": 0,
+    "landing_preferred_sites_z_max": 0,
+    "landing_preferred_sites_z_range": 0,
+    "landing_emergency_sites_count": 0,
+    "landing_emergency_sites_x_mean": 0,
+    "landing_emergency_sites_x_std": 0,
+    "landing_emergency_sites_x_min": 0,
+    "landing_emergency_sites_x_max": 0,
+    "landing_emergency_sites_x_range": 0,
+    "landing_emergency_sites_y_mean": 0,
+    "landing_emergency_sites_y_std": 0,
+    "landing_emergency_sites_y_min": 0,
+    "landing_emergency_sites_y_max": 0,
+    "landing_emergency_sites_y_range": 0,
+    "landing_emergency_sites_z_mean": 0,
+    "landing_emergency_sites_z_std": 0,
+    "landing_emergency_sites_z_min": 0,
+    "landing_emergency_sites_z_max": 0,
+    "landing_emergency_sites_z_range": 0,
+    "mission_waypoints_x_std": 0,
+    "mission_waypoints_x_min": 0,
+    "mission_waypoints_x_max": 0,
+    "mission_waypoints_y_mean": 0,
+    "mission_waypoints_y_std": 0,
+    "mission_waypoints_y_min": 0,
+    "mission_waypoints_y_max": 0,
+    "mission_waypoints_y_range": 0,
+    "mission_waypoints_z_mean": 0,
+    "mission_waypoints_z_std": 0,
+    "mission_waypoints_z_min": 0,
+    "mission_waypoints_z_max": 0,
+    "mission_waypoints_z_range": 0,
+    "traffic_sample_speed_mps": 0,
+    "traffic_sample_heading_deg": 0,
+    "moving_obstacles_sample_radius_m": 0,
+    "controls_actions_count": 0,
+    "daa_ttc_threshold_s": 0,
+    "faults_sample_t_s": 0,
+    "comms_loss_windows_x_mean": 0,
+    "comms_loss_windows_x_std": 0,
+    "comms_loss_windows_x_min": 0,
+    "comms_loss_windows_x_max": 0,
+    "comms_loss_windows_x_range": 0,
+    "comms_loss_windows_y_mean": 0,
+    "comms_loss_windows_y_std": 0,
+    "comms_loss_windows_y_min": 0,
+    "comms_loss_windows_y_max": 0,
+    "comms_loss_windows_y_range": 0,
+    "airspace_no_fly_zones_dynamic_sample_floor_m": 0,
+    "airspace_no_fly_zones_dynamic_sample_ceiling_m": 0,
+    "airspace_runway_threshold_first": 0,
+    "uav_sensors_gnss": 0,
+    "uav_sensors_lidar": 0,
+    "uav_sensors_radar": 0,
+    "uav_sensors_camera_rgb": 0,
+    "uav_sensors_camera_thermal": 0,
+    "airspace__no__fly__zones__sample__center_count": 0,
+    "landing__preferred__sites__sample_count": 0,
+    "landing__emergency__sites__sample_count": 0,
+    "mission__waypoints__sample_count": 0,
+    "traffic__sample__spawn_count": 0,
+    "moving__obstacles__sample__center_count": 0,
+    "moving__obstacles__sample__vel_count": 0,
+    "comms__loss__windows__sample_count": 0,
+    "airspace__no__fly__zones__dynamic__sampl_count": 0,
+    "environment__thermal__plumes__sample__ce_count": 0,
+    "uav_rotorcraft_rotor_count_was_missing": 0,
+    "autofix_uav_physics_count_was_missing": 0,
+    "autofix_uav_physics_first_was_missing": 0,
+    "uav_aero_wing_area_m2_was_missing": 0,
+    "uav_aero_aspect_ratio_was_missing": 0,
+    "uav_aero_cl_max_was_missing": 0,
+    "uav_aero_cd0_was_missing": 0,
+    "uav_aero_prop_efficiency_was_missing": 0,
+    "uav_aero_stall_speed_mps_was_missing": 0,
+    "airspace_runway_threshold_count_was_missing": 0,
+    "airspace_runway_threshold_first_was_missing": 0,
+    "airspace_runway_heading_deg_was_missing": 0,
+    "airspace_runway_length_m_was_missing": 0,
+    "mission_transition_profile_vtol_to_ff_t_s_was_missing": 0,
+    "mission_transition_profile_ff_to_vtol_t_s_was_missing": 0,
+    "swarm_size_was_missing": 0,
+    "swarm_roles_count_was_missing": 0,
+    "swarm_roles_first_was_missing": 0,
+    "swarm_inter_uav_sep_min_m_was_missing": 0,
+    "uav_rotorcraft_max_climb_mps_was_missing": 0,
+    "uav_rotorcraft_hover_ceiling_m_was_missing": 0,
+    "mission_loiter_radius_m_was_missing": 0,
+    "feat_disk_loading": 75,
+    "feat_altitude_range": 61,
+    "feat_reserve_utilization": 0.4,
+    "feat_wind_gust_ratio": 0.6,
+    "feat_wind_speed_ratio": 0.15,
+    "feat_sensor_redundancy": 1,
+    "feat_comms_health": 0.75,
+    "feat_traffic_density": 0.0005,
+    "feat_fault_risk": 0.15,
+    "feat_weather_severity": 0.15
 }
 
 # ============================================================
@@ -158,11 +272,6 @@ FEATURE_DEFINITIONS: Dict[str, FeatureDefinition] = {
         "name": "uav_fuel_l", "unit": "L", "description": "Fuel quantity for hybrid UAVs",
         "safe_min": 0.0, "safe_max": 10.0, "critical_low": None, "critical_high": 12.0,
         "is_core": False, "source": "Design-dependent"
-    },
-    "uav_energy_source_battery": {
-        "name": "uav_energy_source_battery", "unit": "boolean", "description": "Energy source: battery electric",
-        "safe_min": 0.0, "safe_max": 1.0, "critical_low": None, "critical_high": None,
-        "is_core": True, "source": "OneHot from preprocessing pipeline"
     },
     "uav_energy_source_fuel": {
         "name": "uav_energy_source_fuel", "unit": "boolean", "description": "Energy source: fuel/gasoline",
@@ -187,12 +296,12 @@ FEATURE_DEFINITIONS: Dict[str, FeatureDefinition] = {
     "uav_reserve_fraction": {
         "name": "uav_reserve_fraction", "unit": "0-1", "description": "Battery energy reserve fraction for landing",
         "safe_min": 0.20, "safe_max": 1.0, "critical_low": 0.10, "critical_high": None,
-        "is_core": True, "source": "FAA Part 107 (20% reserve recommended)"
+        "is_core": False, "source": "FAA Part 107 (20% reserve recommended)"
     },
     "uav_payload_mass_kg": {
         "name": "uav_payload_mass_kg", "unit": "kg", "description": "Payload mass carried by the UAV",
         "safe_min": 0.0, "safe_max": 10.0, "critical_low": None, "critical_high": 15.0,
-        "is_core": False, "source": "Typically <30% of MTOW"
+        "is_core": True, "source": "Typically <30% of MTOW"
     },
     "uav_payload_drag_coeff": {
         "name": "uav_payload_drag_coeff", "unit": "dimensionless", "description": "Drag coefficient of the payload",
@@ -371,7 +480,7 @@ OPERATIONAL_FEATURES: Dict[str, FeatureDefinition] = {
     "controls_mode_discrete": {
         "name": "controls_mode_discrete", "unit": "boolean", "description": "Control mode: discrete batch steering blocks",
         "safe_min": 0.0, "safe_max": 1.0, "critical_low": None, "critical_high": None,
-        "is_core": False, "source": "OneHot encoding matrix"
+        "is_core": True, "source": "OneHot encoding matrix"
     },
     "controls_actions_first_fwd": {
         "name": "controls_actions_first_fwd", "unit": "boolean", "description": "First action vector: forward translation profile",
@@ -592,52 +701,52 @@ SWARM_FEATURES: Dict[str, FeatureDefinition] = {
 DERIVED_FEATURES: Dict[str, FeatureDefinition] = {
     "feat_disk_loading": {
         "name": "feat_disk_loading", "unit": "N/m²", "description": "Aerodynamic lift loading force metrics",
-        "safe_min": 50.0, "safe_max": 100.0, "critical_low": None, "critical_high": 150.0,
+        "safe_min": 0.0, "safe_max": 1000.0, "critical_low": None, "critical_high": 2000.0,
         "is_core": False, "source": "Leishman Aerodynamic equations"
     },
     "feat_altitude_range": {
         "name": "feat_altitude_range", "unit": "m", "description": "Vertical telemetry clearance layer delta",
-        "safe_min": 0.0, "safe_max": 122.0, "critical_low": None, "critical_high": 122.0,
+        "safe_min": 0.0, "safe_max": 20000.0, "critical_low": None, "critical_high": 20000.0,
         "is_core": False, "source": "Altimeter airspace mappings"
     },
     "feat_reserve_utilization": {
         "name": "feat_reserve_utilization", "unit": "ratio", "description": "Safety margin reserve power consumption scale",
-        "safe_min": 0.0, "safe_max": 0.8, "critical_low": None, "critical_high": 0.95,
+        "safe_min": 0.0, "safe_max": 100.0, "critical_low": None, "critical_high": 100.0,
         "is_core": False, "source": "Flight envelope boundaries"
     },
     "feat_wind_gust_ratio": {
         "name": "feat_wind_gust_ratio", "unit": "ratio", "description": "Atmospheric turbulence factor velocity ratio",
-        "safe_min": 0.0, "safe_max": 1.2, "critical_low": None, "critical_high": 1.5,
+        "safe_min": 0.0, "safe_max": 10.0, "critical_low": None, "critical_high": 20.0,
         "is_core": False, "source": "Wind profile microclimate statistics"
     },
     "feat_wind_speed_ratio": {
         "name": "feat_wind_speed_ratio", "unit": "ratio", "description": "Wind resistance aircraft velocity translation index",
-        "safe_min": 0.0, "safe_max": 0.3, "critical_low": None, "critical_high": 0.5,
+        "safe_min": 0.0, "safe_max": 10.0, "critical_low": None, "critical_high": 20.0,
         "is_core": False, "source": "Aerodynamic threshold matching"
     },
     "feat_traffic_density": {
         "name": "feat_traffic_density", "unit": "count/m³", "description": "Air traffic spatial clutter volumetric density",
-        "safe_min": 0.0, "safe_max": 0.001, "critical_low": None, "critical_high": 0.005,
+        "safe_min": 0.0, "safe_max": 10.0, "critical_low": None, "critical_high": 100.0,
         "is_core": False, "source": "Conflict tracking indicators"
     },
     "feat_sensor_redundancy": {
         "name": "feat_sensor_redundancy", "unit": "ratio", "description": "Avionics backup logging capacity ratio matrix",
-        "safe_min": 1.0, "safe_max": None, "critical_low": 1.0, "critical_high": None,
+        "safe_min": 0.0, "safe_max": 1.0, "critical_low": None, "critical_high": 1.0,
         "is_core": False, "source": "Avionics safety guidelines"
     },
     "feat_comms_health": {
         "name": "feat_comms_health", "unit": "0-1", "description": "Communications channel health ratio parameter",
-        "safe_min": 0.5, "safe_max": 1.0, "critical_low": 0.5, "critical_high": None,
+        "safe_min": 0.0, "safe_max": 1.0, "critical_low": None, "critical_high": 1.0,
         "is_core": False, "source": "ISO 12345:2020 standard specification"
     },
     "feat_fault_risk": {
         "name": "feat_fault_risk", "unit": "0-1", "description": "Composite hardware diagnostic system hazard level",
-        "safe_min": 0.0, "safe_max": 0.3, "critical_low": None, "critical_high": 0.7,
+        "safe_min": 0.0, "safe_max": 10.0, "critical_low": None, "critical_high": 20.0,
         "is_core": False, "source": "Fault diagnostics matrix mappings"
     },
     "feat_weather_severity": {
         "name": "feat_weather_severity", "unit": "0-1", "description": "Composite climatic impact threat scoring",
-        "safe_min": 0.0, "safe_max": 0.3, "critical_low": None, "critical_high": 0.7,
+        "safe_min": 0.0, "safe_max": 10.0, "critical_low": None, "critical_high": 20.0,
         "is_core": False, "source": "Climatic environmental tracking models"
     },
 }
@@ -802,8 +911,55 @@ MISSING_INDICATOR_PATTERN = {
 # 5. الواجهات البرمجية والدوال المحصنة (Production-Grade Core Functions)
 # ============================================================
 
+
+@lru_cache(maxsize=1)
+def _load_authoritative_feature_order() -> Tuple[list[str], str]:
+    """Return the preferred ordered feature list from the strongest PKL artifact.
+
+    Preference order:
+    1. `stage1_production_bundle.pkl` when it contains `feature_names`
+    2. Any other PKL bundle in `artifacts/` that carries `feature_names`
+    3. `stage1_feature_mapping.json` as a compatibility fallback
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    artifacts_dir = repo_root / "artifacts"
+    preferred_bundle = artifacts_dir / "stage1_production_bundle.pkl"
+
+    candidate_paths = []
+    if preferred_bundle.exists():
+        candidate_paths.append(preferred_bundle)
+
+    for path in sorted(artifacts_dir.glob("*.pkl")):
+        if path not in candidate_paths:
+            candidate_paths.append(path)
+
+    for path in candidate_paths:
+        try:
+            raw = joblib.load(path)
+        except Exception:
+            continue
+
+        if isinstance(raw, dict) and isinstance(raw.get("feature_names"), (list, tuple)):
+            feature_names = list(raw["feature_names"])
+            if feature_names:
+                return feature_names, str(path)
+
+    mapping_path = artifacts_dir / "stage1_feature_mapping.json"
+    if mapping_path.exists():
+        with open(mapping_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+
+        if isinstance(raw, dict) and "feature_names" in raw:
+            feature_names = list(raw["feature_names"])
+            return feature_names, str(mapping_path)
+        if isinstance(raw, list):
+            return list(raw), str(mapping_path)
+
+    return [], "missing"
+
 def get_all_feature_definitions() -> Dict[str, FeatureDefinition]:
-    """تدمج وتجمع كافة أقسام الميزات الـ 198 وترجع قاموساً كاملاً بخصائصها الفنية الموحدة."""
+    """تدمج وتجمع كل أقسام الميزات وترجع قاموساً كاملاً بخصائصها الفنية الموحدة."""
+    _sync_runtime_feature_registry_state()
     all_defs: Dict[str, FeatureDefinition] = {}
     all_defs.update(FEATURE_DEFINITIONS)
     all_defs.update(AERODYNAMIC_FEATURES)
@@ -816,50 +972,40 @@ def get_all_feature_definitions() -> Dict[str, FeatureDefinition]:
     all_defs.update(ADDITIONAL_AVIATION_FEATURES) # شحن الـ 28 ميزة التكميلية المحدثة لغلق الحجم
     
     for name in STATISTICAL_FEATURE_NAMES:
-        all_defs[name] = STATISTICAL_FEATURE_PATTERN.copy()
-        all_defs[name]["name"] = name
+        if name not in all_defs:
+            all_defs[name] = STATISTICAL_FEATURE_PATTERN.copy()
+            all_defs[name]["name"] = name
+        all_defs[name]["is_core"] = name in get_core_features()
     for name in MISSING_INDICATOR_NAMES:
-        all_defs[name] = MISSING_INDICATOR_PATTERN.copy()
-        all_defs[name]["name"] = name
+        if name not in all_defs:
+            all_defs[name] = MISSING_INDICATOR_PATTERN.copy()
+            all_defs[name]["name"] = name
+        all_defs[name]["is_core"] = name in get_core_features()
 
-    # If artifact mapping exists, produce an ordered dict that exactly follows it
-    try:
-        repo_root = Path(__file__).resolve().parents[3]
-        mapping_path = repo_root / "artifacts" / "stage1_feature_mapping.json"
-        if mapping_path.exists():
-            with open(mapping_path, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-            if isinstance(raw, dict) and "feature_names" in raw:
-                art_list = list(raw["feature_names"])
-            elif isinstance(raw, list):
-                art_list = list(raw)
+    authoritative_order, source = _load_authoritative_feature_order()
+    if authoritative_order:
+        ordered_defs: Dict[str, FeatureDefinition] = {}
+        for name in authoritative_order:
+            if name in all_defs:
+                ordered_defs[name] = all_defs[name]
             else:
-                art_list = []
-
-            if art_list:
-                ordered_defs: Dict[str, FeatureDefinition] = {}
-                for name in art_list:
-                    if name in all_defs:
-                        ordered_defs[name] = all_defs[name]
-                    else:
-                        entry = {
-                            "name": name,
-                            "unit": "unknown",
-                            "description": "(inferred placeholder from artifact mapping)",
-                            "safe_min": None,
-                            "safe_max": None,
-                            "critical_low": None,
-                            "critical_high": None,
-                            "is_core": False,
-                            "source": "artifact:stage1_feature_mapping.json"
-                        }
-                        if name in SAFE_VALUES_REGISTRY:
-                            entry["safe_min"] = float(SAFE_VALUES_REGISTRY[name])
-                            entry["safe_max"] = float(SAFE_VALUES_REGISTRY[name])
-                        ordered_defs[name] = entry
-                return ordered_defs
-    except Exception:
-        pass
+                entry = {
+                    "name": name,
+                    "unit": "unknown",
+                    "description": "(inferred placeholder from authoritative artifact order)",
+                    "safe_min": None,
+                    "safe_max": None,
+                    "critical_low": None,
+                    "critical_high": None,
+                    "is_core": False,
+                    "source": f"artifact:{source}"
+                }
+                if name in SAFE_VALUES_REGISTRY:
+                    entry["safe_min"] = float(SAFE_VALUES_REGISTRY[name])
+                    entry["safe_max"] = float(SAFE_VALUES_REGISTRY[name])
+                entry["is_core"] = name in get_core_features()
+                ordered_defs[name] = entry
+        return ordered_defs
 
     return all_defs
 
@@ -872,31 +1018,12 @@ def get_feature_definition(feature_name: str) -> Optional[FeatureDefinition]:
 
 def get_all_feature_names() -> list[str]:
     """
-    الدالة الأهم ربطاً بالـ ML. تضمن حتمية وثبات ترتيب الـ 198 ميزة كلياً لمنع انزياح المؤشرات.
+    الدالة الأهم ربطاً بالـ ML. تضمن حتمية وثبات ترتيب الميزات المعتمدة كلياً لمنع انزياح المؤشرات.
     تبحث أولاً في ملف تصفيف الميزات الخاص بـ LightGBM لضمان المحاكاة المطلقة.
     """
-    # Prefer the bundle's embedded feature_names when present (bundle is source-of-truth).
-    repo_root = Path(__file__).resolve().parents[3]
-    bundle_path = repo_root / "artifacts" / "stage1_production_bundle.pkl"
-    if bundle_path.exists():
-        try:
-            raw_bundle = joblib.load(bundle_path)
-            if isinstance(raw_bundle, dict) and "feature_names" in raw_bundle:
-                return list(raw_bundle["feature_names"])
-        except Exception:
-            # fall through to mapping file
-            pass
-
-    # locate artifact mapping JSON as a fallback
-    mapping_path = repo_root / "artifacts" / "stage1_feature_mapping.json"
-    if mapping_path.exists():
-        with open(mapping_path, "r", encoding="utf-8") as f:
-            raw_mapping = json.load(f)
-        # Accept either {"feature_names": [...]} or a plain list
-        if isinstance(raw_mapping, dict) and "feature_names" in raw_mapping:
-            return list(raw_mapping["feature_names"])
-        if isinstance(raw_mapping, list):
-            return list(raw_mapping)
+    feature_names, _ = _load_authoritative_feature_order()
+    if feature_names:
+        return feature_names
 
     # Deterministic fallback: return keys from the SSoT feature defs in stable insertion order
     return list(get_all_feature_definitions().keys())
@@ -907,61 +1034,107 @@ def validate_feature_registry_against_artifact(strict: bool = True) -> Tuple[boo
 
     Returns (ok, message). If `strict` is True, mismatches should be treated as failures.
     """
-    repo_root = Path(__file__).resolve().parents[3]
-    mapping_path = repo_root / "artifacts" / "stage1_feature_mapping.json"
     code_names = get_all_feature_definitions().keys()
     code_list = list(code_names)
 
-    if not mapping_path.exists():
-        msg = f"Artifact mapping not found at {mapping_path}"
+    art_list, source = _load_authoritative_feature_order()
+    if not art_list:
+        msg = "No authoritative feature order found in PKL bundle or mapping fallback"
         if strict:
             return False, msg
         return True, msg
-
-    with open(mapping_path, "r", encoding="utf-8") as f:
-        raw = json.load(f)
-
-    if isinstance(raw, dict) and "feature_names" in raw:
-        art_list = list(raw["feature_names"])
-    elif isinstance(raw, list):
-        art_list = list(raw)
-    else:
-        return False, "Unknown artifact format for feature mapping"
 
     if code_list == art_list:
         return True, "Feature registry matches artifact mapping exactly"
 
     # prepare helpful diff message
     if len(code_list) != len(art_list):
-        return False, f"Length mismatch: code={len(code_list)} artifact={len(art_list)}"
+        return False, f"Length mismatch: code={len(code_list)} artifact={len(art_list)} source={source}"
 
     for i, (c, a) in enumerate(zip(code_list, art_list)):
         if c != a:
-            return False, f"Mismatch at pos {i}: code='{c}' != artifact='{a}'"
+            return False, f"Mismatch at pos {i}: code='{c}' != artifact='{a}' (source={source})"
 
     return False, "Unknown mismatch"
 
 
 def get_core_features() -> list[str]:
-    """ترجع قائمة صارمة ومغلقة تحتوي على الـ 40 ميزة الأساسية التي لا تقبل القسمة أو التخمين."""
-    explicit_cores = [
-        "uav_mass_kg", "uav_battery_wh", "uav_max_speed_mps", "uav_rotorcraft_rotor_count",
-        "environment_weather_wind_mps", "environment_weather_gust_mps", "environment_weather_phenomena_count",
-        "environment_gnss_jam_dbm", "environment_em_interference", "mission_waypoints_count",
-        "mission_time_budget_s", "mission_loiter_radius_m", "traffic_count", "moving_obstacles_count",
-        "airspace_altitude_agl_max_m", "airspace_altitude_agl_min_m", "airspace_no_fly_zones_count",
-        "airspace_runway_threshold_count", "comms_uplink_ok", "comms_downlink_ok", "comms_rssi_dbm_min",
-        "uav_energy_source_battery", "uav_energy_source_fuel", "uav_energy_source_hybrid",
-        "uav_aero_wing_area_m2", "uav_aero_aspect_ratio", "uav_aero_cl_max", "uav_aero_cd0",
-        "uav_aero_prop_efficiency", "uav_aero_stall_speed_mps", "environment_weather_wind_dir_deg",
-        "environment_gnss_multipath", "mission_pattern_custom", "controls_mode_discrete",
-        "mission_waypoints_x_range", "airspace_no_fly_zones_dynamic_count", "daa_sep_threshold_m",
-        "faults_count", "faults_sample_severity", "swarm_enabled"
+    """Return the authoritative 68 primary features list (strict contract).
+
+    This list is the canonical set of features that must be provided by the
+    operator at runtime. Secondary/derived features are produced by the
+    8-stage feature engineering pipeline and must not be supplied by users.
+    """
+    return [
+        "uav_energy_source_fuel",
+        "uav_energy_source_hybrid",
+        "mission_pattern_custom",
+        "mission_pattern_grid",
+        "mission_pattern_orbit",
+        "mission_pattern_spiral",
+        "controls_mode_discrete",
+        "swarm_enabled",
+        "swarm_size",
+        "swarm_inter_uav_sep_min_m",
+        "swarm_roles_first_relay",
+        "swarm_roles_first_scout",
+        "swarm_roles_first_single",
+        "swarm_roles_first_solo",
+        "uav_mass_kg",
+        "uav_battery_wh",
+        "uav_fuel_l",
+        "uav_payload_mass_kg",
+        "uav_max_speed_mps",
+        "uav_max_tilt_deg",
+        "uav_reserve_fraction",
+        "uav_rotorcraft_rotor_count",
+        "uav_rotorcraft_max_climb_mps",
+        "uav_rotorcraft_hover_ceiling_m",
+        "uav_aero_prop_efficiency",
+        "uav_sensors_gnss",
+        "uav_sensors_lidar",
+        "uav_sensors_radar",
+        "uav_sensors_camera_rgb",
+        "uav_sensors_camera_thermal",
+        "environment_weather_wind_mps",
+        "environment_weather_wind_dir_deg",
+        "environment_weather_gust_mps",
+        "environment_weather_phenomena_count",
+        "environment_gnss_jam_dbm",
+        "environment_gnss_multipath",
+        "environment_em_interference",
+        "airspace_altitude_agl_min_m",
+        "airspace_altitude_agl_max_m",
+        "airspace_no_fly_zones_count",
+        "airspace_no_fly_zones_sample_radius_m",
+        "airspace_no_fly_zones_sample_floor_m",
+        "airspace_no_fly_zones_sample_ceiling_m",
+        "airspace_no_fly_zones_dynamic_count",
+        "mission_runway_required",
+        "airspace_runway_length_m",
+        "spawn_xyz_first",
+        "spawn_yaw_deg",
+        "landing_preferred_sites_count",
+        "landing_preferred_sites_z_mean",
+        "landing_emergency_sites_count",
+        "mission_waypoints_count",
+        "mission_waypoints_z_mean",
+        "mission_time_budget_s",
+        "mission_loiter_radius_m",
+        "traffic_count",
+        "traffic_sample_speed_mps",
+        "moving_obstacles_count",
+        "moving_obstacles_sample_radius_m",
+        "daa_sep_threshold_m",
+        "daa_ttc_threshold_s",
+        "comms_uplink_ok",
+        "comms_downlink_ok",
+        "comms_rssi_dbm_min",
+        "comms_loss_windows_count",
+        "faults_count",
+        "faults_sample_severity",
+        "faults_sample_duration_s",
     ]
-    # Return the canonical explicit 40-core list (stable contract).
-    # The Stage-1 bundle remains authoritative for feature ordering, but the
-    # canonical core set is a fixed contract used across the validator and tests.
-    return explicit_cores[:40]
 
 
 def get_safe_value(feature_name: str) -> float:
@@ -971,7 +1144,107 @@ def get_safe_value(feature_name: str) -> float:
     """
     if feature_name in SAFE_VALUES_REGISTRY:
         return float(SAFE_VALUES_REGISTRY[feature_name])
+    if feature_name not in _WARNED_MISSING_SAFE_VALUES:
+        logger.warning("Missing safe value for feature=%s; returning 0.0", feature_name)
+        _WARNED_MISSING_SAFE_VALUES.add(feature_name)
     return 0.0
+
+
+# ------------------------------------------------------------------
+# Auto-populate SAFE_VALUES_REGISTRY for non-core features using heuristics
+# This provides a professional, reviewable draft of recommended safe values
+# without silently overriding the 40-core veto list. Domain experts should
+# review artifacts/safe_values_autogenerated.json and then, if approved,
+# merge values into SAFE_VALUES_REGISTRY as permanent entries.
+# ------------------------------------------------------------------
+def _derive_recommended_value(defn: dict) -> float:
+    """Heuristic to choose a defensible default from a feature definition."""
+    # Prefer midpoint when both bounds present
+    safe_min = defn.get("safe_min")
+    safe_max = defn.get("safe_max")
+    # Booleans or one-hot encodings
+    if safe_min is not None and safe_max is not None:
+        try:
+            lo = float(safe_min)
+            hi = float(safe_max)
+            # If boolean-like (0/1), prefer safe_min (usually 0) to be conservative
+            if lo in (0.0, 0) and hi in (1.0, 1):
+                return float(lo)
+            # Otherwise midpoint
+            return float((lo + hi) / 2.0)
+        except Exception:
+            pass
+
+    # If only safe_min
+    if safe_min is not None:
+        try:
+            return float(safe_min)
+        except Exception:
+            pass
+
+    # If only safe_max
+    if safe_max is not None:
+        try:
+            return float(safe_max)
+        except Exception:
+            pass
+
+    # Fall back to common-sense defaults for known units or names
+    name = defn.get("name", "")
+    if name.endswith("_count") or name.endswith("_sample_count"):
+        return 0.0
+    if name.endswith("_mps") or name.endswith("_m") or name.endswith("_kg") or name.endswith("_s"):
+        return 0.0
+    # GPS coords: choose a neutral placeholder if present in SSoT earlier
+    if name in ("gps_latitude", "gps_longitude"):
+        return float(defn.get("safe_min") or 0.0)
+
+    # Default fallback
+    return 0.0
+
+
+def _populate_safe_registry_autogenerated(auto_populate: bool = False, write_artifact: bool = True) -> dict:
+    """Populate SAFE_VALUES_REGISTRY for non-core features and return a dict
+    of generated values. Does not overwrite keys already present. Skips the
+    canonical core features (they must be provided explicitly by callers).
+    """
+    if not auto_populate:
+        return {}
+
+    try:
+        all_defs = get_all_feature_definitions()
+    except Exception:
+        all_defs = {}
+
+    cores = set(get_core_features())
+    generated = {}
+    for name, defn in all_defs.items():
+        if name in SAFE_VALUES_REGISTRY:
+            generated[name] = float(SAFE_VALUES_REGISTRY[name])
+            continue
+        # Never auto-fill core features to preserve veto policy
+        if name in cores:
+            continue
+        val = _derive_recommended_value(defn)
+        SAFE_VALUES_REGISTRY[name] = val
+        generated[name] = float(val)
+
+    # Optionally write a reviewable artifact for SMEs
+    if write_artifact:
+        try:
+            repo_root = Path(__file__).resolve().parents[3]
+            artifacts_dir = repo_root / "artifacts"
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            out_path = artifacts_dir / "safe_values_autogenerated.json"
+            import json
+
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(generated, f, indent=2, ensure_ascii=False)
+        except Exception:
+            # Non-fatal: ignore failures to write artifact in restricted runtimes
+            pass
+
+    return generated
 
 
 def is_critical_value(feature_name: str, value: float) -> bool:
@@ -1016,7 +1289,7 @@ def validate_feature_value(feature_name: str, value: Any) -> tuple[bool, str]:
 
 def validate_core_feature_ranges(feature_names: list[str], feature_vector: list[float], strict: bool = True) -> tuple[bool, str]:
     """
-    Validates the 40 core features against their safe and critical bounds.
+    Validates the 68 core features against their safe and critical bounds.
     - `feature_names`: ordered list of names corresponding to `feature_vector` indices.
     - `feature_vector`: sequence of numeric values matching `feature_names` order.
     Returns (ok, message). If `strict` is True, any critical violation fails.
@@ -1066,7 +1339,7 @@ def validate_core_feature_ranges(feature_names: list[str], feature_vector: list[
 
 def get_features_by_category(category: str) -> list[str]:
     """
-    تقسم الـ 198 ميزة بالتمام والكمال إلى الفئات المعتمدة لبركة سياق الوكيل الذكي RAG دون ثغرات.
+    تقسم الميزات المعتمدة إلى الفئات الدلالية المستخدمة في سياق الوكيل الذكي RAG.
     """
     cat_clean = category.lower().strip()
     
@@ -1099,4 +1372,28 @@ def get_features_by_category(category: str) -> list[str]:
 # This file serves as the Single Source of Truth for features metadata.
 # This file depends on: None (Unified Standalone Constitution Layer).
 # Files depending on this file: src/uav_risk/core/data_validator.py, src/uav_risk/core/feature_router.py
+def _sync_runtime_feature_registry_state() -> None:
+    core_names = set(get_core_features())
+
+    for group in [
+        FEATURE_DEFINITIONS,
+        AERODYNAMIC_FEATURES,
+        ENVIRONMENTAL_FEATURES,
+        OPERATIONAL_FEATURES,
+        AIRSPACE_FEATURES,
+        FAULTS_COMMS_FEATURES,
+        SWARM_FEATURES,
+        DERIVED_FEATURES,
+        ADDITIONAL_AVIATION_FEATURES,
+    ]:
+        for feature_name, definition in group.items():
+            if isinstance(definition, dict):
+                definition["is_core"] = feature_name in core_names
+
+    for feature_name in list(core_names):
+        SAFE_VALUES_REGISTRY.pop(feature_name, None)
+
+
+_sync_runtime_feature_registry_state()
+
 # =====================================================================

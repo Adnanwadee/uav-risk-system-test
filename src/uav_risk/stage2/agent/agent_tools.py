@@ -1,8 +1,8 @@
 # File Path: src/uav_risk/stage2/agent/agent_tools.py
 import math
 from typing import Any, Dict, List, Optional, Set, Tuple
-from src.uav_risk.stage2.agent.agent_schemas import FeatureAssessment, ConditionalGoConstraint
-from src.uav_risk.stage2.rag.rag_core import AsyncRAGCore
+from uav_risk.stage2.agent.agent_schemas import FeatureAssessment, ConditionalGoConstraint
+from uav_risk.stage2.rag.rag_core import AsyncRAGCore
 
 EPSILON = 1e-5  # تحصين الحدود ضد مشاكل Float Precision Boundary
 
@@ -10,8 +10,8 @@ EPSILON = 1e-5  # تحصين الحدود ضد مشاكل Float Precision Bounda
 CROSS_FEATURE_SAFETY_MAP: Dict[str, List[str]] = {
     "high_load_extreme_weather": [
         "uav_mass_kg", 
-        "environment_weather_wind_speed_ms", 
-        "payload_mass_kg"
+        "environment_weather_wind_mps", 
+        "uav_payload_mass_kg"
     ]
 }
 
@@ -121,7 +121,7 @@ def check_physics_constraint(
     # 1. حمولة القرص المروحي (Disk Loading Framework)
     if constraint_name == "disk_loading":
         mass = features.get("uav_mass_kg", 0.0)
-        payload = features.get("payload_mass_kg", 0.0)
+        payload = features.get("uav_payload_mass_kg", 0.0)
         area = features.get("uav_rotorcraft_disk_area_m2", 0.001)
         
         if area <= EPSILON:
@@ -156,7 +156,7 @@ def check_physics_constraint(
                 "conditional_constraint": ConditionalGoConstraint(
                     constraint_id="C_DL_REG", 
                     description="Trim overall payload profile config to reduce rotor disc pressure.", 
-                    feature_name="payload_mass_kg", 
+                    feature_name="uav_payload_mass_kg", 
                     required_value_range="disk_loading <= 35.0", 
                     legal_reference="FAA AC 107-2B"
                 )
@@ -172,8 +172,8 @@ def check_physics_constraint(
 
     # 2. مقاومة وهبات الرياح (Wind-to-Airspeed Aerodynamic Susceptibility)
     elif constraint_name == "wind_susceptibility":
-        wind_mps = features.get("environment_weather_wind_speed_ms", 0.0)
-        v_max = features.get("uav_max_speed_ms", 15.0)
+        wind_mps = features.get("environment_weather_wind_mps", 0.0)
+        v_max = features.get("uav_max_speed_mps", 15.0)
         mass = features.get("uav_mass_kg", 1.0)
         
         gust = wind_mps * 1.4  # Military standard aviation gust estimation factor
@@ -352,8 +352,8 @@ def execute_cross_dependency_check(scenario_name: str, features: Dict[str, float
     assessments: List[FeatureAssessment] = []
     if scenario_name == "high_load_extreme_weather":
         mass = features.get("uav_mass_kg", 0.0)
-        wind = features.get("environment_weather_wind_speed_ms", 0.0)
-        payload = features.get("payload_mass_kg", 0.0)
+        wind = features.get("environment_weather_wind_mps", 0.0)
+        payload = features.get("uav_payload_mass_kg", 0.0)
         
         # Compound trigger bounds check containing absolute precision guards
         if mass > (7.0 + EPSILON) and wind > (10.0 + EPSILON) and payload > (2.0 + EPSILON):
@@ -361,7 +361,7 @@ def execute_cross_dependency_check(scenario_name: str, features: Dict[str, float
                 "Compound Flight Risk: Maximum takeoff mass operating concurrently "
                 "under severe aerodynamic cross-winds weather constraints."
             )
-            for f in ["uav_mass_kg", "environment_weather_wind_speed_ms", "payload_mass_kg"]:
+            for f in ["uav_mass_kg", "environment_weather_wind_mps", "uav_payload_mass_kg"]:
                 assessments.append(
                     FeatureAssessment(
                         feature_name=f,
@@ -369,7 +369,7 @@ def execute_cross_dependency_check(scenario_name: str, features: Dict[str, float
                         status="CRITICAL",
                         reasoning=reason,
                         rag_consulted=False,
-                        related_features=["uav_mass_kg", "environment_weather_wind_speed_ms", "payload_mass_kg"]
+                        related_features=["uav_mass_kg", "environment_weather_wind_mps", "uav_payload_mass_kg"]
                     )
                 )
     return assessments

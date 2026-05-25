@@ -84,9 +84,8 @@ class ImputationStrategy:
         # 4. اشتقاق هبات الرياح الحية (تم إصلاح الـ Prefix Mismatch لربط المتغيرات حياً)
         elif feature_name == "environment_weather_gust_mps":
             wind = (
-                available_features.get("environment_weather_wind_speed_ms") or \
                 available_features.get("environment_weather_wind_mps") or \
-                available_features.get("environment_wind_speed_ms")
+                available_features.get("environment_wind_speed_mps")
             )
             if wind is not None and wind > 0:
                 val = wind * 1.4
@@ -103,9 +102,8 @@ class ImputationStrategy:
         # 6. الحساب التراكمي لخطورة الطقس المركب (تم تصحيح جلب الرياح الصارم)
         elif feature_name == "feat_weather_severity":
             wind = (
-                available_features.get("environment_weather_wind_speed_ms") or \
                 available_features.get("environment_weather_wind_mps") or \
-                available_features.get("environment_wind_speed_ms") or 0.0
+                available_features.get("environment_wind_speed_mps") or 0.0
             )
             gust = available_features.get("environment_weather_gust_mps")
             

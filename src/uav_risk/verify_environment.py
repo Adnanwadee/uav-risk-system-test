@@ -1,4 +1,4 @@
-"""src/uav_risk.verify_environment
+"""uav_risk.verify_environment
 ----------------------------------
 Flexible, aviation-aware environment verifier used by CI and ops.
 

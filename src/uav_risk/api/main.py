@@ -11,8 +11,10 @@ from fastapi.encoders import jsonable_encoder
 from uav_risk.core.config import get_settings
 from uav_risk.core.logging import setup_logging, set_flight_id, set_request_id
 from uav_risk.core.contracts import MasterFlightPayload
-from uav_risk.ml.loader import Stage1Bundle, load_stage1_bundle, assemble_feature_vector_from_dict
+from uav_risk.core.data_validator import DataValidator
+from uav_risk.ml.loader import Stage1Bundle, load_stage1_bundle, assemble_feature_vector_from_dict, ModelLoadError
 from uav_risk.ml.feature_defs import FEATURE_DEFINITIONS
+from uav_risk.ml.feature_defs import get_all_feature_names, get_core_features
 from uav_risk.stage2.rag.rag_core import AsyncRAGCore
 from uav_risk.stage2.rag.config import GroqLLMConfig
 from uav_risk.stage2.rag.groq_llm import GroqLLM
@@ -96,6 +98,14 @@ app = FastAPI(
 )
 
 
+# Include modular routers for profiles and lightweight validation used by frontend
+from uav_risk.api.profiles import router as profiles_router
+from uav_risk.api.validate import router as validate_router
+
+app.include_router(profiles_router, prefix="/api", tags=["profiles"])
+app.include_router(validate_router, prefix="/api", tags=["validation"])
+
+
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health(request: Request) -> Dict[str, Any]:
     app_state = request.app.state
@@ -128,9 +138,49 @@ async def evaluate_flight(payload: MasterFlightPayload, request: Request) -> JSO
             )
             
         try:
-            # Assemble feature vector early and pass precomputed results to pipeline
-            input_map = payload.model_dump()
+            flat_all = payload.flatten_for_ml(primary_only=False)
+            allowed_features = set(get_all_feature_names())
+            input_map = {key: value for key, value in flat_all.items() if key in allowed_features}
+
+            # Deterministic pre-flight veto (quick reject for blatantly invalid submissions)
+            from uav_risk.stage2.pipeline import DeterministicCore
+            veto_checker = DeterministicCore()
+            veto = veto_checker.pre_flight_veto_check(payload.to_tier0_dict())
+            if veto.vetoed:
+                return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={
+                    "veto": True,
+                    "reasons": [{"code": "tier0_veto", "message": veto.reason, "detail": "deterministic_tier0"}],
+                    "missing_cores": [],
+                    "warnings": [],
+                    "is_usable": False,
+                    "data_quality_score": 0.0,
+                })
+
             feature_vec, fv_meta = assemble_feature_vector_from_dict(input_map, app_state.stage1_bundle)
+            feature_map = fv_meta.get("feature_map", {})
+
+            policy_flag = None
+            if hasattr(app_state, 'stage1_bundle') and getattr(app_state.stage1_bundle, 'policy_config', None):
+                policy_flag = app_state.stage1_bundle.policy_config.get('fail_on_imputed_core')
+
+            validator = DataValidator(fail_on_imputed_core=policy_flag)
+            validation_result = validator.validate_and_store(feature_map)
+
+            if not validation_result.is_usable:
+                reasons = []
+                if validation_result.missing_core_features:
+                    reasons.append({"code": "missing_cores", "message": "Missing or critical core feature violations", "detail": ",".join(validation_result.missing_core_features)})
+                for w in validation_result.warnings:
+                    reasons.append({"code": "warning", "message": w, "detail": "validator"})
+
+                return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={
+                    "veto": False,
+                    "reasons": reasons,
+                    "missing_cores": validation_result.missing_core_features,
+                    "warnings": validation_result.warnings,
+                    "is_usable": validation_result.is_usable,
+                    "data_quality_score": validation_result.overall_data_quality_score,
+                })
 
             pipeline_result = await run_ace_pipeline(
                 flight_id=flight_id,
@@ -142,10 +192,18 @@ async def evaluate_flight(payload: MasterFlightPayload, request: Request) -> JSO
                 feature_defs=app_state.feature_defs,
                 report_writer=app_state.report_writer,
                 precomputed_feature_vector=feature_vec,
-                precomputed_validation_result=None
+                precomputed_validation_result=validation_result
             )
             return JSONResponse(content=jsonable_encoder(pipeline_result))
-            
+
+        except ModelLoadError as mle:
+            logger.warning("model_load_error_in_api_evaluation", flight_id=flight_id, error=str(mle))
+            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": str(mle)})
+
+        except HTTPException:
+            # Re-raise HTTP exceptions to preserve intended status codes
+            raise
+
         except Exception as system_failure:
             logger.critical("unhandled_critical_crash_inside_api_evaluation_gate", flight_id=flight_id, error=str(system_failure))
             raise HTTPException(

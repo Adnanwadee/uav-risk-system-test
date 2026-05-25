@@ -51,17 +51,18 @@ def run_stage1_inference(
             raise ValueError("Inference input error: feature_vector cannot be None")
             
         X_processed = feature_vector.reshape(1, -1)
-        if X_processed.shape[1] != 198:
-            raise ValueError(f"Shape discrepancy: Expected exactly 198 features, found {X_processed.shape[1]}")
+        declared_features = getattr(bundle, 'feature_names', None) or feature_names
+        if declared_features and len(declared_features) != X_processed.shape[1]:
+            raise ValueError(f"Shape discrepancy: Expected {len(declared_features)} features, found {X_processed.shape[1]}")
             
         if np.isnan(X_processed).any() or np.isinf(X_processed).any():
             raise ValueError("Data anomaly: Input feature vector contains invalid NaN or Inf values")
 
         # 🎯 تصحيح الثغرة الكبرى: محاذاة أسماء الميزات الفعلية للنموذج المخزن لضمان التوافق مع شجرة القرار
         actual_model_columns = getattr(bundle, 'feature_names', None) or feature_names
-        if not actual_model_columns or len(actual_model_columns) != 198:
+        if not actual_model_columns or len(actual_model_columns) != X_processed.shape[1]:
             logger.warning("Feature alignment anomaly: Missing or mismatch in bundle feature names. Using fallback index strings.")
-            actual_model_columns = [f"Column_{i}" for i in range(198)]
+            actual_model_columns = [f"Column_{i}" for i in range(X_processed.shape[1])]
             
         df_model_input = pd.DataFrame(X_processed, columns=actual_model_columns)
 

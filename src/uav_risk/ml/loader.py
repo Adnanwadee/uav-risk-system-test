@@ -6,14 +6,14 @@ Dependencies: Strictly follows the architectural specifications outlined in "Pla
 
 import os
 import json
-import joblib
+from uav_risk.ml.bundle_security import safe_load_bundle
 import structlog
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
+from pathlib import Path
 import numpy as np
-import math
 from uav_risk.ml import feature_defs
-from uav_risk.core import data_validator
+from uav_risk.ml.schemas import Stage1Bundle
+from uav_risk.core.feature_engineering import PRIMARY_FEATURE_SET, generate_all_features_map, split_primary_and_secondary_overrides
 
 # إعداد نظام التتبع والـ Logger المركزي للمنظومة
 logger = structlog.get_logger(__name__)
@@ -24,29 +24,62 @@ class ModelLoadError(Exception):
     pass
 
 
-@dataclass
-class Stage1Bundle:
-    """
-    Complete representation of all loaded machine learning artifacts and metadata.
-    Strictly aligned with the fields required by "Plan K" and runtime execution realities.
-    """
-    model: Any                      # LightGBM model instance
-    preprocessor: Any               # sklearn ColumnTransformer instance
-    feature_names: List[str]        # List of the 198 features in exact sequence
-    feature_mapping: Dict[str, int] # Mapping of {feature_name: index}
-    training_stats: Dict[str, Any]  # Baseline statistics for data drift detection
-    policy_config: Dict[str, Any]   # Decision thresholds and operational boundaries
-    model_metadata: Dict[str, Any]  # Content from model_card.json (version, metrics)
-    shap_explainer: Optional[Any]   # Loaded SHAP TreeExplainer instance
-    bundle_path: str                # File path from which the bundle was retrieved
-    label_encoder: Optional[Any] = None
-    class_names: List[str] = field(default_factory=list)
-    def get_model_version(self) -> str:
-        """Dynamic retrieval of the model execution iteration version from metadata."""
-        if isinstance(self.model_metadata, dict):
-            return self.model_metadata.get("version", self.model_metadata.get("pipeline_version", "unknown"))
-        return "unknown"
+AUTHORITATIVE_STAGE1_BUNDLE = "stage1_production_bundle.pkl"
 
+
+def select_authoritative_bundle_path(artifacts_dir: str) -> str:
+    """Select the strongest PKL artifact for Stage-1 runtime use.
+
+    Preference order:
+    1. `stage1_production_bundle.pkl` when present
+    2. Any other PKL bundle containing `feature_names`, `model`, and `preprocessor`
+    3. The first PKL bundle with `feature_names`
+    """
+    artifacts_path = Path(artifacts_dir)
+    preferred = artifacts_path / AUTHORITATIVE_STAGE1_BUNDLE
+    if preferred.exists():
+        return str(preferred)
+
+    candidates = [p for p in sorted(artifacts_path.glob("*.pkl")) if p.name != AUTHORITATIVE_STAGE1_BUNDLE]
+    best_path: Optional[Path] = None
+    best_score = -1
+
+    for path in candidates:
+        try:
+            # For inspection during candidate selection we allow unsigned bundles
+            # (they may be local artifacts). The final load enforces signature
+            # according to environment policy.
+            raw = safe_load_bundle(str(path), hmac_key=os.getenv("BUNDLE_HMAC_KEY"), allow_unsigned=True)
+        except Exception as exc:
+            logger.warning("Skipping unreadable or unverified PKL artifact", path=str(path), error=str(exc))
+            continue
+
+        if not isinstance(raw, dict):
+            continue
+
+        feature_names = raw.get("feature_names")
+        if not isinstance(feature_names, (list, tuple)) or not feature_names:
+            continue
+
+        score = len(feature_names)
+        if "model" in raw:
+            score += 100
+        if "preprocessor" in raw:
+            score += 100
+        if "class_names" in raw and isinstance(raw["class_names"], (list, tuple)) and len(raw["class_names"]) == 3:
+            score += 50
+        if "shap_explainer" in raw:
+            score += 10
+
+        if score > best_score:
+            best_score = score
+            best_path = path
+
+    if best_path is not None:
+        logger.warning("Using fallback PKL bundle instead of preferred stage1 bundle", selected=str(best_path), selected_score=best_score)
+        return str(best_path)
+
+    raise ModelLoadError(f"No authoritative Stage-1 bundle PKL found in {artifacts_dir}")
 
 def load_stage1_bundle(artifacts_dir: str) -> Stage1Bundle:
     """
@@ -59,7 +92,7 @@ def load_stage1_bundle(artifacts_dir: str) -> Stage1Bundle:
         logger.critical("Loading failed: Missing directory", error=error_msg)
         raise ModelLoadError(error_msg)
         
-    bundle_pkl_path = os.path.join(artifacts_dir, "stage1_production_bundle.pkl")
+    bundle_pkl_path = select_authoritative_bundle_path(artifacts_dir)
     feature_mapping_json_path = os.path.join(artifacts_dir, "stage1_feature_mapping.json")
     model_card_json_path = os.path.join(artifacts_dir, "model_card.json")
     inference_config_json_path = os.path.join(artifacts_dir, "stage1_inference_config.json")
@@ -73,8 +106,13 @@ def load_stage1_bundle(artifacts_dir: str) -> Stage1Bundle:
             raise ModelLoadError(error_msg)
             
     try:
-        logger.info("Loading master binary package", path=bundle_pkl_path)
-        raw_bundle = joblib.load(bundle_pkl_path)
+        logger.info("Loading master binary package (safe loader)", path=bundle_pkl_path)
+        try:
+            raw_bundle = safe_load_bundle(bundle_pkl_path,
+                                          hmac_key=os.getenv("BUNDLE_HMAC_KEY"),
+                                          allow_unsigned=os.getenv("BUNDLE_ALLOW_UNSIGNED", "true").lower() in ("1","true","yes"))
+        except Exception as be:
+            raise ModelLoadError(f"Bundle security verification or load failed: {be}") from be
         
         with open(feature_mapping_json_path, 'r') as f:
             raw_feature_mapping = json.load(f)
@@ -99,14 +137,13 @@ def load_stage1_bundle(artifacts_dir: str) -> Stage1Bundle:
             logger.critical("Bundle missing feature names", error=error_msg)
             raise ModelLoadError(error_msg)
 
-        artifact_order = None
-        try:
-            artifact_order = feature_defs.get_all_feature_names()
-        except Exception:
-            artifact_order = None
-
+        artifact_order = feature_defs.get_all_feature_names()
         if artifact_order and artifact_order != extracted_feature_names:
             logger.warning("Artifact mapping differs from bundle.feature_names; bundle is authoritative.", artifact_len=len(artifact_order), bundle_len=len(extracted_feature_names))
+
+        preprocessor_names = list(getattr(raw_bundle.get("preprocessor"), "feature_names_in_", []))
+        if preprocessor_names and len(preprocessor_names) != len(extracted_feature_names):
+            logger.warning("Preprocessor input schema differs from bundle feature order; bundle remains authoritative.", preprocessor_len=len(preprocessor_names), bundle_len=len(extracted_feature_names))
 
         # Ensure all mandatory core features exist in the bundle mapping
         core_feats = feature_defs.get_core_features()
@@ -153,8 +190,8 @@ def validate_bundle(bundle_data: dict, policy_config: dict) -> None:
     if "model" not in bundle_data or "preprocessor" not in bundle_data:
         raise ValueError("Bundle validation failed: Core components 'model' or 'preprocessor' are missing")
         
-    if "feature_names" not in bundle_data or len(bundle_data["feature_names"]) != 198:
-        raise ValueError(f"Bundle validation failed: Expected exactly 198 feature entries")
+    if "feature_names" not in bundle_data or len(bundle_data["feature_names"]) == 0:
+        raise ValueError("Bundle validation failed: Expected non-empty feature_names list")
         
     if not hasattr(bundle_data["model"], "predict_proba"):
         raise ValueError("Bundle validation failed: Loaded model instance does not expose 'predict_proba'")
@@ -165,16 +202,22 @@ def validate_bundle(bundle_data: dict, policy_config: dict) -> None:
     logger.debug("Structural verification constraints successfully cleared")
 
 
-def assemble_feature_vector_from_dict(input_mapping: Dict[str, Any], bundle: Stage1Bundle) -> Tuple[np.ndarray, Dict[str, Any]]:
+def assemble_feature_vector_from_dict(
+    input_mapping: Dict[str, Any],
+    bundle: Stage1Bundle,
+    validation_result: Optional["ValidationResult"] = None,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
     Given a user-provided mapping of feature_name->value and a loaded Stage1Bundle,
     produce a numeric numpy feature vector ordered exactly as `bundle.feature_names`.
 
     Behavior:
     - If a core feature value is missing or non-numeric -> raises ModelLoadError
-    - For non-core features missing in input -> fill from `feature_defs.get_safe_value()`
-    - If input_mapping contains keys not in feature_names, they are collected as `free_text` (string)
-    Returns (feature_vector, metadata) where metadata contains lists: 'imputed', 'provided', 'free_text'
+    - By default, any non-primary key is rejected to enforce the 68-feature contract.
+    - If `allow_secondary_overrides=True`, secondary feature overrides are accepted for
+      transitional compatibility with the legacy 198-feature path.
+    Returns (feature_vector, metadata) where metadata contains lists of provided,
+    overridden, and ignored inputs.
     """
     if not isinstance(input_mapping, dict):
         raise ModelLoadError("Input mapping must be a dict of feature_name->value")
@@ -183,71 +226,33 @@ def assemble_feature_vector_from_dict(input_mapping: Dict[str, Any], bundle: Sta
     if not feature_names or len(feature_names) == 0:
         raise ModelLoadError("Bundle has no feature names to assemble vector")
 
-    name_to_idx = {n: i for i, n in enumerate(feature_names)}
-    vec = np.zeros(len(feature_names), dtype=float)
-    imputed = []
-    provided = []
-    free_text_parts = []
+    primary_inputs, secondary_overrides, extras = split_primary_and_secondary_overrides(input_mapping, feature_names)
+    invalid_keys = sorted(key for key in extras.keys() if key not in feature_names)
+    if invalid_keys:
+        raise ValueError(
+            "assemble_feature_vector_from_dict accepts only the authoritative 198 features. Rejected keys: " + str(invalid_keys)
+        )
 
-    # Run core validation and enrichment early so we can apply derived values
-    try:
-        vr = data_validator.validate_and_enrich(input_mapping)
-    except Exception as e:
-        raise ModelLoadError(f"Validation error: {e}")
+    feature_map = generate_all_features_map(primary_inputs, overrides=secondary_overrides, feature_order=feature_names)
+    vec = np.array([feature_map[name] for name in feature_names], dtype=np.float64)
 
-    if not vr.is_usable:
-        raise ModelLoadError(f"Core validation failed: {vr.errors}")
+    if validation_result is None:
+        bundle_policy = getattr(bundle, "policy_config", {}) if bundle else {}
+        policy_flag = None
+        if isinstance(bundle_policy, dict):
+            policy_flag = bundle_policy.get("fail_on_imputed_core")
+        from uav_risk.core.data_validator import DataValidator
 
-    enriched = vr.validated_features
-
-    # treat any unknown keys as free-text intended for the agent
-    for key, val in input_mapping.items():
-        if key not in name_to_idx:
-            # collect free-textizable entries
-            if isinstance(val, str):
-                free_text_parts.append(f"{key}: {val}")
-            else:
-                free_text_parts.append(f"{key}: {repr(val)}")
-
-    # populate vector
-    core_feats = feature_defs.get_core_features()
-    for i, fname in enumerate(feature_names):
-        if fname in input_mapping:
-            raw = input_mapping[fname]
-            try:
-                num = float(raw)
-                if math.isfinite(num):
-                    vec[i] = num
-                    provided.append(fname)
-                    continue
-            except Exception:
-                # fall through to use enriched or safe
-                pass
-
-        # if enriched has a value (core or derived), use it
-        if fname in enriched:
-            try:
-                num = float(enriched[fname])
-                vec[i] = num
-                # mark as provided if originally in input, else imputed
-                if fname in input_mapping:
-                    provided.append(fname)
-                else:
-                    imputed.append(fname)
-                continue
-            except Exception:
-                pass
-
-        # fallback to safe registry
-        vec[i] = feature_defs.get_safe_value(fname)
-        imputed.append(fname)
+        validation_result = DataValidator(fail_on_imputed_core=policy_flag).validate_and_store(feature_map)
 
     metadata = {
-        "imputed": imputed,
-        "provided": provided,
-        "free_text": "\n".join(free_text_parts),
-        "validator_warnings": vr.warnings,
-        "validator_errors": vr.errors
+        "feature_map": feature_map,
+        "primary_inputs": primary_inputs,
+        "secondary_overrides": secondary_overrides,
+        "ignored_extras": extras,
+        "validator_warnings": validation_result.warnings,
+        "validator_errors": validation_result.errors,
+        "is_usable": validation_result.is_usable,
     }
     return vec, metadata
 

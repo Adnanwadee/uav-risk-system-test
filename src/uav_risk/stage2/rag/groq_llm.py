@@ -49,7 +49,9 @@ class GroqLLM:
             return output_text
         except Exception as exc:
             logger.error("groq_api_call_failed_fallback_activated", error=str(exc))
-            return f"Error connecting to Groq API client pipeline: {str(exc)}"
+            # Raise so upstream callers (ReportWriter, agents) can detect failure
+            # and activate fallback behavior instead of silently receiving text.
+            raise RuntimeError(f"Error connecting to Groq API client pipeline: {str(exc)}")
 
     async def generate_with_context(self, query: str, context: str) -> str:
         """Assembles a high-density grounded context block to answer the compliance query."""

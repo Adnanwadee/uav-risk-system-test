@@ -7,9 +7,9 @@ from typing import Dict, Any, List, Optional
 import structlog
 
 # الاستيراد المطلق للعقود والأنواع لضمان حتمية اتساق النظام الكلي
-from src.uav_risk.core.data_validator import ValidationResult
-from src.uav_risk.ml.schemas import MLResult
-from src.uav_risk.stage2.agent.agent_schemas import AgentDecision
+from uav_risk.core.data_validator import ValidationResult
+from uav_risk.ml.schemas import MLResult
+from uav_risk.stage2.agent.agent_schemas import AgentDecision
 
 logger = structlog.get_logger(__name__)
 

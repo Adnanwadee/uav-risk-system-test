@@ -9,9 +9,11 @@ from pydantic import BaseModel, Field
 
 # الاستيرادات المطلقة لجميع المراحل الخمسة للنظام الجوي لضمان الامتثال المعماري
 from uav_risk.core.contracts import MasterFlightPayload
-from uav_risk.core.data_validator import validate_and_enrich, ValidationResult
-from uav_risk.core.imputation_strategy import ImputationStrategy
+from uav_risk.core.data_validator import DataValidator, ValidationResult
 from uav_risk.core.feature_router import FeatureRouter
+from uav_risk.core.drone_profile_store import DroneProfileStore
+from uav_risk.core.uav_catalog import get_uav_limits
+from uav_risk.core.feature_engineering import generate_all_features_map
 from uav_risk.ml.loader import Stage1Bundle
 from uav_risk.ml.inference import run_stage1_inference
 from uav_risk.ml.schemas import MLResult
@@ -33,10 +35,82 @@ class VetoResult(BaseModel):
 class DeterministicCore:
     def pre_flight_veto_check(self, tier0_data: dict) -> VetoResult:
         logger.info("tier0_deterministic_veto_check_initiated", components=list(tier0_data.keys()))
+        # Hard veto: explicit restricted flag
         if tier0_data.get("in_restricted_zone") and float(tier0_data["in_restricted_zone"]) > 0:
             return VetoResult(vetoed=True, reason="Absolute Veto: UAV trajectory breaches designated national no-fly restriction zones.")
-        if tier0_data.get("altitude_m") and float(tier0_data["altitude_m"]) > 400.0:
-            return VetoResult(vetoed=True, reason="Absolute Veto: Operational altitude ceiling breached strict physical emergency threshold (> 400m).")
+
+        # Resolve user-selected drone profile if provided.
+        profile_id = tier0_data.get("drone_profile_id")
+        profile_store = DroneProfileStore()
+        if profile_id:
+            profile = profile_store.get_profile(profile_id)
+            if profile:
+                if not tier0_data.get("uav_model_id"):
+                    tier0_data["uav_model_id"] = profile.uav_model_id
+                if not tier0_data.get("uav_model_spec"):
+                    tier0_data["uav_model_spec"] = profile.uav_model_spec
+                if not tier0_data.get("drone_profile_name"):
+                    tier0_data["drone_profile_name"] = profile.profile_name
+            else:
+                return VetoResult(vetoed=True, reason=f"Absolute Veto: Unknown drone profile '{profile_id}'. Select a saved drone profile first.")
+        elif not tier0_data.get("uav_model_id") and not isinstance(tier0_data.get("uav_model_spec"), dict):
+            return VetoResult(vetoed=False, reason="No drone profile supplied; skipping manufacturer profile check.")
+
+        # Determine jurisdiction and uav model limits
+        jurisdiction = tier0_data.get("jurisdiction") or "EASA"
+        uav_model_id = tier0_data.get("uav_model_id") or tier0_data.get("uav_model")
+        # Allow operator to include full spec in the payload under key `uav_model_spec`
+        operator_spec = tier0_data.get("uav_model_spec") if isinstance(tier0_data.get("uav_model_spec"), dict) else None
+
+        # Load manufacturer limits or accept operator_spec if provided.
+        # This keeps responsibility with the operator: if they select a drone/profile,
+        # the system only checks the declared limits against the scenario.
+        manuf_limits = None
+        if operator_spec:
+            manuf_limits = get_uav_limits(None, operator_spec=operator_spec)
+        elif uav_model_id:
+            manuf_limits = get_uav_limits(uav_model_id)
+        else:
+            return VetoResult(vetoed=True, reason="Absolute Veto: No drone selected and no model/spec supplied. Choose a saved drone profile or provide a manufacturer-backed model spec.")
+
+        # System-level ceiling (conservative default)
+        system_max_altitude = 400.0
+
+        # Compute effective altitude ceiling: most restrictive among manufacturer, jurisdiction, and system
+        manuf_alt = None
+        if manuf_limits and isinstance(manuf_limits.get("max_operating_altitude_m"), (int, float)):
+            manuf_alt = float(manuf_limits.get("max_operating_altitude_m"))
+
+        # jurisdiction regulatory ceiling (basic defaults; to be expanded via docs metadata)
+        jurisdiction_ceiling = 120.0 if jurisdiction.upper() == "EASA" else 120.0
+
+        candidates = [system_max_altitude, jurisdiction_ceiling]
+        if manuf_alt is not None:
+            candidates.append(manuf_alt)
+
+        effective_ceiling = min(candidates)
+
+        # Check altitude fields (support different key names)
+        altitude_val = None
+        for key in ("altitude_m", "mission_altitude_m", "flight_altitude_m"):
+            if tier0_data.get(key) is not None:
+                try:
+                    altitude_val = float(tier0_data.get(key))
+                    break
+                except Exception:
+                    altitude_val = None
+
+        if altitude_val is not None and altitude_val > effective_ceiling:
+            return VetoResult(vetoed=True, reason=f"Absolute Veto: Operational altitude ceiling breached (> {effective_ceiling}m).")
+
+        # Optional: check manufacturer wind limits for hard veto zone
+        if manuf_limits and isinstance(manuf_limits.get("max_wind_mps"), (int, float)):
+            try:
+                wind_val = float(tier0_data.get("environment_weather_wind_mps") or tier0_data.get("wind_speed_mps") or 0.0)
+                if wind_val > float(manuf_limits.get("max_wind_mps")):
+                    return VetoResult(vetoed=True, reason=f"Absolute Veto: Wind exceeds manufacturer max ({manuf_limits.get('max_wind_mps')} m/s).")
+            except Exception:
+                pass
         return VetoResult(vetoed=False, reason="Cleared Tier-0 constraints.")
 
 
@@ -141,8 +215,9 @@ async def run_ace_pipeline(
             validation_result = precomputed_validation_result
             flat_features = validation_result.validated_features
         else:
-            flat_features = payload.flatten_for_ml()
-            validation_result = validate_and_enrich(flat_features)
+            flat_features = generate_all_features_map(payload.flatten_for_ml(primary_only=True))
+            dv = DataValidator()
+            validation_result = dv.validate_and_store(flat_features)
             if not validation_result.is_usable:
                 elapsed_ms = (time.perf_counter() - start_time) * 1000.0
                 return _build_error_fallback_response(flight_id, f"Validation failed: {validation_result.errors}", elapsed_ms)

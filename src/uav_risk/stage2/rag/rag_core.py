@@ -75,11 +75,15 @@ class AsyncRAGCore:
                 model_kwargs={'device': 'cpu'},
                 encode_kwargs={'normalize_embeddings': True}
             )
-            self._db = FAISS.load_local(
-                folder_path=idx_path,
-                embeddings=self._embeddings,
-                allow_dangerous_deserialization=True
-            )
+            # Use verified safe loader which enforces signature checks
+            from uav_risk.stage2.rag.build_index import verify_and_safely_load_faiss, SecurityError
+            try:
+                self._db = verify_and_safely_load_faiss(idx_path, self._embeddings)
+            except SecurityError as sec_exc:
+                self._init_status["db"] = f"security_failed: {str(sec_exc)}"
+                logger.error("vector_db_security_verification_failed", error=str(sec_exc))
+                self._db = None
+                return
             self._init_status["db"] = "ready"
         except Exception as exc:
             self._init_status["db"] = f"failed: {str(exc)}"

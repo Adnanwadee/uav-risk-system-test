@@ -1,18 +1,21 @@
 """
 Module: uav_risk.ml.schemas
-Purpose: Core data contracts and data structures for Stage-1 machine learning inference.
+Purpose: Central authoritative data contracts and multi-class data structures for Stage-1 
+         machine learning inference, fortified against multi-class SHAP blind-spots.
 Dependencies: Strictly standalone (Zero domain dependencies).
+Source References: LightGBM Production Standards, Lundberg & Lee (2017) SHAP Frameworks.
 """
 
+from __future__ import annotations
 from enum import Enum
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 
-# ============================================================
-# Enums
-# ============================================================
+# =====================================================================
+# Enums: Authoritative Flight Directives
+# =====================================================================
 
 class RiskClass(str, Enum):
     """
@@ -25,7 +28,7 @@ class RiskClass(str, Enum):
     
     @classmethod
     def from_string(cls, value: str) -> "RiskClass":
-        """Convert a string value into its corresponding RiskClass enum value safely."""
+        """Convert a string value into its corresponding RiskClass enum safely."""
         mapping = {
             "High Risk": cls.HIGH_RISK,
             "Medium Risk": cls.MEDIUM_RISK,
@@ -43,20 +46,15 @@ class RiskClass(str, Enum):
         return mapping.get(self, "NO-GO")
 
 
-# ============================================================
+# =====================================================================
 # Data Contracts (Schemas)
-# ============================================================
+# =====================================================================
 
 @dataclass
 class FeatureImportance:
     """
-    Represents the mathematical SHAP feature contribution for a specific scenario feature.
-    
-    Attributes:
-        feature_name: The official identifier of the feature.
-        shap_value: The direction and scale of risk impact (positive increases risk).
-        feature_value: The validated raw value input to the model.
-        description: Human-readable operational definition of the feature.
+    Represents the mathematical SHAP feature contribution for a specific scenario feature,
+    properly decoded for multi-class semantic operational risk direction.
     """
     feature_name: str
     shap_value: float
@@ -64,34 +62,42 @@ class FeatureImportance:
     description: Optional[str] = None
     direction: str = "unknown"
     rank: int = 0
+    predicted_class: Optional[str] = None
+    
+    # 🔴 معالجة ثغرة المتعدد الفئات: تمرير التوزيع الكامل للقيم عبر الطبقات الثلاث للـ ReAct Agent
+    shap_values_all_classes: Dict[str, float] = field(default_factory=dict)
     
     def __post_init__(self):
-        """Derive the direction of the impact explicitly based on the SHAP value sign."""
-        self.direction = "increases_risk" if self.shap_value > 0 else "decreases_risk"
+        """
+        اشتقاق دلالة إشارة قيمة شيب فيزيائياً بناءً على فئة التنبؤ الحالية النشطة.
+        الموجب مع High Risk يرفع الخطر، والموجب مع Low Risk يدعم أمان الرحلة (يخفض الخطر الكلي).
+        """
+        if self.predicted_class == "Low Risk":
+            self.direction = "decreases_risk" if self.shap_value > 0 else "increases_risk"
+        elif self.predicted_class == "High Risk":
+            self.direction = "increases_risk" if self.shap_value > 0 else "decreases_risk"
+        else:
+            self.direction = "stabilizes_medium_risk" if self.shap_value > 0 else "shifts_away_from_medium"
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert data structure to standard primitive dictionary for serialization."""
+        """Convert data structure to standard primitive dictionary for JSON serialization."""
         return {
             "feature_name": self.feature_name,
             "shap_value": self.shap_value,
             "direction": self.direction,
             "feature_value": self.feature_value,
             "description": self.description,
-            "rank": self.rank
+            "rank": self.rank,
+            "predicted_class": self.predicted_class,
+            "shap_values_all_classes": self.shap_values_all_classes
         }
 
 
 @dataclass
 class MLResult:
     """
-    Encapsulates the complete execution response from the Stage-1 machine learning layer.
-    
-    Attributes:
-        risk_class: Categorical prediction (High Risk / Medium Risk / Low Risk).
-        risk_score: Aggregated probability metric scaled to [0.0, 1.0].
-        confidence: Maximum prediction class assignment probability.
-        probabilities: Complete class distribution map.
-        top_features: Sorted list of features with significant SHAP attribution.
+    Encapsulates the complete execution response from the Stage-1 machine learning layer,
+    fortified against structural data disconnect anomalies and preserving immutable raw outputs.
     """
     risk_class: RiskClass
     risk_score: float
@@ -108,19 +114,62 @@ class MLResult:
     )
     shap_expected_values: Optional[List[float]] = None
     
+    # 🔴 صمام أمان التوثيق والمراجعة الجنائية: الاحتفاظ بمخرجات الموديل الأصلية قبل أي معايرة تشغيلية يدوية
+    raw_risk_class: Optional[str] = None
+    raw_probabilities: Dict[str, float] = field(default_factory=dict)
+    
     def __post_init__(self):
-        """Enforce strict bounding limits on probabilistic indicators."""
+        """فرض التحقق الصارم والكامل من النطاقات الرياضية وسلامة مجموع مصفوفة الاحتمالات."""
+        # حجز وتثبيت المخرجات الخام الأصلية عند لحظة الإنشاء لمنع طمس معالم البيانات
+        if not self.raw_risk_class:
+            self.raw_risk_class = self.risk_class.value
+        if not self.raw_probabilities and self.probabilities:
+            self.raw_probabilities = dict(self.probabilities)
+            
+        self.validate_bounds()
+
+    def validate_bounds(self) -> None:
+        """فحص النزاهة الرياضية والحدود القصوى والدنيا للمخرجات."""
         if not 0.0 <= self.risk_score <= 1.0:
             raise ValueError(f"Constraint Violation: risk_score must be in [0, 1], got {self.risk_score}")
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError(f"Constraint Violation: confidence must be in [0, 1], got {self.confidence}")
         if self.probabilities:
             prob_sum = sum(self.probabilities.values())
-            if abs(prob_sum - 1.0) > 0.01:
-                raise ValueError(f"Constraint Violation: Probabilities must sum to 1.0, got {prob_sum}")
-    
+            # تشديد الفحص البرميوم إلى 1e-4 لمنع الانحرافات الكينماتيكية الصامتة للبيانات
+            if abs(prob_sum - 1.0) > 0.0001:
+                raise ValueError(f"Constraint Violation: Probabilities must sum to 1.0 with epsilon 1e-4, got {prob_sum}")
+
+    def calibrate_probabilities(self, target_class: RiskClass) -> None:
+        """
+        درع حقن المعايرة الحية (Live Probability Rescaling Shield).
+        عند تدخل درع الانحياز لتخفيض التصنيف (مثلاً إلى Medium)، تعيد هذه الدالة توزيع أوزان 
+        المصفوفة الحية والـ Score بالتوازي حركياً لمنع حدوث التناقض والتضارب أمام الوكيل الذكي.
+        """
+        if self.risk_class == target_class or not self.probabilities:
+            return
+            
+        old_class = self.risk_class.value
+        new_class = target_class.value
+        
+        # تبديل وتبادل الاحتمالات حياً لإعادة التوازن المعماري للمتجه
+        old_prob = self.probabilities.get(old_class, 0.0)
+        new_prob = self.probabilities.get(new_class, 0.0)
+        
+        if old_prob > new_prob:
+            self.probabilities[new_class] = old_prob
+            self.probabilities[old_class] = new_prob
+            
+        # تحديث المؤشرات الداخلية لتتحدث بنفس لغة الحقيقة الرياضية للـ UI والوكيل الجنائي
+        self.risk_class = target_class
+        self.confidence = self.probabilities[new_class]
+        
+        # إعادة حساب السكور الموزون حياً بناءً على مصفوفة الاحتمالات الجديدة المحدثة للرحلة
+        self.risk_score = calculate_risk_score(self.probabilities)
+        self.validate_bounds()
+
     def to_dict(self) -> Dict[str, Any]:
-        """Transforms the object into a fully serializable nested JSON format."""
+        """Transforms the object into a fully serializable nested JSON format for DB logging."""
         return {
             "risk_class": self.risk_class.value,
             "risk_decision": self.risk_class.to_decision(),
@@ -134,26 +183,26 @@ class MLResult:
             "model_version": self.model_version,
             "feature_vector_hash": self.feature_vector_hash,
             "timestamp": self.timestamp,
+            "raw_risk_class": self.raw_risk_class,
+            "raw_probabilities": self.raw_probabilities
         }
 
 
 @dataclass
 class Stage1Bundle:
-    """
-    Comprehensive container encapsulating all stateful ML model components.
-    Extracted dynamically from the unified production binary bundle file.
-    """
-    model: Any                      # LightGBM Classifier instance
-    preprocessor: Any               # sklearn ColumnTransformer instance
-    label_encoder: Any              # sklearn LabelEncoder instance
-    shap_explainer: Any             # shap TreeExplainer instance
-    feature_names: List[str]        # List of the 198 features in exact order
-    class_names: List[str]          # Exact label encoder classes
-    training_stats: Dict[str, Any]  # Baseline indicators for drift calculations
-    policy_config: Dict[str, Any]   # Threshold constraints
-    model_metadata: Dict[str, Any]  # Training metadata
-    bundle_path: str                # Filepath origin
+    model: Any
+    preprocessor: Any
+    label_encoder: Any
+    shap_explainer: Any
+    feature_names: List[str]
+    feature_mapping: Dict[str, int]  # <--- تمت الإضافة هنا للحل الفوري
+    class_names: List[str]
+    training_stats: Dict[str, Any]
+    policy_config: Dict[str, Any]
+    model_metadata: Dict[str, Any]
+    bundle_path: str
 
+    
     @property
     def n_features(self) -> int:
         """Total features configured for input preprocessing."""
@@ -169,9 +218,9 @@ class Stage1Bundle:
         return self.model_metadata.get("version", self.model_metadata.get("pipeline_version", "unknown"))
 
 
-# ============================================================
+# =====================================================================
 # Core Computational Helper Functions
-# ============================================================
+# =====================================================================
 
 def calculate_risk_score(probabilities: Dict[str, float]) -> float:
     """
@@ -205,10 +254,6 @@ def calculate_confidence(probabilities: Dict[str, float]) -> float:
 def probabilities_to_dict(probabilities: Any, class_names: List[str]) -> Dict[str, float]:
     """
     Binds raw linear output probabilities to structural string category names cleanly.
-    
-    Args:
-        probabilities: Raw prediction output matrix from model execution.
-        class_names: Static alignment text keys matching exact label encoder sequence.
     """
     if hasattr(probabilities, 'tolist'):
         probabilities = probabilities.tolist()
@@ -233,9 +278,9 @@ __all__ = [
     "probabilities_to_dict",
 ]
 
-
 # =====================================================================
 # Architectural Registry Block:
+# This file serves as the strict Foundational Interface Contract Layer for ML outcomes.
 # This file depends on: None (Foundational Interface Contract Layer).
-# Files depending on this file: uav_risk/ml/loader.py, uav_risk/ml/inference.py, uav_risk/ml/shap_explain.py
+# Files depending on this file: src/uav_risk/ml/loader.py, src/uav_risk/ml/inference.py, src/uav_risk/ml/shap_explain.py
 # =====================================================================

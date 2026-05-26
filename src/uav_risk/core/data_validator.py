@@ -67,10 +67,11 @@ class DataValidator:
     
     def __init__(self, fail_on_imputed_core: Optional[bool] = None) -> None:
         self.all_feature_names = get_all_feature_names()
-        # Use the canonical 40-core contract; do not drop expected cores even
+        # Use the canonical 68-core contract; do not drop expected cores even
         # if they are absent from the model column list. This preserves the
         # validator contract used by tests and the rest of the pipeline.
-        self.core_features = set(get_core_features())
+        self.core_feature_order = list(get_core_features())
+        self.core_features = set(self.core_feature_order)
         missing_from_artifact = [c for c in self.core_features if c not in self.all_feature_names]
         if missing_from_artifact:
             logger.warning(f"Core features absent from artifact ordering: {missing_from_artifact}")
@@ -105,16 +106,24 @@ class DataValidator:
             partial_validated[name] = record.final_value
             result.validation_records.append(record)
             
-            if not record.was_missing and name in self.core_features:
+            if record.status in ["PROVIDED", "CORRECTED", "DERIVED"] and name in self.core_features:
                 user_provided_cores.add(name)
         result.validated_features = partial_validated
         
         # Recompute imputed core features from validation records (covers NaN/Inf and invalid types)
         result.imputed_core_features = [r.feature_name for r in result.validation_records if r.is_core_feature and r.status == "IMPUTED"]
+        result.missing_core_features = [name for name in self.core_feature_order if name not in user_provided_cores]
 
         # تحقق القفل الصارم المتوافق مع فضاء أعمدة النموذج
         has_all_cores = all(name in user_provided_cores for name in self.core_features)
-        has_critical_breach = any(is_critical_value(name, partial_validated.get(name, get_safe_value(name))) for name in self.core_features)
+        has_critical_breach = False
+        for name in self.core_features:
+            value = partial_validated.get(name)
+            if value is None:
+                continue
+            if is_critical_value(name, value):
+                has_critical_breach = True
+                break
         
         # احتساب درجة جودة مدخلات البيانات عيارياً بناء على الطول الحقيقي للمجموعات المتوفرة
         result.overall_data_quality_score = self._compute_quality_score(result.validation_records)
@@ -126,6 +135,7 @@ class DataValidator:
         result.has_critical_missing = not has_all_cores
         
         if not has_all_cores:
+            result.errors.append(f"MISSING_CORE_FEATURES: {result.missing_core_features}")
             logger.error(f"STRICT CORE LOCK BREACH: Missing vital core features: {result.missing_core_features}")
             
         # Final informational signal for test harnesses and operators
@@ -136,6 +146,26 @@ class DataValidator:
         """تدقق جنائياً في جودة ونوع ومدى القيمة الممررة للميزة المفردة دون تعديلها."""
         defn = get_feature_definition(name) or {}
         is_core = name in self.core_features
+
+        if name == "spawn_xyz_first" and isinstance(raw_value, (list, tuple)):
+            if len(raw_value) != 3:
+                return FeatureValidationRecord(
+                    feature_name=name, original_value=raw_value, final_value=float("nan"),
+                    status="IMPUTED", was_missing=False, was_out_of_range=False, was_invalid_type=True,
+                    correction_reason="spawn_xyz_first must contain exactly 3 spatial values.", is_core_feature=is_core
+                )
+            try:
+                return FeatureValidationRecord(
+                    feature_name=name, original_value=raw_value, final_value=float(raw_value[0]),
+                    status="PROVIDED", was_missing=False, was_out_of_range=False, was_invalid_type=False,
+                    correction_reason="Accepted spatial triplet payload; canonical scalar anchor retained from first coordinate.", is_core_feature=is_core
+                )
+            except (TypeError, ValueError):
+                return FeatureValidationRecord(
+                    feature_name=name, original_value=raw_value, final_value=float("nan"),
+                    status="IMPUTED", was_missing=False, was_out_of_range=False, was_invalid_type=True,
+                    correction_reason="spawn_xyz_first triplet contains non-numeric values.", is_core_feature=is_core
+                )
 
         if raw_value is None or str(raw_value).strip().lower() in ["", "n/a", "unknown", "null", "none"]:
             return FeatureValidationRecord(

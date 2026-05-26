@@ -1,8 +1,8 @@
 run-api:
-	uvicorn src.uav_risk.api.main:app --reload --host 127.0.0.1 --port 8000
+	PYTHONPATH=src uvicorn uav_risk.api.main:app --reload --host 127.0.0.1 --port 8000
 
 run-ui:
-	streamlit run ui/app.py --server.port 8501
+	PYTHONPATH=src streamlit run ui/app.py --server.port 8501
 
 run:
 	@echo "Starting API on http://127.0.0.1:8000"

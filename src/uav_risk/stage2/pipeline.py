@@ -215,7 +215,7 @@ async def run_ace_pipeline(
             validation_result = precomputed_validation_result
             flat_features = validation_result.validated_features
         else:
-            flat_features = generate_all_features_map(payload.flatten_for_ml(primary_only=True))
+            flat_features = generate_all_features_map(payload.flatten_for_ml(primary_only=False))
             dv = DataValidator()
             validation_result = dv.validate_and_store(flat_features)
             if not validation_result.is_usable:

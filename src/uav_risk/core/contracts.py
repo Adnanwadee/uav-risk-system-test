@@ -15,15 +15,8 @@ from uav_risk.ml.feature_defs import get_core_features
 # إعداد محرك السجلات المركزي لطبقة العقود
 logger = logging.getLogger(__name__)
 
-# ============================================================
-# Custom Flexible Validators & Filter Shields
-# ============================================================
-
 def parse_flexible_float(v: Any) -> Optional[float]:
-    """
-    يقبل قيماً نصية أو رقمية أو فارغة ويحولها بشكل آمن إلى float أو None.
-    يعالج الحالات الشاذة مثل "N/A" أو "unknown" دون التسبب بـ Crash.
-    """
+    """يقبل قيماً نصية أو رقمية أو فارغة ويحولها بشكل آمن إلى float أو None."""
     if v is None:
         return None
     if isinstance(v, (float, int)):
@@ -53,14 +46,9 @@ def parse_flexible_bool(v: Any) -> Optional[bool]:
         return bool(v)
     return None
 
-# إعلان الأنواع المرنة الموقعة بالـ Validators المسبقة
 FlexFloat = Annotated[Optional[float], BeforeValidator(parse_flexible_float)]
 FlexBool = Annotated[Optional[bool], BeforeValidator(parse_flexible_bool)]
 
-
-# ============================================================
-# Sub-Models (Nested for UI UI/UX convenience)
-# ============================================================
 
 class UAVSpecs(BaseModel):
     """عقد مواصفات وهندسة الطائرة بدون طيار الحتمية والثنائية."""
@@ -124,7 +112,6 @@ class MissionParams(BaseModel):
     transition_profile_ff_to_vtol_t_s: FlexFloat = None
     emergency_landing_activated: FlexFloat = None
     
-    # حقول التحكم والمحاكاة المدمجة لمنع السقوط صامتاً
     controls_mode_continuous: FlexFloat = None
     controls_mode_discrete: FlexFloat = None
     controls_actions_first_fwd: FlexFloat = None
@@ -172,7 +159,7 @@ class GPSData(BaseModel):
 
 
 class OperatorData(BaseModel):
-    """عقد ترخيص الطيار والقيود التشريعية للمجال الجوي والاتصالات والأسراب مشحونة بالكامل."""
+    """عقد ترخيص الطيار والقيود التشريعية للمجال الجوي والاتصالات والأسراب."""
     model_config = ConfigDict(extra="allow")
     
     license_type: Optional[str] = None
@@ -183,7 +170,6 @@ class OperatorData(BaseModel):
     airport_distance_km: FlexFloat = None
     operator_license_type_encoded: FlexFloat = None
     
-    # حقن حقول معايير تشريعات الأجواء وإدارة الموانع
     airspace_altitude_agl_min_m: FlexFloat = None
     airspace_altitude_agl_max_m: FlexFloat = None
     airspace_no_fly_zones_count: FlexFloat = None
@@ -200,7 +186,6 @@ class OperatorData(BaseModel):
     airspace_class_encoded_g: FlexFloat = None
     daa_sep_threshold_m: FlexFloat = None
     
-    # حقن حقول الأعطال والاتصالات والأسراب
     faults_count: FlexFloat = None
     faults_sample_duration_s: FlexFloat = None
     faults_sample_severity: FlexFloat = None
@@ -219,21 +204,11 @@ class OperatorData(BaseModel):
     swarm_roles_first_solo: FlexFloat = None
 
 
-# ============================================================
-# Master Payload Contract
-# ============================================================
-
 class MasterFlightPayload(BaseModel):
-    """
-    العقد المركزي الجامع. يقوم بتوحيد كافة النماذج الفرعية وتوفير دوال
-    التسطيح لتعلم الآلة ومحرك الفحص الحتمي لـ Tier-0.
-    """
+    """العقد المركزي الجامع الموحد لكافة المدخلات الحية والملفات الثانوية."""
     model_config = ConfigDict(extra="allow")
     
     flight_id: Optional[str] = None
-
-    # Drone selection and operator-provided profile data.
-    # The catalog reference lives in src/uav_risk/schema/uav_catalog.json.
     drone_profile_id: Optional[str] = None
     drone_profile_name: Optional[str] = None
     uav_model_id: Optional[str] = None
@@ -249,28 +224,22 @@ class MasterFlightPayload(BaseModel):
     timestamp: Optional[str] = None
 
     def get_flight_id(self) -> str:
-        """يولد UUID فريد إذا لم يكن موجوداً لتأمين التتبع الجنائي للرحلة."""
         if not self.flight_id:
             self.flight_id = f"flt_{uuid.uuid4().hex[:8]}"
         return self.flight_id
 
-    def flatten_for_ml(self, primary_only: bool = True) -> dict[str, Any]:
+    def flatten_for_ml(self, primary_only: bool = False) -> dict[str, Any]:
         """
-        تقوم بتسطيح الكائنات المتداخلة وربطها بالبادئات المعتمدة هندسياً،
-        مع حماية الحقول المشتركة لمنع حدوث التكرار المزدوج للأسماء.
+        تسطيح كامل الكائنات المتداخلة. 
+        تعديل حرج: جعل الافتراضي primary_only=False للسماح بعبور ميزات الـ 130 الثانوية الـ Overrides.
         """
         raw_dump = self.model_dump(exclude={"flight_id", "free_text", "timestamp"})
         flat_dict = {}
         
         prefix_mapping = {
-            "uav": "uav_",
-            "mission": "mission_",
-            "environment": "environment_",
-            "gps": "gps_",
-            "operator": "operator_"
+            "uav": "uav_", "mission": "mission_", "environment": "environment_",
+            "gps": "gps_", "operator": "operator_"
         }
-        
-        # قائمة البوادئ المعمارية المعتمدة في دستور المنظومة لمنع دمجها مرتين
         known_prefixes = (
             "uav_", "mission_", "environment_", "gps_", "operator_", 
             "controls_", "airspace_", "daa_", "faults_", "comms_", 
@@ -281,7 +250,6 @@ class MasterFlightPayload(BaseModel):
             if isinstance(value, dict) and key in prefix_mapping:
                 prefix = prefix_mapping[key]
                 for sub_key, sub_val in value.items():
-                    # منع الترقيع والتكرار: إذا كان الحقل الفرعي يبدأ ببادئة معمارية معتمدة نتركه كما هو
                     if any(sub_key.startswith(p) for p in known_prefixes):
                         final_key = sub_key
                     else:
@@ -291,33 +259,24 @@ class MasterFlightPayload(BaseModel):
                 for sub_key, sub_val in value.items():
                     flat_dict[f"{key}_{sub_key}"] = sub_val
             elif isinstance(value, list):
-                continue
+                if key == "spawn_xyz_first":
+                    flat_dict[key] = value
             else:
                 flat_dict[key] = value
                 
-        logger.debug(f"[{self.get_flight_id()}] Flattened payload into {len(flat_dict)} strongly-typed features.")
         if primary_only:
             cores = set(get_core_features())
             return {k: v for k, v in flat_dict.items() if k in cores}
         return flat_dict
 
     def to_tier0_dict(self) -> dict[str, Any]:
-        """
-        مخرج سريع ومبني على أسس فيزيائية متينة لـ Deterministic Core لتقييم الـ Veto.
-        يعالج بشكل صحيح كبح وتحويل السعة من mAh إلى طاقة حقيقية Wh حياً.
-        """
-        flat = self.flatten_for_ml()
-        
-        # الحل الهندسي الذكي لمنع تزييف طاقة البطارية:
+        flat = self.flatten_for_ml(primary_only=False)
         battery_wh = flat.get("uav_battery_wh")
         if battery_wh is None:
             mah = flat.get("uav_battery_capacity_mah")
             volts = flat.get("uav_battery_voltage_v")
             if mah is not None and volts is not None:
                 battery_wh = (float(mah) * float(volts)) / 1000.0
-            elif mah is not None:
-                logger.warning("to_tier0_dict: Battery mAh present but nominal voltage missing! Clipping conversion to prevent drift.")
-                battery_wh = None
 
         tier0_data = {
             "drone_profile_id": self.drone_profile_id,
@@ -333,10 +292,8 @@ class MasterFlightPayload(BaseModel):
         return tier0_data
 
 # =====================================================================
-# Consistency check: All signatures stable, no conflicts found.
-# =====================================================================
 # Architectural Registry Block:
 # This file defines incoming strongly-typed Pydantic contracts for Gate 1.
-# This file depends on: None (Standalone data serialization layer).
-# Files depending on this file: src/uav_risk/core/data_validator.py, src/uav_risk/api.py
+# This file depends on: src/uav_risk/ml/feature_defs.py
+# Files depending on this file: src/uav_risk/core/data_validator.py
 # =====================================================================

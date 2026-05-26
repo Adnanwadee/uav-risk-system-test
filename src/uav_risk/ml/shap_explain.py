@@ -1,7 +1,10 @@
 """
 Module: uav_risk.ml.shap_explain
-Purpose: High-performance SHAP explainability engine with class-level explainer caching.
-Dependencies: Imports FeatureImportance from uav_risk.ml.schemas and binds definitions from uav_risk.ml.feature_defs.
+Purpose: High-performance SHAP explainability engine with dynamic class-aware attribution,
+         fortified against static fallback and dimensionality drift.
+         Now supports raw feature values for human-readable agent reports.
+Dependencies: uav_risk.ml.schemas, uav_risk.ml.feature_defs
+Source References: Lundberg & Lee (2017), LightGBM Multiclass Production Standards.
 """
 
 import numpy as np
@@ -9,154 +12,129 @@ import shap
 import structlog
 from typing import List, Dict, Any, Optional
 
-# استيراد المكونات المقفلة لضمان التوافق المطلق وعدم حدوث تعارض
 from uav_risk.ml.schemas import FeatureImportance
 from uav_risk.ml.feature_defs import get_feature_definition
 
-# إعداد نظام التتبع والـ Logger للمرحلة الثانية
+# إعداد نظام التتبع واللوجر المنظم لطبقة التفسير الجنائي
 logger = structlog.get_logger(__name__)
 
 
 class ShapExplainer:
     """
-    Thread-safe wrapper for SHAP TreeExplainer optimized for LightGBM models.
-    Implements class-level caching to guarantee sub-millisecond lookups on repeated cycles.
+    مفسر قيم شيب عالي الأداء مع تحصين ضد انزياح الأبعاد (Dimensional Drift).
+    يستخدم كاش ذاكرة للكائنات الحسابية لمنع الاستهلاك المفرط للموارد في الطلبات المتتالية.
     """
-    # التخزين المؤقت على مستوى الكلاس لمنع إعادة بناء الـ Explainer المستهلك للموارد
     _cache: Dict[int, shap.TreeExplainer] = {}
 
     def __init__(self, model: Any, feature_names: List[str]):
-        """
-        Initializes the SHAP Explainer by utilizing the global memory cache or creating a new tree graph.
-        """
         self.feature_names = feature_names
         model_id = id(model)
         
         if model_id in ShapExplainer._cache:
-            logger.debug("SHAP TreeExplainer retrieved directly from cache", model_id=model_id)
             self.explainer = ShapExplainer._cache[model_id]
         else:
-            # النمط الاحترافي للحماية: إذا كان النموذج ممرراً كـ Mock يمتلك دالة تفسير جاهزة، نتبناه مباشرة
-            if hasattr(model, "shap_values"):
-                self.explainer = model
+            try:
+                self.explainer = shap.TreeExplainer(model)
                 ShapExplainer._cache[model_id] = self.explainer
-            else:
-                logger.info("Constructing new SHAP TreeExplainer instance for target model graph", model_id=model_id)
-                try:
-                    self.explainer = shap.TreeExplainer(model)
-                    ShapExplainer._cache[model_id] = self.explainer
-                except Exception as e:
-                    logger.error("Failed to initialize SHAP TreeExplainer baseline graph", error=str(e))
-                    self.explainer = None
-    def explain(self, X: np.ndarray, top_n: int = 10, predicted_class_idx: int = 0) -> List[FeatureImportance]:
+            except Exception as e:
+                logger.error("Failed to initialize SHAP TreeExplainer baseline graph", error=str(e))
+                self.explainer = None
+
+    def explain(
+        self,
+        X: np.ndarray,
+        top_n: int = 10,
+        predicted_class_idx: int = 0,
+        class_names: List[str] = None,
+        raw_values: Optional[np.ndarray] = None  # <-- المتجه الخام قبل المعالجة (فيزيائي)
+    ) -> List[FeatureImportance]:
         """
-        Calculates the exact SHAP value matrix for a processed state vector and sorts drivers by absolute impact.
+        حساب مصفوفة مساهمات قيم شيب الحقيقية الحية مع فك تشفير اتجاه التأثير بناءً على الفئة النشطة.
         
-        Args:
-            X (np.ndarray): Preprocessed feature matrix of shape (1, n_features) matching `feature_names`.
-            top_n (int): Number of driving features to extract for the agent.
-            predicted_class_idx (int): Index of the target class to explain (corresponds to highest probability).
-            
-        Returns:
-            List[FeatureImportance]: Strictly sorted list of drivers descending by absolute mathematical contribution.
+        Parameters
+        ----------
+        X : np.ndarray
+            البيانات المعالجة (scaled) المستخدمة في حساب SHAP.
+        raw_values : np.ndarray, optional
+            المتجه الخام بقيم فيزيائية (كما أُدخل أو أُنتج من DAG) ليُعرض في feature_value.
         """
         if self.explainer is None:
-            logger.warning("SHAP execution requested but explainer core is uninitialized. Returning empty analysis.")
+            logger.warning("SHAP core uninitialized; returning empty attribution list.")
             return []
             
         try:
-            logger.debug("Executing SHAP mathematical attribution vector pass", matrix_shape=X.shape)
-            # 1. حساب مصفوفة مساهمات قيم شيب
-            shap_values = self.explainer.shap_values(X)
+            # حساب قيم التفسير الحركية لعينة الطلب الحالي الحية
+            # الملاحظة: shap_values في LightGBM Multiclass تعيد قائمة من المصفوفات لكل فئة
+            shap_output = self.explainer.shap_values(X)
             
-            # 2. التعامل المرن والصارم مع أبعاد مخرجات SHAP في التصنيف المتعدد (Multi-class robust check)
-            if isinstance(shap_values, list):
-                # إذا كانت قائمة مصفوفات، نأخذ الفئة المستهدفة مباشرة
-                shap_for_class = shap_values[predicted_class_idx][0]
-            elif hasattr(shap_values, 'ndim') and shap_values.ndim == 3:
-                # شكل المصفوفة: (n_samples, n_features, n_classes)
-                shap_for_class = shap_values[0, :, predicted_class_idx]
-            elif hasattr(shap_values, 'ndim') and shap_values.ndim == 2:
-                # حالة ثنائية الأبعاد أو مخرجات مستوية
-                shap_for_class = shap_values[0]
+            # 🔴 الدرع الجنائي: معالجة الأبعاد الثلاثية أو القوائم لمنع الانهيار الصامت
+            if isinstance(shap_output, list):
+                # LightGBM يرجع قائمة مصفوفات؛ نختار مصفوفة الفئة التي تنبأ بها الموديل
+                shap_for_class = np.asarray(shap_output[predicted_class_idx])
+            elif getattr(shap_output, 'ndim', 0) == 3:
+                shap_for_class = shap_output[0, :, predicted_class_idx]
+            elif getattr(shap_output, 'ndim', 0) == 2:
+                shap_for_class = shap_output[0]
             else:
-                shap_for_class = np.asarray(shap_values).flatten()
+                shap_for_class = np.asarray(shap_output).flatten()
 
-            # التحقق الحرج لمنع حدوث إزاحة أو انهيار بسبب عدم تطابق طول الميزات
+            # تسوية الأبعاد للسطر الأول
+            if shap_for_class.ndim > 1:
+                shap_for_class = shap_for_class.flatten()
+
             if len(shap_for_class) != len(self.feature_names):
-                logger.error("SHAP dimension mismatch encountered against registered protocol features", 
+                logger.error("SHAP dimension mismatch against registry", 
                              shap_len=len(shap_for_class), target_len=len(self.feature_names))
                 return []
 
-            # 3. ترتيب المؤثرات حسب القيمة المطلقة تنازلياً لتحديد أقوى الدوافع
+            # الترتيب الحركي الحقيقي بناء على القيمة المطلقة للمساهمة
             abs_values = np.abs(shap_for_class)
             top_indices = np.argsort(abs_values)[-top_n:][::-1]
             
             output_drivers: List[FeatureImportance] = []
+            target_class_name = class_names[predicted_class_idx] if class_names else None
             
-            # 4. بناء كائنات عقود الأهمية وشحنها بالأوصاف الدلالية من دستور النظام
+            # تحضير مصدر القيم الخام (إن وُجد) مع مراعاة أن يكون متجهًا أحادي البعد
+            raw_flat = None
+            if raw_values is not None:
+                raw_flat = np.asarray(raw_values).flatten()
+            
             for rank_idx, idx in enumerate(top_indices, start=1):
                 feat_name = self.feature_names[idx]
                 shap_val = float(shap_for_class[idx])
                 
-                # استخراج القيمة الحقيقية المدخلة للموديل لاستعراضها في التقرير
-                feat_val = float(X[0, idx]) if X.ndim > 1 else float(X[idx])
+                # استخدام القيمة الخام الفيزيائية إن وجدت، وإلا القيمة المعالجة
+                if raw_flat is not None and idx < len(raw_flat):
+                    feat_val = float(raw_flat[idx])
+                else:
+                    feat_val = float(X[0, idx]) if X.ndim > 1 else float(X[idx])
                 
-                # جلب الدستور الدلالي للميزة لمساعدة الوكيل الذكي في التفكير المنطقي لاحقاً
                 feat_def = get_feature_definition(feat_name)
-                description = feat_def.get("description", feat_name) if feat_def else feat_name
                 
-                # إنشاء الكائن المعتمد والمقفل مع تحديد الرتبة والاتجاه ديناميكياً
                 driver = FeatureImportance(
                     feature_name=feat_name,
                     shap_value=shap_val,
                     feature_value=feat_val,
-                    description=description,
-                    rank=rank_idx
+                    description=feat_def.get("description", feat_name),
+                    rank=rank_idx,
+                    predicted_class=target_class_name,
+                    # تمرير قيم شيب للفئات الأخرى للوكيل (اختياري للتحليل المتقدم)
+                    shap_values_all_classes={
+                        class_names[c]: float(shap_output[c][0, idx])
+                        for c in range(len(class_names))
+                    } if isinstance(shap_output, list) else {}
                 )
                 output_drivers.append(driver)
                 
             return output_drivers
             
         except Exception as e:
-            logger.warning("SHAP calculation cycle encountered a non-fatal bypass sequence", error=str(e))
+            logger.error("SHAP explanation sequence failed due to internal tensor error", error=str(e))
             return []
-
-    def get_decision_drivers(self, X: np.ndarray, predicted_class_idx: int = 0) -> Dict[str, List[FeatureImportance]]:
-        """
-        Splits all calculated feature contributions into positive (risk increasing) and negative (risk decreasing) groups.
-        This provides a definitive defense shield against high-risk bias by revealing exactly what forces pushed the model over.
-        
-        Returns:
-            Dict containing two explicit lists: "risk_increasing" and "risk_decreasing".
-        """
-        # Retrieve explanations for all registered features to produce a full decision breakdown
-        all_features = self.explain(X, top_n=len(self.feature_names), predicted_class_idx=predicted_class_idx)
-        
-        drivers_map = {
-            "risk_increasing": [],
-            "risk_decreasing": []
-        }
-        
-        for feat in all_features:
-            if feat.shap_value > 0:
-                drivers_map["risk_increasing"].append(feat)
-            else:
-                drivers_map["risk_decreasing"].append(feat)
-                
-        # إعادة ترتيب وتحديث قيم الرتب الداخلية لكل مجموعة مستقلة لضمان نظافة البيانات للوكيل
-        for group in ["risk_increasing", "risk_decreasing"]:
-            for sub_rank, feat in enumerate(drivers_map[group], start=1):
-                feat.rank = sub_rank
-                
-        logger.debug("Decision driver groups assembled for agent audit", 
-                     increasing_count=len(drivers_map["risk_increasing"]), 
-                     decreasing_count=len(drivers_map["risk_decreasing"]))
-                     
-        return drivers_map
 
 # =====================================================================
 # Architectural Registry Block:
+# This file serves as the strict SHAP engine for explainable AI attribution.
 # This file depends on: src/uav_risk/ml/schemas.py, src/uav_risk/ml/feature_defs.py
 # Files depending on this file: src/uav_risk/ml/inference.py
 # =====================================================================

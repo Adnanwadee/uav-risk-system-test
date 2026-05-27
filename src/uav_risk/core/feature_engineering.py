@@ -13,11 +13,22 @@ import numpy as np
 import warnings
 
 from uav_risk.ml import feature_defs
+from uav_risk.core.contracts import RawFeatureAssemblyResult
+from uav_risk.core.data_validator import run_structural_hard_veto
+from uav_risk.ml.raw_schema import (
+    DROPPED_RAW_DEFAULTS,
+    DROPPED_RAW_METADATA_FEATURES,
+    GENERATED_RAW_FEATURES,
+    PROFILE_DERIVED_RAW_FEATURES,
+    RAW_FEATURE_NAMES,
+    SCENARIO_REQUIRED_RAW_FEATURES,
+)
 
 # إعداد اللوجر المركزي لتوثيق عمليات معالجة وهندسة المصفوفات الجوية
 logger = logging.getLogger(__name__)
 
-# جلب فضاء ميزات المنظومة المعتمدة مباشرة من المصدر المطلق للحقيقة
+# Legacy processed 68-feature contract. Production raw assembly uses raw_schema.py
+# and generate_raw_feature_map() instead.
 PRIMARY_FEATURES: list[str] = feature_defs.get_core_features()
 PRIMARY_FEATURE_SET = set(PRIMARY_FEATURES)
 
@@ -47,9 +58,11 @@ def generate_all_features_map(
     overrides: Optional[Mapping[str, Any]] = None,
     feature_order: Optional[Sequence[str]] = None,
 ) -> OrderedDict[str, float]:
-    """
-    المحرك المركزي الموحد لبناء مصفوفة الـ 198 ميزة بالكامل وبترتيب صارم حتمي.
-    يطبق تتابع الـ DAG المكون من 8 مراحل مع إعطاء حظر صارم وأولوية مطلقة لمدخلات المستخدم الثانوية.
+    """Legacy compatibility only. Do not use in production raw path.
+
+    This builds the historical processed/mixed 198-feature map used by older
+    compatibility tests. Production assembly must use generate_raw_feature_map(),
+    which emits the raw 197-column preprocessor contract.
     """
     logger.info("Initiating 8-Stage Deterministic DAG Feature Engineering Pipeline.")
     
@@ -381,12 +394,341 @@ def generate_all_features_map(
     return ordered_map
 
 
+def _as_mapping(value: Any) -> Dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        return dict(value.model_dump())
+    return dict(value or {})
+
+
+def _clip(value: float, low: float, high: float) -> float:
+    return float(np.clip(float(value), low, high))
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return float(value) == 1.0
+
+
+def _scalar_float(name: str, value: Any) -> float:
+    if isinstance(value, (list, tuple, dict)):
+        raise ValueError(f"{name} must be a scalar raw value, not a collection.")
+    return float(value)
+
+
+def _set_bounds(v: Dict[str, Any], prefix: str, include_z: bool = True) -> None:
+    for axis in ("x", "y"):
+        mean = float(v[f"{prefix}_{axis}_mean"])
+        std = float(v[f"{prefix}_{axis}_std"])
+        v[f"{prefix}_{axis}_min"] = mean - 2.0 * std
+        v[f"{prefix}_{axis}_max"] = mean + 2.0 * std
+        v[f"{prefix}_{axis}_range"] = v[f"{prefix}_{axis}_max"] - v[f"{prefix}_{axis}_min"]
+    if include_z:
+        mean = float(v[f"{prefix}_z_mean"])
+        std = float(v[f"{prefix}_z_std"])
+        v[f"{prefix}_z_min"] = mean - 2.0 * std
+        v[f"{prefix}_z_max"] = mean + 2.0 * std
+        v[f"{prefix}_z_range"] = v[f"{prefix}_z_max"] - v[f"{prefix}_z_min"]
+
+
+def _issue_strings(result: Any) -> list[str]:
+    return [f"{issue.code}: {issue.message}" for issue in getattr(result, "issues", [])]
+
+
+def generate_raw_feature_map(
+    profile: Mapping[str, Any],
+    scenario: Mapping[str, Any],
+    overrides: Optional[Mapping[str, Any]] = None,
+    raw_feature_order: Optional[Sequence[str]] = None,
+) -> RawFeatureAssemblyResult:
+    """Production raw assembly: build the 197-column preprocessor input map in artifact order."""
+    profile_map = _as_mapping(profile)
+    scenario_map = _as_mapping(scenario)
+    override_values = _as_mapping(overrides)
+    order = list(raw_feature_order) if raw_feature_order is not None else list(RAW_FEATURE_NAMES)
+
+    assessment = {
+        "user_id": profile_map.get("user_id"),
+        "profile_id": profile_map.get("profile_id"),
+        "drone_profile": profile_map,
+        "scenario": scenario_map,
+        "secondary_overrides": {"values": override_values},
+    }
+    validation = run_structural_hard_veto(assessment)
+    if not validation.passed:
+        return RawFeatureAssemblyResult(
+            user_id=str(profile_map.get("user_id", "")),
+            profile_id=str(profile_map.get("profile_id", "")),
+            raw_feature_names=order,
+            raw_feature_map={},
+            raw_vector_length=0,
+            profile_features={name: profile_map.get(name) for name in PROFILE_DERIVED_RAW_FEATURES if name in profile_map},
+            scenario_features={name: scenario_map.get(name) for name in SCENARIO_REQUIRED_RAW_FEATURES if name in scenario_map},
+            generated_features={},
+            secondary_overrides=override_values,
+            dropped_metadata_defaults={},
+            ignored_extras={},
+            hard_vetoes=_issue_strings(validation),
+            warnings=[],
+        )
+
+    v: Dict[str, Any] = {}
+    for name in PROFILE_DERIVED_RAW_FEATURES:
+        v[name] = profile_map[name]
+    for name in SCENARIO_REQUIRED_RAW_FEATURES:
+        v[name] = scenario_map[name]
+
+    dropped_defaults = dict(DROPPED_RAW_DEFAULTS)
+    dropped_defaults["uav_type"] = profile_map.get("uav_type", "unknown")
+    for name in DROPPED_RAW_METADATA_FEATURES:
+        v[name] = dropped_defaults[name]
+
+    mass = float(v["uav_mass_kg"])
+    payload = float(v["uav_payload_mass_kg"])
+    rotors = int(round(float(v["uav_rotorcraft_rotor_count"])))
+    tilt = int(round(float(v["uav_max_tilt_deg"])))
+    mission_time = float(v["mission_time_budget_s"])
+    wind = float(v["environment_weather_wind_mps"])
+    gust = float(v["environment_weather_gust_mps"])
+    max_speed = float(v["uav_max_speed_mps"])
+    min_alt = float(v["airspace_altitude_agl_min_m"])
+    max_alt = float(v["airspace_altitude_agl_max_m"])
+    hover_ceiling = float(v["uav_rotorcraft_hover_ceiling_m"])
+    spawn_anchor = _scalar_float("spawn_xyz_first", v["spawn_xyz_first"])
+
+    v["sim_policy_frequency"] = 15.0
+    if v["sim_policy_frequency"] == 10.0:
+        duration = 600.0
+    elif v["sim_policy_frequency"] == 20.0 and mission_time >= 850.0:
+        duration = 1200.0
+    elif v["sim_policy_frequency"] == 20.0:
+        duration = 800.0
+    else:
+        duration = 900.0
+    v["sim_duration_steps"] = _clip(duration, 600.0, 1200.0)
+
+    disk_map = {1: 3.5, 2: 3.5, 4: 1.2, 6: 0.5, 8: 2.54}
+    v["uav_rotorcraft_disk_area_m2"] = _clip(disk_map.get(rotors, 1.13), 0.12, 5.7)
+    if mass <= 3.2:
+        hover_power = 111.8
+    elif mass <= 5.8:
+        hover_power = 335.4
+    elif mass <= 12.5:
+        hover_power = 658.8
+    elif mass <= 25.0:
+        hover_power = 1336.4
+    else:
+        hover_power = 4200.0
+    v["uav_battery_model_hover_power_w"] = _clip(hover_power, 20.0, 4460.4)
+    payload_mass_ratio = payload / mass if mass > 0.0 else 0.0
+    if payload_mass_ratio <= 0.096:
+        k_drag = 0.15
+    elif payload_mass_ratio <= 0.12:
+        k_drag = 0.20
+    elif payload_mass_ratio <= 0.141:
+        k_drag = 0.15
+    elif payload_mass_ratio <= 0.16:
+        k_drag = 0.08
+    else:
+        k_drag = 0.15
+    v["uav_battery_model_k_drag"] = _clip(k_drag, 0.008, 0.64)
+    v["uav_battery_model_k_manoeuvre"] = _clip({15: 0.25, 30: 0.15, 35: 0.25, 90: 1.2}.get(tilt, 0.25), 0.005, 47.55)
+    if payload <= 0.5:
+        payload_drag = 0.8
+    elif payload <= 0.8:
+        payload_drag = 0.1
+    elif payload <= 1.2:
+        payload_drag = 0.3
+    elif payload <= 5.0:
+        payload_drag = 0.35
+    else:
+        payload_drag = 0.8
+    v["uav_payload_drag_coeff"] = _clip(payload_drag, 0.01, 1.2)
+    v["uav_aero_wing_area_m2"] = _clip(1.2, 0.3, 3.6)
+    v["uav_aero_aspect_ratio"] = _clip(10.2, 8.5, 12.0)
+    v["uav_aero_cl_max"] = _clip(1.4, 1.4, 1.8)
+    v["uav_aero_cd0"] = _clip(0.025, 0.015, 0.05)
+    v["uav_aero_stall_speed_mps"] = _clip(12.5, 4.0, 21.5)
+
+    pref_c = float(v["landing_preferred_sites_count"])
+    v["landing_preferred_sites_x_mean"] = spawn_anchor if pref_c >= 1.0 else 0.0
+    v["landing_preferred_sites_y_mean"] = spawn_anchor if pref_c >= 1.0 else 0.0
+    v["landing_preferred_sites_x_std"] = 57.74 if pref_c > 1.0 else 0.0
+    v["landing_preferred_sites_y_std"] = 57.74 if pref_c > 1.0 else 0.0
+    v["landing_preferred_sites_z_std"] = 2.89 if pref_c > 1.0 else 0.0
+    _set_bounds(v, "landing_preferred_sites")
+
+    em_c = float(v["landing_emergency_sites_count"])
+    v["landing_emergency_sites_x_mean"] = spawn_anchor if em_c >= 1.0 else 0.0
+    v["landing_emergency_sites_y_mean"] = spawn_anchor if em_c >= 1.0 else 0.0
+    v["landing_emergency_sites_z_mean"] = float(v["landing_preferred_sites_z_mean"]) if em_c >= 1.0 else 0.0
+    v["landing_emergency_sites_x_std"] = 115.47 if em_c > 1.0 else 0.0
+    v["landing_emergency_sites_y_std"] = 115.47 if em_c > 1.0 else 0.0
+    v["landing_emergency_sites_z_std"] = 5.77 if em_c > 1.0 else 0.0
+    _set_bounds(v, "landing_emergency_sites")
+
+    wp_c = float(v["mission_waypoints_count"])
+    wp_std = 0.0 if wp_c <= 2.0 else float(v["mission_loiter_radius_m"]) / 1.414
+    v["mission_waypoints_x_mean"] = spawn_anchor if wp_c >= 1.0 else 0.0
+    v["mission_waypoints_y_mean"] = spawn_anchor if wp_c >= 1.0 else 0.0
+    v["mission_waypoints_x_std"] = wp_std
+    v["mission_waypoints_y_std"] = wp_std
+    _set_bounds(v, "mission_waypoints", include_z=False)
+    v["mission_waypoints_z_min"] = min_alt + 5.0
+    v["mission_waypoints_z_max"] = max(min(max_alt - 10.0, hover_ceiling - 20.0), v["mission_waypoints_z_min"])
+    v["mission_waypoints_z_std"] = (v["mission_waypoints_z_max"] - v["mission_waypoints_z_min"]) / 4.0 if wp_c > 0.0 else 0.0
+    v["mission_waypoints_z_range"] = v["mission_waypoints_z_max"] - v["mission_waypoints_z_min"]
+
+    v["traffic_sample_heading_deg"] = 0.0
+    v["controls_actions_count"] = float(v["mission_waypoints_count"]) + 1.0
+    v["controls_actions_first"] = "fwd"
+    v["faults_sample_t_s"] = 0.0 if float(v["faults_count"]) == 0.0 else mission_time / 2.0
+
+    comms_c = float(v["comms_loss_windows_count"])
+    for axis in ("x", "y"):
+        if comms_c > 0.0:
+            v[f"comms_loss_windows_{axis}_mean"] = spawn_anchor
+            v[f"comms_loss_windows_{axis}_std"] = 150.0
+            v[f"comms_loss_windows_{axis}_min"] = spawn_anchor - 300.0
+            v[f"comms_loss_windows_{axis}_max"] = spawn_anchor + 300.0
+            v[f"comms_loss_windows_{axis}_range"] = 0.0
+        else:
+            v[f"comms_loss_windows_{axis}_mean"] = 0.0
+            v[f"comms_loss_windows_{axis}_std"] = 0.0
+            v[f"comms_loss_windows_{axis}_min"] = 0.0
+            v[f"comms_loss_windows_{axis}_max"] = 0.0
+            v[f"comms_loss_windows_{axis}_range"] = 0.0
+
+    v["airspace_no_fly_zones_dynamic_sample_radius_m"] = float(v["airspace_no_fly_zones_sample_radius_m"])
+    v["airspace_no_fly_zones_dynamic_sample_floor_m"] = min_alt
+    v["airspace_no_fly_zones_dynamic_sample_ceiling_m"] = max_alt
+    v["autofix_uav_physics_count"] = 0.0
+    runway_required = _truthy(v["mission_runway_required"])
+    v["airspace_runway_threshold_count"] = 3.0
+    v["airspace_runway_threshold_first"] = spawn_anchor if runway_required else 0.0
+    v["airspace_runway_heading_deg"] = float(v["spawn_yaw_deg"]) if runway_required else 0.0
+    v["environment_wind_profile_count"] = 3.0
+    v["environment_wind_profile_sample_alt_m"] = 0.0
+    v["environment_wind_profile_sample_wind_mps"] = wind
+    v["environment_wind_profile_sample_dir_deg"] = float(v["environment_weather_wind_dir_deg"])
+    v["environment_thermal_plumes_count"] = 1.0
+    v["environment_thermal_plumes_sample_radius_m"] = 50.0
+    v["environment_thermal_plumes_sample_w_up_mps"] = 1.8
+    v["mission_transition_profile_vtol_to_ff_t_s"] = 10.0
+    v["mission_transition_profile_ff_to_vtol_t_s"] = 10.0
+    swarm_size = float(v["swarm_size"])
+    v["swarm_roles_count"] = 1.0 if (not _truthy(v["swarm_enabled"]) or swarm_size <= 1.0) else min(swarm_size, 3.0)
+
+    v["airspace__geofence__sample__points_count"] = float(v["airspace_no_fly_zones_count"]) * 4.0
+    v["airspace__no__fly__zones__sample__center_count"] = float(v["airspace_no_fly_zones_count"])
+    v["landing__preferred__sites__sample_count"] = float(v["landing_preferred_sites_count"])
+    v["landing__emergency__sites__sample_count"] = float(v["landing_emergency_sites_count"])
+    v["mission__waypoints__sample_count"] = float(v["mission_waypoints_count"])
+    v["traffic__sample__spawn_count"] = float(v["traffic_count"])
+    v["moving__obstacles__sample__center_count"] = float(v["moving_obstacles_count"])
+    v["moving__obstacles__sample__vel_count"] = float(v["moving_obstacles_count"])
+    v["comms__loss__windows__sample_count"] = float(v["comms_loss_windows_count"])
+    v["airspace__no__fly__zones__dynamic__sampl_count"] = float(v["airspace_no_fly_zones_dynamic_count"])
+    v["environment__thermal__plumes__sample__ce_count"] = float(v["environment_thermal_plumes_count"])
+
+    v["feat_disk_loading"] = mass / float(v["uav_rotorcraft_disk_area_m2"]) if float(v["uav_rotorcraft_disk_area_m2"]) > 0.0 else 0.0
+    v["feat_altitude_range"] = max_alt - min_alt
+    v["feat_reserve_utilization"] = float(v["uav_reserve_fraction"])
+    v["feat_wind_gust_ratio"] = gust / wind if wind > 0.0 else 1.0
+    v["feat_wind_speed_ratio"] = wind / max_speed if max_speed > 0.0 else 0.0
+    v["feat_sensor_redundancy"] = (
+        float(v["uav_sensors_gnss"]) + float(v["uav_sensors_lidar"]) + float(v["uav_sensors_radar"])
+        + float(v["uav_sensors_camera_rgb"]) + float(v["uav_sensors_camera_thermal"]) + 1.0
+    )
+    v["feat_comms_health"] = 1.0 if _truthy(v["comms_uplink_ok"]) and _truthy(v["comms_downlink_ok"]) and float(v["comms_rssi_dbm_min"]) > -100.0 else 0.0
+    v["feat_traffic_density"] = _clip(0.0 if float(v["traffic_count"]) == 0.0 else 0.009009 * float(v["traffic_count"]), 0.0, 0.222222)
+    v["feat_fault_risk"] = _clip(float(v["faults_count"]) * float(v["faults_sample_severity"]), 0.0, 2.0)
+    if wind <= 6.2:
+        weather = 6.0
+    elif wind <= 8.0:
+        weather = 8.0
+    elif wind <= 8.5:
+        weather = 8.45
+    else:
+        weather = 11.5
+    v["feat_weather_severity"] = _clip(weather + 0.1 * float(v["environment_weather_phenomena_count"]), 0.0, 18.0)
+
+    for key, value in override_values.items():
+        v[key] = value
+
+    missing_flags = {
+        "uav_rotorcraft_rotor_count_was_missing": 0.0,
+        "uav_aero_prop_efficiency_was_missing": 0.0,
+        "airspace_runway_length_m_was_missing": 0.0,
+        "swarm_size_was_missing": 0.0,
+        "swarm_roles_first_was_missing": 0.0,
+        "swarm_inter_uav_sep_min_m_was_missing": 0.0,
+        "uav_rotorcraft_max_climb_mps_was_missing": 0.0,
+        "uav_rotorcraft_hover_ceiling_m_was_missing": 0.0,
+        "mission_loiter_radius_m_was_missing": 0.0,
+        "autofix_uav_physics_count_was_missing": 1.0,
+        "autofix_uav_physics_first_was_missing": 1.0,
+        "uav_aero_wing_area_m2_was_missing": 1.0,
+        "uav_aero_aspect_ratio_was_missing": 1.0,
+        "uav_aero_cl_max_was_missing": 1.0,
+        "uav_aero_cd0_was_missing": 1.0,
+        "uav_aero_stall_speed_mps_was_missing": 1.0,
+        "airspace_runway_threshold_count_was_missing": 1.0,
+        "airspace_runway_threshold_first_was_missing": 1.0,
+        "airspace_runway_heading_deg_was_missing": 1.0,
+        "mission_transition_profile_vtol_to_ff_t_s_was_missing": 1.0,
+        "mission_transition_profile_ff_to_vtol_t_s_was_missing": 1.0,
+        "swarm_roles_count_was_missing": 1.0,
+    }
+    override_missing_map = {
+        "uav_aero_wing_area_m2": "uav_aero_wing_area_m2_was_missing",
+        "uav_aero_aspect_ratio": "uav_aero_aspect_ratio_was_missing",
+        "uav_aero_cl_max": "uav_aero_cl_max_was_missing",
+        "uav_aero_cd0": "uav_aero_cd0_was_missing",
+        "uav_aero_stall_speed_mps": "uav_aero_stall_speed_mps_was_missing",
+        "airspace_runway_threshold_count": "airspace_runway_threshold_count_was_missing",
+        "airspace_runway_threshold_first": "airspace_runway_threshold_first_was_missing",
+        "airspace_runway_heading_deg": "airspace_runway_heading_deg_was_missing",
+        "mission_transition_profile_vtol_to_ff_t_s": "mission_transition_profile_vtol_to_ff_t_s_was_missing",
+        "mission_transition_profile_ff_to_vtol_t_s": "mission_transition_profile_ff_to_vtol_t_s_was_missing",
+        "swarm_roles_count": "swarm_roles_count_was_missing",
+        "autofix_uav_physics_count": "autofix_uav_physics_count_was_missing",
+    }
+    for base, flag in override_missing_map.items():
+        if base in override_values:
+            missing_flags[flag] = 0.0
+    v.update(missing_flags)
+
+    ordered = OrderedDict((name, v[name]) for name in order)
+    generated = {name: ordered[name] for name in GENERATED_RAW_FEATURES if name in ordered}
+    return RawFeatureAssemblyResult(
+        user_id=str(profile_map.get("user_id", "")),
+        profile_id=str(profile_map.get("profile_id", "")),
+        raw_feature_names=order,
+        raw_feature_map=dict(ordered),
+        raw_vector_length=len(ordered),
+        profile_features={name: profile_map[name] for name in PROFILE_DERIVED_RAW_FEATURES},
+        scenario_features={name: scenario_map[name] for name in SCENARIO_REQUIRED_RAW_FEATURES},
+        generated_features=generated,
+        secondary_overrides=override_values,
+        dropped_metadata_defaults={name: dropped_defaults[name] for name in DROPPED_RAW_METADATA_FEATURES},
+        ignored_extras={},
+        hard_vetoes=[],
+        warnings=[],
+    )
+
+
 def generate_all_features(
     primary_dict: Mapping[str, Any],
     overrides: Optional[Mapping[str, Any]] = None,
     feature_order: Optional[Sequence[str]] = None,
 ) -> np.ndarray:
-    """تحويل الخريطة المرتبة هندسياً إلى متجهة رقمية خطية جاهزة للاستنتاج عيار (198,) وبنوع float64."""
+    """Legacy compatibility only. Do not use in production raw path.
+
+    Converts the legacy generate_all_features_map() output to a processed/mixed
+    numeric vector. Production inference must receive raw 197 and transform via
+    the fitted preprocessor.
+    """
     feature_map = generate_all_features_map(primary_dict, overrides=overrides, feature_order=feature_order)
     return np.array(list(feature_map.values()), dtype=np.float64)
 
@@ -395,7 +737,7 @@ def split_primary_and_secondary_overrides(
     input_mapping: Mapping[str, Any],
     feature_order: Optional[Sequence[str]] = None,
 ) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
-    """فصل وعزل المدخلات لحماية الأساسيات وتصنيف التجاوزات اليدوية الثانوية."""
+    """Legacy compatibility helper for the processed 68-feature bridge."""
     order = set(feature_order or feature_defs.get_all_feature_names())
     primary: Dict[str, Any] = {}
     overrides: Dict[str, Any] = {}

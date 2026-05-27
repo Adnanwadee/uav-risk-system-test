@@ -96,7 +96,9 @@ EXPLICIT_UNIT_MAP: Dict[str, str] = {
     "sim_policy_frequency": "Hz"
 }
 
-# السجل المركزي الجامد لقيود الحدود النيوتنية لطبقة الـ Hard Veto
+# Legacy processed-validator bounds. Production raw structural hard veto lives in
+# core.data_validator.run_structural_hard_veto() and must not apply universal
+# mass/wind/altitude policy thresholds.
 BOUNDS_REGISTRY: Dict[str, Dict[str, float]] = {
     "uav_mass_kg": {"safe_min": 0.5, "safe_max": 24.5, "critical_high": 25.0},
     "environment_weather_wind_mps": {"safe_min": 0.0, "safe_max": 12.0, "critical_high": 15.0},
@@ -110,7 +112,11 @@ def get_all_feature_names() -> list[str]:
 
 
 def get_core_features() -> list[str]:
-    """القائمة المعيارية الصلبة الـ 68 للميزات الأساسية الإلزامية المطلوبة من المستخدم حتماً."""
+    """Legacy processed 68-feature list. Do not use as the production user contract.
+
+    The raw-first contract is defined in uav_risk.ml.raw_schema via
+    PROFILE_DERIVED_RAW_FEATURES and SCENARIO_REQUIRED_RAW_FEATURES.
+    """
     return [
         "uav_energy_source_fuel", "uav_energy_source_hybrid", "mission_pattern_custom",
         "mission_pattern_grid", "mission_pattern_orbit", "mission_pattern_spiral",

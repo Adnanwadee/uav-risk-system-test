@@ -8,9 +8,19 @@ Source References: FAA Part 107, EASA CS-23, ISO 12345:2020 Aviation Digital Sta
 
 import uuid
 import logging
-from typing import Optional, Any, Dict, Annotated
-from pydantic import BaseModel, ConfigDict, Field, BeforeValidator
+import math
+from typing import Optional, Any, Dict, Annotated, Literal
+from pydantic import BaseModel, ConfigDict, Field, BeforeValidator, create_model, model_validator
 from uav_risk.ml.feature_defs import get_core_features
+from uav_risk.ml.raw_schema import (
+    DROPPED_RAW_METADATA_FEATURES,
+    FORBIDDEN_USER_FEATURES,
+    INTERNAL_ONLY_RAW_FEATURES,
+    OPTIONAL_RAW_OVERRIDE_FEATURES,
+    PROFILE_DERIVED_RAW_FEATURES,
+    RAW_CATEGORICAL_FEATURES,
+    SCENARIO_REQUIRED_RAW_FEATURES,
+)
 
 # إعداد محرك السجلات المركزي لطبقة العقود
 logger = logging.getLogger(__name__)
@@ -48,6 +58,138 @@ def parse_flexible_bool(v: Any) -> Optional[bool]:
 
 FlexFloat = Annotated[Optional[float], BeforeValidator(parse_flexible_float)]
 FlexBool = Annotated[Optional[bool], BeforeValidator(parse_flexible_bool)]
+
+
+class _RawStrictBase(BaseModel):
+    """Strict base for the raw 197-feature serving contract introduced alongside legacy contracts."""
+    model_config = ConfigDict(extra="forbid")
+
+
+def _raw_field_type(feature_name: str) -> Any:
+    if feature_name in RAW_CATEGORICAL_FEATURES:
+        return Literal.__getitem__(RAW_CATEGORICAL_FEATURES[feature_name])
+    if feature_name == "spawn_xyz_first":
+        return Any
+    return float
+
+
+def _required_raw_fields(feature_names: tuple[str, ...]) -> dict[str, tuple[Any, Any]]:
+    return {name: (_raw_field_type(name), ...) for name in feature_names}
+
+
+class _DroneProfileRawBase(_RawStrictBase):
+    user_id: str
+    profile_id: str
+    profile_name: str
+    max_payload_kg: Optional[float] = None
+    max_takeoff_mass_kg: Optional[float] = None
+    runway_capable: bool = False
+    swarm_capable: bool = False
+    max_swarm_size: Optional[int] = None
+
+
+DroneProfileRaw = create_model(
+    "DroneProfileRaw",
+    __base__=_DroneProfileRawBase,
+    **_required_raw_fields(PROFILE_DERIVED_RAW_FEATURES),
+)
+DroneProfileRaw.__module__ = __name__
+DroneProfileRaw.__doc__ = "Raw drone profile contract: identity, capability metadata, and 16 ML raw profile fields."
+
+
+ScenarioRawInput = create_model(
+    "ScenarioRawInput",
+    __base__=_RawStrictBase,
+    **_required_raw_fields(SCENARIO_REQUIRED_RAW_FEATURES),
+)
+ScenarioRawInput.__module__ = __name__
+ScenarioRawInput.__doc__ = "Raw scenario contract containing exactly the 45 scenario-required ML raw fields."
+
+
+class RawSecondaryOverrides(_RawStrictBase):
+    """Validated optional overrides for generated raw features only."""
+    values: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_override_values(self) -> "RawSecondaryOverrides":
+        optional = set(OPTIONAL_RAW_OVERRIDE_FEATURES)
+        internal = set(INTERNAL_ONLY_RAW_FEATURES)
+        dropped = set(DROPPED_RAW_METADATA_FEATURES)
+        forbidden = set(FORBIDDEN_USER_FEATURES)
+
+        for key, value in self.values.items():
+            if key in forbidden:
+                raise ValueError(f"Processed one-hot feature is not accepted as a raw override: {key}")
+            if key in internal:
+                raise ValueError(f"Internal-only raw feature cannot be overridden: {key}")
+            if key in dropped:
+                raise ValueError(f"Dropped raw metadata feature cannot be overridden: {key}")
+            if key not in optional:
+                raise ValueError(f"Unknown or non-overridable raw feature: {key}")
+
+            if key == "controls_actions_first":
+                if value not in RAW_CATEGORICAL_FEATURES["controls_actions_first"]:
+                    allowed = ", ".join(RAW_CATEGORICAL_FEATURES["controls_actions_first"])
+                    raise ValueError(f"Invalid controls_actions_first override: {value!r}. Allowed values: {allowed}")
+                continue
+
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"Raw override '{key}' must be a finite numeric scalar.")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"Raw override '{key}' must be finite.")
+        return self
+
+
+class AssessmentCoreInput(_RawStrictBase):
+    """Top-level raw assessment request binding a user/profile to profile, scenario, and overrides."""
+    user_id: str
+    profile_id: str
+    drone_profile: Any
+    scenario: Any
+    secondary_overrides: Any = Field(default_factory=RawSecondaryOverrides)
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_raw_nested_contracts(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        if "drone_profile" in normalized:
+            normalized["drone_profile"] = DroneProfileRaw.model_validate(normalized["drone_profile"])
+        if "scenario" in normalized:
+            normalized["scenario"] = ScenarioRawInput.model_validate(normalized["scenario"])
+        if "secondary_overrides" in normalized:
+            normalized["secondary_overrides"] = RawSecondaryOverrides.model_validate(normalized["secondary_overrides"])
+        else:
+            normalized["secondary_overrides"] = RawSecondaryOverrides()
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_profile_identity(self) -> "AssessmentCoreInput":
+        if self.user_id != self.drone_profile.user_id:
+            raise ValueError("Assessment user_id must match drone_profile.user_id")
+        if self.profile_id != self.drone_profile.profile_id:
+            raise ValueError("Assessment profile_id must match drone_profile.profile_id")
+        return self
+
+
+class RawFeatureAssemblyResult(_RawStrictBase):
+    """Structured result container for the future raw 197-feature assembly step."""
+    user_id: str
+    profile_id: str
+    raw_feature_names: list[str]
+    raw_feature_map: dict[str, Any]
+    raw_vector_length: int
+    profile_features: dict[str, Any]
+    scenario_features: dict[str, Any]
+    generated_features: dict[str, Any]
+    secondary_overrides: dict[str, Any]
+    dropped_metadata_defaults: dict[str, Any]
+    ignored_extras: dict[str, Any]
+    hard_vetoes: list[str]
+    warnings: list[str]
+
+# Legacy processed-oriented contracts below remain import-compatible during raw contract migration.
 
 
 class UAVSpecs(BaseModel):

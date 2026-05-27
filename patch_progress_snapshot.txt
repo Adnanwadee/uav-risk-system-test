@@ -1,0 +1,21 @@
+]633;E;echo "=== STATUS ===";5ebd6d88-8780-43af-baa7-bab29061ce8c]633;C=== STATUS ===
+ M src/uav_risk/core/contracts.py
+ M src/uav_risk/core/data_validator.py
+ M src/uav_risk/core/feature_engineering.py
+ M src/uav_risk/ml/inference.py
+ M src/uav_risk/ml/loader.py
+?? patch_progress_snapshot.txt
+?? src/uav_risk/ml/raw_schema.py
+?? tests/test_core_raw_contracts.py
+?? tests/test_ml_serving_contract.py
+?? tests/test_raw_feature_generation.py
+?? tests/test_raw_schema_contract.py
+?? tests/test_raw_validation.py
+
+=== DIFF STAT ===
+ src/uav_risk/core/contracts.py           | 130 +++++++++++-
+ src/uav_risk/core/data_validator.py      | 326 +++++++++++++++++++++++++++++-
+ src/uav_risk/core/feature_engineering.py | 335 +++++++++++++++++++++++++++++++
+ src/uav_risk/ml/inference.py             |  91 ++++++---
+ src/uav_risk/ml/loader.py                |  99 +++++++--
+ 5 files changed, 924 insertions(+), 57 deletions(-)

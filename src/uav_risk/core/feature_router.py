@@ -12,7 +12,11 @@ from uav_risk.ml.feature_defs import get_all_feature_names, get_features_by_cate
 logger = logging.getLogger(__name__)
 
 class FeatureRouter:
-    """تأكيد مصفوفة الاستنتاج النهائي وفصل الميزات دلالياً لصالح الوكيل الذكي."""
+    """Legacy compatibility only. Do not use in production raw path.
+
+    This routes the historical processed 198-feature map directly to a vector.
+    Production inference must use raw 197 -> preprocessor -> processed 198.
+    """
     
     def __init__(self) -> None:
         self.authoritative_names = get_all_feature_names()

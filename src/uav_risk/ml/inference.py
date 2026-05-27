@@ -11,6 +11,7 @@ import pandas as pd
 import structlog
 from uav_risk.ml.schemas import MLResult, RiskClass, probabilities_to_dict, calculate_risk_score, Stage1Bundle
 from uav_risk.ml.shap_explain import ShapExplainer
+from uav_risk.ml.raw_schema import get_raw_feature_names
 
 logger = structlog.get_logger(__name__)
 
@@ -20,53 +21,43 @@ def _hash_vector(vec: np.ndarray) -> str:
     return hashlib.sha256(vec.tobytes()).hexdigest()[:12]
 
 
-def run_stage1_inference(bundle: Stage1Bundle, feature_vector: np.ndarray, feature_names=None, compute_shap: bool = True) -> MLResult:
-    """
-    تنفيذ دورة الاستدلال الكاملة:
-    1. معالجة مسبقة للمتجه الخام.
-    2. تنبؤ بالنموذج.
-    3. تفسير SHAP.
-    4. تغليف النتيجة بكامل البيانات الوصفية.
-    """
-    start = time.perf_counter()
+def _model_frame(bundle: Stage1Bundle, processed_matrix: np.ndarray) -> pd.DataFrame | np.ndarray:
+    columns = getattr(bundle.model, "feature_names_in_", None)
+    if columns is not None and len(columns) == processed_matrix.shape[1]:
+        return pd.DataFrame(processed_matrix, columns=list(columns))
+    return processed_matrix
 
-    # --- 1. تجهيز المتجه مباشرة (نستخدم الحزمة الإنتاجية: لا preprocessing متطلب)
-    X_for_model = feature_vector.reshape(1, -1)
-    # مرّر DataFrame مع أعمدة الحزمة إن أمكن لتجنب تحذيرات sklearn والتأكيد على محاذاة الأعمدة
-    try:
-        df_for_model = pd.DataFrame(X_for_model, columns=bundle.feature_names)
-    except Exception:
-        df_for_model = None
 
-    # --- 2. التنبؤ ---
-    try:
-        probs_raw = bundle.model.predict_proba(df_for_model if df_for_model is not None else X_for_model)[0]
-    except Exception:
-        # كحل احتياطي — محاولة التنبؤ بالـ numpy array مباشرة
-        probs_raw = bundle.model.predict_proba(X_for_model)[0]
+def _build_ml_result(
+    bundle: Stage1Bundle,
+    processed_vector: np.ndarray,
+    start: float,
+    compute_shap: bool,
+) -> MLResult:
+    X_for_model = processed_vector.reshape(1, -1)
+    X_model_input = _model_frame(bundle, X_for_model)
+
+    probs_raw = bundle.model.predict_proba(X_model_input)[0]
     probs = probabilities_to_dict(probs_raw, bundle.class_names)
     predicted_idx = int(np.argmax(probs_raw))
     risk_class = RiskClass.from_string(bundle.class_names[predicted_idx])
     score = calculate_risk_score(probs)
 
-    # --- 3. تفسير SHAP ---
-    # استخدم كائن ShapExplainer (يُعاد استخدامه تلقائياً بفضل التخزين المؤقت)
     explainer = ShapExplainer(bundle.model, bundle.feature_names)
     top_features = []
     if compute_shap:
         try:
             top_features = explainer.explain(
-                df_for_model if df_for_model is not None else X_for_model,
+                X_for_model,
                 predicted_class_idx=predicted_idx,
                 class_names=bundle.class_names,
-                raw_values=feature_vector
+                raw_values=processed_vector,
             )
         except Exception as exc:
             logger.exception("SHAP explanation failed; returning empty top_features", exc_info=exc)
             top_features = []
 
-    # --- 4. بناء النتيجة ---
-    result = MLResult(
+    return MLResult(
         risk_class=risk_class,
         risk_score=score,
         confidence=float(probs_raw[predicted_idx]),
@@ -74,8 +65,44 @@ def run_stage1_inference(bundle: Stage1Bundle, feature_vector: np.ndarray, featu
         top_features=top_features,
         processing_time_ms=(time.perf_counter() - start) * 1000,
         model_version=bundle.get_model_version(),
-        feature_vector_hash=_hash_vector(feature_vector),
-        # الاحتفاظ بالمخرجات الخام تلقائياً عبر __post_init__
+        feature_vector_hash=_hash_vector(processed_vector),
     )
 
-    return result
+
+def predict_processed_vector(
+    bundle: Stage1Bundle,
+    processed_vector: np.ndarray,
+    compute_shap: bool = True,
+) -> MLResult:
+    """Explicit test/diagnostic path for vectors already in processed 198-feature space."""
+    start = time.perf_counter()
+    processed_vector = np.asarray(processed_vector, dtype=np.float64).reshape(-1)
+    if processed_vector.shape != (len(bundle.feature_names),):
+        raise ValueError(
+            f"Processed vector shape mismatch: expected ({len(bundle.feature_names)},), got {processed_vector.shape}"
+        )
+    return _build_ml_result(bundle, processed_vector, start, compute_shap)
+
+
+def run_stage1_inference(bundle: Stage1Bundle, feature_vector: np.ndarray, feature_names=None, compute_shap: bool = True) -> MLResult:
+    """
+    Run production Stage-1 inference from the raw 197-feature serving contract.
+
+    The input vector must be ordered as bundle.preprocessor.feature_names_in_. It is
+    transformed by the fitted ColumnTransformer before LightGBM prediction.
+    """
+    start = time.perf_counter()
+    raw_names = get_raw_feature_names(bundle)
+    raw_vector = np.asarray(feature_vector, dtype=object).reshape(-1)
+    if raw_vector.shape != (len(raw_names),):
+        raise ValueError(f"Raw vector shape mismatch: expected ({len(raw_names)},), got {raw_vector.shape}")
+
+    raw_frame = pd.DataFrame([raw_vector.tolist()], columns=raw_names)
+    processed = bundle.preprocessor.transform(raw_frame)
+    processed_vector = np.asarray(processed, dtype=np.float64).reshape(-1)
+    if processed_vector.shape != (len(bundle.feature_names),):
+        raise ValueError(
+            f"Processed vector shape mismatch: expected ({len(bundle.feature_names)},), got {processed_vector.shape}"
+        )
+
+    return _build_ml_result(bundle, processed_vector, start, compute_shap)

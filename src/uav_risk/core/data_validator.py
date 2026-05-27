@@ -1,14 +1,4 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
-import math
-
-import logging
-
-from uav_risk.ml import feature_defs
-
-logger = logging.getLogger(__name__)
-
 """
 Module: uav_risk.core.data_validator
 Purpose: Advanced high-integrity data validation core enforcing a strict core features lock down
@@ -20,14 +10,22 @@ Source References: FAA Part 107 Small UAS Safety Certification Frameworks, EASA 
 import math
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping, Optional
 
 from uav_risk.ml.feature_defs import (
     get_all_feature_names,
     get_feature_definition,
-    get_safe_value,
     get_core_features,
     is_critical_value
+)
+from uav_risk.ml.raw_schema import (
+    DROPPED_RAW_METADATA_FEATURES,
+    FORBIDDEN_USER_FEATURES,
+    INTERNAL_ONLY_RAW_FEATURES,
+    OPTIONAL_RAW_OVERRIDE_FEATURES,
+    PROFILE_DERIVED_RAW_FEATURES,
+    RAW_CATEGORICAL_FEATURES,
+    SCENARIO_REQUIRED_RAW_FEATURES,
 )
 
 # إعداد اللوجر المركزي لطبقة فحص وإجازة البيانات
@@ -62,8 +60,321 @@ class ValidationResult:
     is_usable: bool = False
 
 
+@dataclass
+class ValidationIssue:
+    code: str
+    field: Optional[str]
+    message: str
+    details: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RawValidationResult:
+    passed: bool = True
+    issues: List[ValidationIssue] = field(default_factory=list)
+    warnings: List[ValidationIssue] = field(default_factory=list)
+
+    def add_issue(self, code: str, field: Optional[str], message: str, details: Optional[Dict[str, Any]] = None) -> None:
+        self.issues.append(ValidationIssue(code=code, field=field, message=message, details=details or {}))
+        self.passed = False
+
+    def extend(self, other: "RawValidationResult") -> None:
+        self.issues.extend(other.issues)
+        self.warnings.extend(other.warnings)
+        self.passed = self.passed and other.passed
+
+
+def _to_mapping(value: Any) -> Dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        return dict(value.model_dump())
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
+
+
+def _is_missing(mapping: Mapping[str, Any], field_name: str) -> bool:
+    return field_name not in mapping or mapping[field_name] is None
+
+
+def _is_finite_number(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(float(value))
+
+
+def _is_boolean_like(value: Any) -> bool:
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return math.isfinite(float(value)) and float(value) in {0.0, 1.0}
+    return False
+
+
+def _validate_required_fields(
+    data: Mapping[str, Any],
+    required: tuple[str, ...],
+    code: str,
+    result: RawValidationResult,
+) -> None:
+    for name in required:
+        if _is_missing(data, name):
+            result.add_issue(code, name, f"Missing required raw field: {name}")
+
+
+def _validate_category(data: Mapping[str, Any], field_name: str, result: RawValidationResult) -> None:
+    if _is_missing(data, field_name):
+        return
+    allowed = RAW_CATEGORICAL_FEATURES[field_name]
+    if data[field_name] not in allowed:
+        result.add_issue(
+            "INVALID_CATEGORY",
+            field_name,
+            f"Invalid category for {field_name}: {data[field_name]!r}",
+            {"allowed": list(allowed)},
+        )
+
+
+def _validate_finite_numeric_fields(
+    data: Mapping[str, Any],
+    field_names: tuple[str, ...],
+    result: RawValidationResult,
+) -> None:
+    for name in field_names:
+        if _is_missing(data, name) or name in RAW_CATEGORICAL_FEATURES:
+            continue
+        if not _is_finite_number(data[name]):
+            result.add_issue("INVALID_NUMERIC", name, f"Field {name} must be a finite numeric scalar.")
+
+
+def _validate_non_negative(
+    data: Mapping[str, Any],
+    field_names: tuple[str, ...],
+    result: RawValidationResult,
+) -> None:
+    for name in field_names:
+        if _is_missing(data, name) or name in RAW_CATEGORICAL_FEATURES:
+            continue
+        if _is_finite_number(data[name]) and float(data[name]) < 0.0:
+            result.add_issue("INVALID_NUMERIC", name, f"Field {name} must be non-negative.")
+
+
+def validate_drone_profile_raw(profile: Any | Mapping[str, Any]) -> RawValidationResult:
+    data = _to_mapping(profile)
+    result = RawValidationResult()
+
+    for name in ("user_id", "profile_id", "profile_name"):
+        if _is_missing(data, name):
+            result.add_issue("MISSING_PROFILE_FIELD", name, f"Missing required profile identity field: {name}")
+
+    _validate_required_fields(data, PROFILE_DERIVED_RAW_FEATURES, "MISSING_PROFILE_FIELD", result)
+    _validate_category(data, "uav_energy_source", result)
+
+    numeric_fields = tuple(name for name in PROFILE_DERIVED_RAW_FEATURES if name not in RAW_CATEGORICAL_FEATURES)
+    _validate_finite_numeric_fields(data, numeric_fields, result)
+    _validate_non_negative(data, numeric_fields, result)
+
+    for sensor in (
+        "uav_sensors_gnss",
+        "uav_sensors_lidar",
+        "uav_sensors_radar",
+        "uav_sensors_camera_rgb",
+        "uav_sensors_camera_thermal",
+    ):
+        if not _is_missing(data, sensor) and not _is_boolean_like(data[sensor]):
+            result.add_issue("INVALID_BOOLEAN", sensor, f"Sensor flag {sensor} must be boolean-like 0/1 or bool.")
+
+    for cap in ("max_payload_kg", "max_takeoff_mass_kg"):
+        if cap in data and data[cap] is not None:
+            if not _is_finite_number(data[cap]) or float(data[cap]) < 0.0:
+                result.add_issue("INVALID_NUMERIC", cap, f"Capability field {cap} must be a non-negative finite number.")
+
+    if data.get("max_swarm_size") is not None:
+        value = data["max_swarm_size"]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            result.add_issue("INVALID_NUMERIC", "max_swarm_size", "max_swarm_size must be an integer >= 1.")
+
+    for cap in ("runway_capable", "swarm_capable"):
+        if cap in data and not isinstance(data[cap], bool):
+            result.add_issue("INVALID_BOOLEAN", cap, f"Capability field {cap} must be bool.")
+
+    return result
+
+
+def validate_scenario_raw(scenario: Any | Mapping[str, Any]) -> RawValidationResult:
+    data = _to_mapping(scenario)
+    result = RawValidationResult()
+
+    _validate_required_fields(data, SCENARIO_REQUIRED_RAW_FEATURES, "MISSING_SCENARIO_FIELD", result)
+    for name in ("mission_pattern", "controls_mode", "swarm_roles_first"):
+        _validate_category(data, name, result)
+
+    numeric_fields = tuple(name for name in SCENARIO_REQUIRED_RAW_FEATURES if name not in RAW_CATEGORICAL_FEATURES)
+    _validate_finite_numeric_fields(data, numeric_fields, result)
+
+    non_negative_fields = tuple(
+        name for name in numeric_fields if name not in {"environment_gnss_jam_dbm", "comms_rssi_dbm_min"}
+    )
+    _validate_non_negative(data, non_negative_fields, result)
+
+    for boolean_field in (
+        "mission_runway_required",
+        "swarm_enabled",
+        "comms_uplink_ok",
+        "comms_downlink_ok",
+        "environment_gnss_multipath",
+        "environment_em_interference",
+    ):
+        if not _is_missing(data, boolean_field) and not _is_boolean_like(data[boolean_field]):
+            result.add_issue("INVALID_BOOLEAN", boolean_field, f"Field {boolean_field} must be boolean-like 0/1 or bool.")
+
+    min_alt = data.get("airspace_altitude_agl_min_m")
+    max_alt = data.get("airspace_altitude_agl_max_m")
+    if _is_finite_number(min_alt) and _is_finite_number(max_alt) and float(max_alt) <= float(min_alt):
+        result.add_issue(
+            "ALTITUDE_RANGE_INVALID",
+            "airspace_altitude_agl_max_m",
+            "Maximum AGL altitude must be greater than minimum AGL altitude.",
+            {"min": min_alt, "max": max_alt},
+        )
+
+    return result
+
+
+def validate_secondary_overrides_raw(overrides: Any | Mapping[str, Any]) -> RawValidationResult:
+    data = _to_mapping(overrides)
+    values = data.get("values", data)
+    if values is None:
+        values = {}
+    result = RawValidationResult()
+
+    if not isinstance(values, Mapping):
+        result.add_issue("INVALID_OVERRIDE_KEY", None, "Secondary overrides must be a mapping.")
+        return result
+
+    optional = set(OPTIONAL_RAW_OVERRIDE_FEATURES)
+    for key, value in values.items():
+        if key in FORBIDDEN_USER_FEATURES:
+            result.add_issue("FORBIDDEN_PROCESSED_FEATURE", key, f"Processed feature cannot be overridden: {key}")
+            continue
+        if key in INTERNAL_ONLY_RAW_FEATURES:
+            result.add_issue("INTERNAL_ONLY_OVERRIDE", key, f"Internal-only raw feature cannot be overridden: {key}")
+            continue
+        if key in DROPPED_RAW_METADATA_FEATURES:
+            result.add_issue("DROPPED_METADATA_OVERRIDE", key, f"Dropped raw metadata cannot be overridden: {key}")
+            continue
+        if key not in optional:
+            result.add_issue("INVALID_OVERRIDE_KEY", key, f"Unknown or non-overridable raw feature: {key}")
+            continue
+
+        if key == "controls_actions_first":
+            allowed = RAW_CATEGORICAL_FEATURES["controls_actions_first"]
+            if value not in allowed:
+                result.add_issue(
+                    "INVALID_CATEGORY",
+                    key,
+                    f"Invalid controls_actions_first override: {value!r}",
+                    {"allowed": list(allowed)},
+                )
+            continue
+
+        if not _is_finite_number(value):
+            result.add_issue("INVALID_NUMERIC", key, f"Override {key} must be a finite numeric scalar.")
+
+    return result
+
+
+def validate_assessment_core_input_raw(assessment: Any | Mapping[str, Any]) -> RawValidationResult:
+    data = _to_mapping(assessment)
+    result = RawValidationResult()
+
+    for name in ("user_id", "profile_id"):
+        if _is_missing(data, name):
+            result.add_issue("MISSING_ASSESSMENT_FIELD", name, f"Missing assessment field: {name}")
+
+    profile = data.get("drone_profile", {})
+    scenario = data.get("scenario", {})
+    overrides = data.get("secondary_overrides", {})
+    profile_data = _to_mapping(profile)
+
+    result.extend(validate_drone_profile_raw(profile))
+    result.extend(validate_scenario_raw(scenario))
+    result.extend(validate_secondary_overrides_raw(overrides))
+
+    if data.get("user_id") is not None and profile_data.get("user_id") is not None and data["user_id"] != profile_data["user_id"]:
+        result.add_issue("USER_ID_MISMATCH", "user_id", "Assessment user_id must match drone_profile.user_id.")
+    if data.get("profile_id") is not None and profile_data.get("profile_id") is not None and data["profile_id"] != profile_data["profile_id"]:
+        result.add_issue("PROFILE_ID_MISMATCH", "profile_id", "Assessment profile_id must match drone_profile.profile_id.")
+
+    return result
+
+
+def _truthy_flag(value: Any) -> bool:
+    return value is True or (_is_finite_number(value) and float(value) == 1.0)
+
+
+def run_structural_hard_veto(assessment: Any | Mapping[str, Any]) -> RawValidationResult:
+    data = _to_mapping(assessment)
+    result = validate_assessment_core_input_raw(assessment)
+    profile = _to_mapping(data.get("drone_profile", {}))
+    scenario = _to_mapping(data.get("scenario", {}))
+
+    payload = scenario.get("uav_payload_mass_kg")
+    max_payload = profile.get("max_payload_kg")
+    if max_payload is not None and _is_finite_number(payload) and _is_finite_number(max_payload) and float(payload) > float(max_payload):
+        result.add_issue(
+            "PAYLOAD_EXCEEDS_PROFILE_LIMIT",
+            "uav_payload_mass_kg",
+            "Payload mass exceeds profile max_payload_kg.",
+            {"payload": payload, "max_payload_kg": max_payload},
+        )
+
+    mass = profile.get("uav_mass_kg")
+    max_mass = profile.get("max_takeoff_mass_kg")
+    if max_mass is not None and _is_finite_number(mass) and _is_finite_number(max_mass) and float(mass) > float(max_mass):
+        result.add_issue(
+            "MASS_EXCEEDS_PROFILE_LIMIT",
+            "uav_mass_kg",
+            "UAV mass exceeds profile max_takeoff_mass_kg.",
+            {"mass": mass, "max_takeoff_mass_kg": max_mass},
+        )
+
+    max_alt = scenario.get("airspace_altitude_agl_max_m")
+    ceiling = profile.get("uav_rotorcraft_hover_ceiling_m")
+    if _is_finite_number(max_alt) and _is_finite_number(ceiling) and float(max_alt) > float(ceiling):
+        result.add_issue(
+            "ALTITUDE_EXCEEDS_HOVER_CEILING",
+            "airspace_altitude_agl_max_m",
+            "Mission altitude exceeds profile hover ceiling.",
+            {"max_altitude": max_alt, "hover_ceiling": ceiling},
+        )
+
+    if _truthy_flag(scenario.get("swarm_enabled")) and profile.get("swarm_capable") is False:
+        result.add_issue("SWARM_NOT_CAPABLE", "swarm_enabled", "Swarm requested but profile is not swarm capable.")
+
+    swarm_size = scenario.get("swarm_size")
+    max_swarm = profile.get("max_swarm_size")
+    if max_swarm is not None and _is_finite_number(swarm_size) and isinstance(max_swarm, int) and float(swarm_size) > float(max_swarm):
+        result.add_issue(
+            "SWARM_SIZE_EXCEEDS_PROFILE_LIMIT",
+            "swarm_size",
+            "Scenario swarm_size exceeds profile max_swarm_size.",
+            {"swarm_size": swarm_size, "max_swarm_size": max_swarm},
+        )
+
+    if _truthy_flag(scenario.get("mission_runway_required")) and profile.get("runway_capable") is False:
+        result.add_issue("RUNWAY_NOT_CAPABLE", "mission_runway_required", "Runway mission requested but profile is not runway capable.")
+
+    return result
+
+
 class DataValidator:
-    """الحارس الحديدي لسلامة البيانات الجوية، يمنع عبور الرحلات المزيفة فيزيائياً."""
+    """Legacy compatibility only. Do not use in production raw path.
+
+    The production validator is the raw contract helper set above:
+    validate_drone_profile_raw(), validate_scenario_raw(),
+    validate_secondary_overrides_raw(), validate_assessment_core_input_raw(),
+    and run_structural_hard_veto().
+    """
     
     def __init__(self, fail_on_imputed_core: Optional[bool] = None) -> None:
         self.all_feature_names = get_all_feature_names()

@@ -1,54 +1,132 @@
 """
-Module: src/uav_risk/stage2/rag/schemas.py
-Author: Elite Technical Partner
-Description: Encapsulates strict data contracts and structures for the Legislative RAG subsystem.
+Schemas - Data Models + Protocols for RAG System V3.1
 """
-
+from typing import Optional, List, Dict, Any, Protocol, runtime_checkable
 from dataclasses import dataclass, field
-import hashlib
+from datetime import datetime
+from abc import ABC, abstractmethod
 
-@dataclass(frozen=True)
-class RetrievedChunk:
-    """Represents a unique, atomic slice of regulatory document retrieved from Vector DB."""
-    content: str
-    source_file: str
-    page_number: int
-    relevance_score: float
-    reranker_score: float = 0.0
-    chunk_id: str = field(init=False)
+# ═══════════════════════════════════════════════════════════
+# Protocols - توثيق الواجهات المطلوبة
+# ═══════════════════════════════════════════════════════════
 
-    def __post_init__(self):
-        # توليد معرف فريد وثابت بناءً على محتوى النص والمصدر لمنع التكرار
-        hash_input = f"{self.content[:100]}_{self.source_file}_{self.page_number}".encode('utf-8')
-        unique_id = hashlib.sha256(hash_input).hexdigest()
-        # تعيين القيمة لحقل frozen عبر الأب البديل لمنع كسر الحصانة
-        object.__setattr__(self, 'chunk_id', unique_id)
+@runtime_checkable
+class EmbedderProtocol(Protocol):
+    """Protocol for embedding models"""
 
-    def to_citation_text(self) -> str:
-        """Formats the chunk into a standardized legislative citation text block."""
-        return f"Source: {self.source_file}, Page {self.page_number}\nContent:\n{self.content.strip()}"
+    async def embed(self, text: str) -> List[float]:
+        """
+        Embed text into vector.
+        Must be async. If using sync embedder (HuggingFace), 
+        wrap with asyncio.to_thread().
+        """
+        ...
 
+@runtime_checkable
+class LLMProtocol(Protocol):
+    """Protocol for LLM clients"""
 
-@dataclass(frozen=True)
-class LegalCitation:
-    """Represents a clean, validated reference structure used for the final compliance report."""
-    source_file: str
-    page_number: int
-    full_text: str
+    async def generate(self, 
+                      prompt: str, 
+                      max_tokens: int = 500,
+                      temperature: float = 0.2,
+                      system_prompt: Optional[str] = None) -> str:
+        """Generate text from prompt"""
+        ...
 
+@runtime_checkable
+class RerankerProtocol(Protocol):
+    """Protocol for cross-encoder rerankers"""
 
-@dataclass(frozen=True)
-class LegalAnswer:
-    """The final legal context structure returned by the RAG core engine to the Agent layer."""
-    query: str
-    answer: str
-    citations: list[LegalCitation] = field(default_factory=list)
-    confidence_score: float = 0.0
-    rag_available: bool = True
+    def predict(self, pairs: List[tuple]) -> List[float]:
+        """
+        Rerank query-document pairs.
+        Returns list of scores (higher = more relevant).
+        """
+        ...
 
-# =====================================================================
-# Stage 2 Architectural Dependency Comment Block:
-# This file defines core data contracts.
-# Dependencies: None (Leaf Node Contract)
-# Dependent Files: src/uav_risk/stage2/rag/enhanced_retriever.py, rag_core.py
-# =====================================================================
+    def compute_score(self, pair: tuple) -> float:
+        """
+        Compute score for single query-document pair.
+        """
+        ...
+
+class SyncEmbedderWrapper:
+    """
+    Wrapper to convert sync embedder to async.
+    Usage:
+        sync_model = SentenceTransformer("model")
+        embedder = SyncEmbedderWrapper(sync_model)
+        embedding = await embedder.embed("text")
+    """
+
+    def __init__(self, sync_model):
+        self.model = sync_model
+
+    async def embed(self, text: str) -> List[float]:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, self.model.encode, text)
+        return result.tolist()
+
+# ═══════════════════════════════════════════════════════════
+# Data Models
+# ═══════════════════════════════════════════════════════════
+
+@dataclass
+class DocumentChunk:
+    """A chunk of a document with deduplication support"""
+    chunk_id: str
+    text: str
+    source: str
+    chunk_hash: str  # SimHash for fast dedup
+    embedding: Optional[List[float]] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict:
+        return {
+            "chunk_id": self.chunk_id,
+            "text": self.text,
+            "source": self.source,
+            "chunk_hash": self.chunk_hash,
+            "metadata": self.metadata
+        }
+
+@dataclass
+class SearchResult:
+    """Result from hybrid search"""
+    doc_id: str
+    text: str
+    source: str
+    dense_score: float = 0.0
+    sparse_score: float = 0.0
+    rrf_score: float = 0.0
+    rerank_score: float = 0.0
+    final_score: float = 0.0
+    chunk_hash: Optional[str] = None
+    is_duplicate: bool = False
+
+@dataclass
+class ScenarioFeatures:
+    """Complete scenario feature set"""
+    core_features: Dict[str, Any] = field(default_factory=dict)
+    optional_features: Dict[str, Any] = field(default_factory=dict)
+    shap_features: List[tuple] = field(default_factory=list)
+    free_text: Optional[str] = None
+    ml_risk_score: Optional[float] = None
+
+    def all_features(self) -> Dict[str, Any]:
+        """Merge all features"""
+        merged = dict(self.core_features)
+        merged.update(self.optional_features)
+        return merged
+
+@dataclass
+class RAGResponse:
+    """Final RAG response"""
+    documents: List[SearchResult]
+    analysis: Dict[str, Any]
+    scenario_type: str
+    confidence: float
+    latency_ms: float
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())

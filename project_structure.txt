@@ -1,174 +1,172 @@
-/workspaces/uav-risk-system-test
+.
 ├── Dockerfile
 ├── Makefile
-├── README.md
 ├── artifacts
-│   ├── 9-5-ml-stage-1-gp.ipynb
-│   ├── README (1).md
-│   ├── column_metadata_final.json
 │   ├── final_model.pkl
+│   ├── inspect_stage1.ipynb
 │   ├── label_encoder_final (1).pkl
-│   ├── model_card.json
 │   ├── preprocessing_pipeline_final.pkl
 │   ├── processed_splits_final.npz
-│   ├── stage1_SETUP.md
 │   ├── stage1_environment.json
 │   ├── stage1_feature_mapping.json
-│   ├── stage1_inference.py
-│   ├── stage1_inference_config.json
 │   ├── stage1_production_bundle.pkl
 │   ├── stage1_requirements.txt
 │   ├── think.ipynb
 │   └── uav_stage1_clean.parquet
-├── git
-├── inspect_contracts.py
-├── knowledge
-│   ├── aviation
-│   │   └── weather_limits.md
-│   └── vector_db
 ├── project_structure.txt
 ├── pyproject.toml
-├── run.py
+├── scripts
+│   ├── generate_safe_values_worklist.py
+│   ├── run_production_simulation.py
+│   ├── simulate_agent_live.py
+│   ├── simulate_realistic_runs.py
+│   ├── simulate_run.py
+│   └── static_analysis.py
 ├── src
-│   └── uav_risk
-│       ├── api
-│       │   └── main.py
-│       ├── core
-│       │   ├── config.py
-│       │   ├── contracts.py
-│       │   ├── data_validator.py
-│       │   ├── feature_router.py
-│       │   ├── imputation_strategy.py
-│       │   └── logging.py
-│       ├── ml
-│       │   ├── feature_defs.py
-│       │   ├── inference.py
-│       │   ├── loader.py
-│       │   ├── schemas.py
-│       │   └── shap_explain.py
-│       ├── stage2
-│       │   ├── __init__.py
-│       │   ├── agents
-│       │   ├── api.py
-│       │   ├── docs
-│       │   │   ├── 14 CFR Part 107 (up to date as of 5-13-2026).pdf
-│       │   │   ├── AC_107-2A.pdf
-│       │   │   ├── D0593E_2024-07-10_06.26.37_EAR-for-Unmanned-Aircraft-Systems.pdf
-│       │   │   ├── SORA-v2.5-Annex-A-Release.JAR_doc_26-pdf.pdf
-│       │   │   ├── SORA-v2.5-Annex-B-Release.JAR_doc_27pdf.pdf
-│       │   │   ├── SORA-v2.5-Annex-E-Release.JAR_doc_28pdf.pdf
-│       │   │   ├── SORA-v2.5-Annex-F-Release.JAR_doc_29pdf.pdf
-│       │   │   ├── SORA-v2.5-Main-Body-Release-JAR_doc_25.pdf
-│       │   │   └── special_condition_sc_light-uas_medium_risk_01.pdf
-│       │   ├── evidence.py
-│       │   ├── graph
-│       │   │   └── safety_agent.py
-│       │   ├── input_contract.py
-│       │   ├── knowledge
-│       │   │   ├── models
-│       │   │   │   ├── embedding
-│       │   │   │   │   ├── 1_Pooling
-│       │   │   │   │   │   └── config.json
-│       │   │   │   │   ├── README.md
-│       │   │   │   │   ├── config.json
-│       │   │   │   │   ├── config_sentence_transformers.json
-│       │   │   │   │   ├── data_config.json
-│       │   │   │   │   ├── model.safetensors
-│       │   │   │   │   ├── modules.json
-│       │   │   │   │   ├── onnx
-│       │   │   │   │   │   ├── model.onnx
-│       │   │   │   │   │   ├── model_O1.onnx
-│       │   │   │   │   │   ├── model_O2.onnx
-│       │   │   │   │   │   ├── model_O3.onnx
-│       │   │   │   │   │   ├── model_O4.onnx
-│       │   │   │   │   │   ├── model_qint8_arm64.onnx
-│       │   │   │   │   │   ├── model_qint8_avx512.onnx
-│       │   │   │   │   │   ├── model_qint8_avx512_vnni.onnx
-│       │   │   │   │   │   └── model_quint8_avx2.onnx
-│       │   │   │   │   ├── openvino
-│       │   │   │   │   │   ├── openvino_model.bin
-│       │   │   │   │   │   ├── openvino_model.xml
-│       │   │   │   │   │   ├── openvino_model_qint8_quantized.bin
-│       │   │   │   │   │   └── openvino_model_qint8_quantized.xml
-│       │   │   │   │   ├── pytorch_model.bin
-│       │   │   │   │   ├── rust_model.ot
-│       │   │   │   │   ├── sentence_bert_config.json
-│       │   │   │   │   ├── special_tokens_map.json
-│       │   │   │   │   ├── tf_model.h5
-│       │   │   │   │   ├── tokenizer.json
-│       │   │   │   │   ├── tokenizer_config.json
-│       │   │   │   │   ├── train_script.py
-│       │   │   │   │   └── vocab.txt
-│       │   │   │   └── reranker
-│       │   │   │       ├── README.md
-│       │   │   │       ├── config.json
-│       │   │   │       ├── flax_model.msgpack
-│       │   │   │       ├── model.safetensors
-│       │   │   │       ├── onnx
-│       │   │   │       │   ├── model.onnx
-│       │   │   │       │   ├── model_O1.onnx
-│       │   │   │       │   ├── model_O2.onnx
-│       │   │   │       │   ├── model_O3.onnx
-│       │   │   │       │   ├── model_O4.onnx
-│       │   │   │       │   ├── model_qint8_arm64.onnx
-│       │   │   │       │   ├── model_qint8_avx512.onnx
-│       │   │   │       │   ├── model_qint8_avx512_vnni.onnx
-│       │   │   │       │   └── model_quint8_avx2.onnx
-│       │   │   │       ├── openvino
-│       │   │   │       │   ├── openvino_model.bin
-│       │   │   │       │   ├── openvino_model.xml
-│       │   │   │       │   ├── openvino_model_qint8_quantized.bin
-│       │   │   │       │   └── openvino_model_qint8_quantized.xml
-│       │   │   │       ├── pytorch_model.bin
-│       │   │   │       ├── special_tokens_map.json
-│       │   │   │       ├── tokenizer.json
-│       │   │   │       ├── tokenizer_config.json
-│       │   │   │       └── vocab.txt
-│       │   │   ├── vector_db
-│       │   │   └── vector_db_backup_20260512_005519
-│       │   │       ├── index.faiss
-│       │   │       └── index.pkl
-│       │   ├── llm
-│       │   │   ├── groq_client.py
-│       │   │   └── report_writer.py
-│       │   ├── pipeline.py
-│       │   ├── policies
-│       │   │   ├── config.py
-│       │   │   └── deterministic_core.py
-│       │   ├── rag
-│       │   │   ├── __init__.py
-│       │   │   ├── build_index.py
-│       │   │   ├── config.py
-│       │   │   ├── enhanced_legal_agent.py
-│       │   │   ├── enhanced_retriever.py
-│       │   │   ├── force_download.py
-│       │   │   ├── groq_llm.py
-│       │   │   ├── prompts.py
-│       │   │   ├── rag_core.py
-│       │   │   └── schemas.py
-│       │   ├── report
-│       │   │   ├── prompts.py
-│       │   │   ├── templates.py
-│       │   │   └── verifier.py
-│       │   ├── schemas.py
-│       │   ├── test_rag.py
-│       │   └── tools
-│       │       └── toolbox.py
-│       ├── utils
-│       │   ├── __init__.py
-│       │   ├── json_sanitize.py
-│       │   └── string_utils.py
-│       └── verify_environment.py
+│   ├── uav_risk
+│   │   ├── api
+│   │   │   ├── main.py
+│   │   │   ├── profiles.py
+│   │   │   └── validate.py
+│   │   ├── core
+│   │   │   ├── config.py
+│   │   │   ├── contracts.py
+│   │   │   ├── data_validator.py
+│   │   │   ├── drone_profile_store.py
+│   │   │   ├── feature_engineering.py
+│   │   │   ├── feature_router.py
+│   │   │   ├── logging.py
+│   │   │   └── uav_catalog.py
+│   │   ├── ml
+│   │   │   ├── bundle_security.py
+│   │   │   ├── feature_defs.py
+│   │   │   ├── inference.py
+│   │   │   ├── loader.py
+│   │   │   ├── schemas.py
+│   │   │   └── shap_explain.py
+│   │   ├── stage2
+│   │   │   ├── __init__.py
+│   │   │   ├── agent
+│   │   │   │   ├── ace_agent.py
+│   │   │   │   ├── agent_memory.py
+│   │   │   │   ├── agent_schemas.py
+│   │   │   │   ├── agent_tools.py
+│   │   │   │   └── fallback.py
+│   │   │   ├── docs
+│   │   │   │   ├── 14 CFR Part 107 (up to date as of 5-13-2026).pdf
+│   │   │   │   ├── AC_107-2A.pdf
+│   │   │   │   ├── D0593E_2024-07-10_06.26.37_EAR-for-Unmanned-Aircraft-Systems.pdf
+│   │   │   │   ├── SORA-v2.5-Annex-A-Release.JAR_doc_26-pdf.pdf
+│   │   │   │   ├── SORA-v2.5-Annex-B-Release.JAR_doc_27pdf.pdf
+│   │   │   │   ├── SORA-v2.5-Annex-E-Release.JAR_doc_28pdf.pdf
+│   │   │   │   ├── SORA-v2.5-Annex-F-Release.JAR_doc_29pdf.pdf
+│   │   │   │   ├── SORA-v2.5-Main-Body-Release-JAR_doc_25.pdf
+│   │   │   │   └── special_condition_sc_light-uas_medium_risk_01.pdf
+│   │   │   ├── evidence.py
+│   │   │   ├── knowledge
+│   │   │   │   ├── models
+│   │   │   │   │   ├── embedding
+│   │   │   │   │   │   ├── 1_Pooling
+│   │   │   │   │   │   │   └── config.json
+│   │   │   │   │   │   ├── README.md
+│   │   │   │   │   │   ├── config.json
+│   │   │   │   │   │   ├── config_sentence_transformers.json
+│   │   │   │   │   │   ├── data_config.json
+│   │   │   │   │   │   ├── model.safetensors
+│   │   │   │   │   │   ├── modules.json
+│   │   │   │   │   │   ├── onnx
+│   │   │   │   │   │   │   ├── model.onnx
+│   │   │   │   │   │   │   ├── model_O1.onnx
+│   │   │   │   │   │   │   ├── model_O2.onnx
+│   │   │   │   │   │   │   ├── model_O3.onnx
+│   │   │   │   │   │   │   ├── model_O4.onnx
+│   │   │   │   │   │   │   ├── model_qint8_arm64.onnx
+│   │   │   │   │   │   │   ├── model_qint8_avx512.onnx
+│   │   │   │   │   │   │   ├── model_qint8_avx512_vnni.onnx
+│   │   │   │   │   │   │   └── model_quint8_avx2.onnx
+│   │   │   │   │   │   ├── openvino
+│   │   │   │   │   │   │   ├── openvino_model.bin
+│   │   │   │   │   │   │   ├── openvino_model.xml
+│   │   │   │   │   │   │   ├── openvino_model_qint8_quantized.bin
+│   │   │   │   │   │   │   └── openvino_model_qint8_quantized.xml
+│   │   │   │   │   │   ├── pytorch_model.bin
+│   │   │   │   │   │   ├── rust_model.ot
+│   │   │   │   │   │   ├── sentence_bert_config.json
+│   │   │   │   │   │   ├── special_tokens_map.json
+│   │   │   │   │   │   ├── tf_model.h5
+│   │   │   │   │   │   ├── tokenizer.json
+│   │   │   │   │   │   ├── tokenizer_config.json
+│   │   │   │   │   │   ├── train_script.py
+│   │   │   │   │   │   └── vocab.txt
+│   │   │   │   │   └── reranker
+│   │   │   │   │       ├── README.md
+│   │   │   │   │       ├── config.json
+│   │   │   │   │       ├── flax_model.msgpack
+│   │   │   │   │       ├── model.safetensors
+│   │   │   │   │       ├── onnx
+│   │   │   │   │       │   ├── model.onnx
+│   │   │   │   │       │   ├── model_O1.onnx
+│   │   │   │   │       │   ├── model_O2.onnx
+│   │   │   │   │       │   ├── model_O3.onnx
+│   │   │   │   │       │   ├── model_O4.onnx
+│   │   │   │   │       │   ├── model_qint8_arm64.onnx
+│   │   │   │   │       │   ├── model_qint8_avx512.onnx
+│   │   │   │   │       │   ├── model_qint8_avx512_vnni.onnx
+│   │   │   │   │       │   └── model_quint8_avx2.onnx
+│   │   │   │   │       ├── openvino
+│   │   │   │   │       │   ├── openvino_model.bin
+│   │   │   │   │       │   ├── openvino_model.xml
+│   │   │   │   │       │   ├── openvino_model_qint8_quantized.bin
+│   │   │   │   │       │   └── openvino_model_qint8_quantized.xml
+│   │   │   │   │       ├── pytorch_model.bin
+│   │   │   │   │       ├── special_tokens_map.json
+│   │   │   │   │       ├── tokenizer.json
+│   │   │   │   │       ├── tokenizer_config.json
+│   │   │   │   │       └── vocab.txt
+│   │   │   │   ├── vector_db
+│   │   │   │   │   ├── index.faiss
+│   │   │   │   │   ├── index.pkl
+│   │   │   │   │   └── metadata.json
+│   │   │   │   └── vector_db_backup_20260512_005519
+│   │   │   │       ├── index.faiss
+│   │   │   │       └── index.pkl
+│   │   │   ├── llm
+│   │   │   │   ├── groq_client.py
+│   │   │   │   └── report_writer.py
+│   │   │   ├── pipeline.py
+│   │   │   └── rag
+│   │   │       ├── __init__.py
+│   │   │       ├── build_index.py
+│   │   │       ├── config_v3.py
+│   │   │       ├── evidence_logger.py
+│   │   │       ├── faiss_security.py
+│   │   │       ├── feature_query_mapper.py
+│   │   │       ├── force_download.py
+│   │   │       ├── groq_llm.py
+│   │   │       ├── hybrid_retriever.py
+│   │   │       ├── hyde_pipeline.py
+│   │   │       ├── prompts_v3.py
+│   │   │       ├── query_intelligence.py
+│   │   │       ├── rag_core_v3.py
+│   │   │       ├── schemas.py
+│   │   │       └── sparse_index_builder.py
+│   │   ├── utils
+│   │   │   ├── __init__.py
+│   │   │   └── json_sanitize.py
+│   │   └── verify_environment.py
+│   └── uav_risk_system.egg-info
+│       ├── PKG-INFO
+│       ├── SOURCES.txt
+│       ├── dependency_links.txt
+│       ├── requires.txt
+│       └── top_level.txt
+├── test_comprehensive.py
 ├── tests
-│   ├── test_core_gates.py
-│   ├── test_integrated_pipeline.py
-│   ├── test_ml_deep_inspection.py
-│   ├── test_ml_gate4.py
-│   ├── test_ml_scenarios_run.py
-│   └── unit
-│       └── test_rag_core.py
-├── ui
-│   └── app.py
-└── verify_phase0.py
+│   ├── test_comprehensive_pipeline.py
+│   ├── test_feature_generation.py
+│   ├── test_model_trace_scenarios.py
+│   └── test_robust_pipeline.py
+└── ui
+    └── app.py
 
-34 directories, 138 files
+28 directories, 142 files

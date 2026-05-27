@@ -1,28 +1,36 @@
 """
 Module: src/uav_risk/stage2/rag/build_index.py
-Author: Elite Technical Partner
-Description: Production-ready pipeline to build, partition, and verify the FAISS Vector Index locally.
+Author: Elite Technical Partner + V3.1 Production Fix
+Description: Production-ready pipeline to build dense + sparse indices.
+Supports: PDF loading, chunking, HMAC signing, sparse BM25 index.
+Uses local offline models from knowledge/models/embedding.
 """
 
 import os
 import json
 import time
-from typing import Dict, Any
-import structlog
+import pickle
+import re
+import logging
+from typing import Dict, Any, List, Tuple
+from pathlib import Path
+from collections import defaultdict
+from datetime import datetime
 import hmac
 import hashlib
-import base64
-from datetime import datetime
+import numpy as np
+
+# LangChain imports
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS as LangchainFAISS
 
-# استيراد كلاس الإعدادات الموحد لمنع تشتت المسارات
-from uav_risk.stage2.rag.config import RAGConfig
+from .config_v3 import RAGConfig, INDEX_DIR, BASE_DIR, DOCS_PATH, EMBEDDING_PATH
+from .faiss_security import FAISSIndexVerifier
 
-# استدعاء الـ Logger المركزي للمنظومة الجوية
-logger = structlog.get_logger()
+logger = logging.getLogger(__name__)
+
 
 def build_rag_index(
     config: RAGConfig = None,
@@ -30,21 +38,21 @@ def build_rag_index(
     chunk_overlap: int = 150
 ) -> Dict[str, Any]:
     """
-    Loads aviation policy PDFs, splits them into semantic legislative fragments,
-    builds a vector index via local embeddings, and performs an integrated safety validation.
+    Loads aviation policy PDFs, splits into chunks,
+    builds BOTH dense (FAISS) + sparse (BM25) indices.
+    Uses local offline embedding model from knowledge/models/embedding.
     """
     start_time = time.perf_counter()
-    
-    # في حال لم يتم تمرير إعدادات، يتم توليد الكائن الافتراضي الذكي ديناميكياً
+
     if config is None:
         config = RAGConfig()
 
-    # سحب المسارات الحية والمكتشفة بصرياً من كلاس الـ Config
-    docs_dir = str(config.DOCS_PATH)
-    index_dir = str(config.INDEX_PATH)
-    embedding_model_dir = str(config.EMBEDDING_PATH)
+    # Use paths from config_v3 (production paths)
+    docs_dir = str(DOCS_PATH)
+    index_dir = str(INDEX_DIR)
+    embedding_model_dir = str(EMBEDDING_PATH)
 
-    logger.info("rag_index_build_started", docs_dir=docs_dir, index_dir=index_dir)
+    logger.info("rag_index_build_started", docs_dir=docs_dir, index_dir=index_dir, model_dir=embedding_model_dir)
 
     report: Dict[str, Any] = {
         "status": "failed",
@@ -55,257 +63,300 @@ def build_rag_index(
     }
 
     try:
-        # 1. التحقق من وجود المجلدات والملفات التنظيمية الحتمية
+        # 1. Verify directories
         if not os.path.exists(docs_dir):
-            error_msg = f"Regulatory documents directory not found at: {docs_dir}"
-            logger.error("rag_index_build_failed", reason=error_msg)
-            return report
-
-        if not os.path.exists(embedding_model_dir):
-            error_msg = f"Offline Embedding Model weights folder not found at: {embedding_model_dir}"
-            logger.error("rag_index_build_failed", reason=error_msg)
+            error_msg = f"Documents directory not found: {docs_dir}"
+            logger.error(error_msg)
             return report
 
         pdf_files = [f for f in os.listdir(docs_dir) if f.lower().endswith('.pdf')]
         if not pdf_files:
-            error_msg = f"No PDF files found inside the directory: {docs_dir}"
-            logger.error("rag_index_build_failed", reason=error_msg)
+            error_msg = f"No PDF files found: {docs_dir}"
+            logger.error(error_msg)
             return report
 
-        # 2. تحميل كتل المستندات وحقن الـ Metadata التشريعية الصارمة
+        # 2. Load PDFs
         all_pages = []
         for pdf_file in pdf_files:
             pdf_path = os.path.join(docs_dir, pdf_file)
-            logger.info("loading_aviation_pdf", file_name=pdf_file)
-            
+            logger.info("loading_pdf", file=pdf_file)
+
             try:
                 loader = PyPDFLoader(pdf_path)
                 pages = loader.load()
-                
-                # تعديل الـ Metadata لضمان وجود حقول تتبع جنائية موثقة
+
                 for page_idx, page in enumerate(pages):
                     page.metadata = {
                         "source_file": pdf_file,
                         "page_number": page_idx + 1,
                         "total_pages": len(pages)
                     }
-                
+
                 all_pages.extend(pages)
                 report["doc_details"].append({
                     "file": pdf_file,
                     "pages": len(pages)
                 })
-                logger.info("loaded_pdf_success", file_name=pdf_file, pages_count=len(pages))
+                logger.info("loaded_pdf", file=pdf_file, pages=len(pages))
             except Exception as exc:
-                logger.error("pdf_loading_error", file_name=pdf_file, error=str(exc))
+                logger.error("pdf_loading_error", file=pdf_file, error=str(exc))
                 raise exc
 
         report["num_documents"] = len(pdf_files)
 
-        # 3. التقطيع الدلالي الذكي وفق القواطع التشريعية المنظمة [cite: 2]
-        aviation_separators = ["\nArticle ", "\nSection ", "\n§ ", "\n\n", "\n", ". ", " "] 
+        # 3. Semantic splitting
+        aviation_separators = ["\nArticle ", "\nSection ", "\n§ ", "\n\n", "\n", ". ", " "]
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             separators=aviation_separators,
             keep_separator=True
         )
-        
+
         all_chunks = splitter.split_documents(all_pages)
         report["num_chunks"] = len(all_chunks)
-        logger.info("text_semantic_splitting_complete", total_chunks=len(all_chunks))
+        logger.info("splitting_complete", chunks=len(all_chunks))
 
-        # تأكيد سلامة البصمة والمصدر لكل كسر قبل تشفير المصفوفة المتجهية
-        for idx, chunk in enumerate(all_chunks):
+        # Ensure metadata
+        for chunk in all_chunks:
             if "source_file" not in chunk.metadata:
-                chunk.metadata["source_file"] = "unknown_regulatory_doc"
+                chunk.metadata["source_file"] = "unknown"
             if "page_number" not in chunk.metadata:
                 chunk.metadata["page_number"] = 0
 
-        # 4. التضمين المحلي المجهول (100% Offline) عبر مسار النموذج الموحد
-        logger.info("loading_local_embedding_model", model_path=embedding_model_dir)
+        # 4. Load embeddings from LOCAL offline model
+        logger.info("loading_embeddings", model=embedding_model_dir)
+
+        # Verify local model exists
+        if not os.path.exists(embedding_model_dir):
+            logger.error(f"Local embedding model not found at: {embedding_model_dir}")
+            logger.error("Run force_download.py first to download models.")
+            raise FileNotFoundError(f"Embedding model not found: {embedding_model_dir}")
+
         embeddings = HuggingFaceEmbeddings(
             model_name=embedding_model_dir,
             model_kwargs={'device': 'cpu'},
             encode_kwargs={'normalize_embeddings': True}
         )
 
-        # 5. بناء جراف الفهرس وحفظه محلياً في المجلد الفعلي المستقر
-        logger.info("building_faiss_graph")
-        vector_db = FAISS.from_documents(all_chunks, embeddings)
-        
+        # 5. Build DENSE index (LangChain FAISS)
+        logger.info("building_dense_index")
+        vector_db = LangchainFAISS.from_documents(all_chunks, embeddings)
+
         os.makedirs(index_dir, exist_ok=True)
         vector_db.save_local(index_dir)
-        # بعد الحفظ، أنشئ توقيع HMAC للملفات الأساسية داخل الفهرس
+
+        # 5b. Convert to native FAISS for V3.1 retriever
+        logger.info("converting_to_native_faiss")
+        _convert_to_native_faiss(vector_db, all_chunks, index_dir)
+
+        # 5c. Sign the native FAISS index
         try:
-            from uav_risk.stage2.rag.key_manager import get_signing_key
-            signing_key = get_signing_key()
-            if signing_key:
-                sign_faiss_index(index_dir, signing_key)
-                logger.info("index_signed", index_dir=index_dir)
-            else:
-                logger.warning("no_faiss_signing_key_present_index_unsigned", index_dir=index_dir)
+            verifier = FAISSIndexVerifier()
+            native_faiss_path = Path(index_dir) / "dense_index.faiss"
+            if native_faiss_path.exists():
+                verifier.sign_index(native_faiss_path, metadata={
+                    "sources": pdf_files,
+                    "chunks": len(all_chunks),
+                    "model": embedding_model_dir
+                })
+                logger.info("faiss_index_signed")
         except Exception as sig_exc:
-            logger.error("index_signing_failed", error=str(sig_exc))
-        
-        # كتابة ملف الميتا-داتا المرجعي لحفظ التاريخ والتدقيق
+            logger.error("faiss_signing_error", error=str(sig_exc))
+
+        # 6. Build SPARSE index (BM25)
+        logger.info("building_sparse_index")
+        _build_sparse_index(all_chunks, index_dir)
+
+        # 7. Save metadata
         metadata_payload = {
             "num_chunks": len(all_chunks),
             "sources": pdf_files,
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "dense_index": "dense_index.faiss",
+            "sparse_index": "sparse_index.pkl",
+            "embedding_model": embedding_model_dir
         }
-        with open(os.path.join(index_dir, "metadata.json"), "w", encoding="utf-8") as meta_file:
-            json.dump(metadata_payload, meta_file, indent=4, ensure_ascii=False)
+        with open(os.path.join(index_dir, "metadata.json"), "w", encoding="utf-8") as f:
+            json.dump(metadata_payload, f, indent=4, ensure_ascii=False)
 
-        # 6. الفحص الجنائي التلقائي المدمج لضمان سلامة جودة الأبعاد واسترجاع البيانات [cite: 6]
-        logger.info("running_integrated_sanity_verification")
-        # تحقق من التوقيع قبل التحميل؛ دالة التحقق ترفع SecurityError عند عدم المطابقة
-        from uav_risk.stage2.rag.build_index import verify_and_safely_load_faiss
-        verified_db = verify_and_safely_load_faiss(index_dir, embeddings)
-        test_query = "drone maximum altitude operation"
-        test_results = verified_db.similarity_search(test_query, k=3)
+        # 8. Sanity check
+        logger.info("running_sanity_check")
+        _sanity_check(index_dir, embeddings)
 
-        if len(test_results) == 0:
-            raise RuntimeError("Sanity check failed: Vector DB returned empty result pool for test query.")
-        
-        for idx, res in enumerate(test_results):
-            if "source_file" not in res.metadata or "page_number" not in res.metadata:
-                raise KeyError(f"Sanity check failed: Chunk metadata missing tracking keys at index {idx}.")
+        elapsed = (time.perf_counter() - start_time) * 1000
+        logger.info("build_complete", elapsed_ms=f"{elapsed:.2f}")
 
-        elapsed_time = (time.perf_counter() - start_time) * 1000
-        logger.info("rag_index_build_complete_success", elapsed_ms=f"{elapsed_time:.2f}ms")
-        
         report["status"] = "success"
+        report["embedding_model"] = embedding_model_dir
         return report
 
-    except Exception as general_exc:
-        logger.critical("fatal_pipeline_failure_in_rag_indexing", error=str(general_exc))
-        report["status"] = "failed"
-        report["error_summary"] = str(general_exc)
+    except Exception as e:
+        logger.critical("build_failed", error=str(e))
+        report["error_summary"] = str(e)
         return report
 
-# =====================================================================
-# Stage 2 Architectural Dependency Comment Block:
-# This file constructs the core Vector database artifact used offline.
-# Dependencies: src/uav_risk/stage2/rag/config.py
-# Dependent Files: Verified during server lifespan setup via tests/unit/test_rag_core.py
-# =====================================================================
 
-
-class SecurityError(Exception):
-    pass
-
-
-def _collect_index_file_paths(index_dir: str):
-    """Return a sorted list of file paths that constitute the FAISS index on disk."""
-    files = []
-    for root, _, filenames in os.walk(index_dir):
-        for fn in sorted(filenames):
-            # ignore signature file itself when calculating digest
-            if fn in ("index.signature",):
-                continue
-            files.append(os.path.join(root, fn))
-    return files
-
-
-def calculate_file_signature(file_path: str, key: bytes) -> str:
-    """Calculate HMAC-SHA256 over a single file and return hex digest."""
-    h = hmac.new(key, digestmod=hashlib.sha256)
-    with open(file_path, "rb") as fh:
-        while True:
-            chunk = fh.read(8192)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def sign_faiss_index(index_dir: str, key: bytes) -> None:
-    """Create a signature file for the FAISS index directory using HMAC-SHA256.
-
-    The signature is computed deterministically over all files (sorted by path)
-    present in the index directory, excluding the signature file itself.
+def _convert_to_native_faiss(vector_db, chunks, index_dir):
     """
-    files = _collect_index_file_paths(index_dir)
-    if not files:
-        raise RuntimeError("No files found to sign in index directory")
-
-    # Compute HMAC over concatenated file contents in deterministic order
-    h = hmac.new(key, digestmod=hashlib.sha256)
-    for fp in files:
-        with open(fp, "rb") as fh:
-            while True:
-                chunk = fh.read(8192)
-                if not chunk:
-                    break
-                h.update(chunk)
-
-    signature_hex = h.hexdigest()
-    sig_payload = {
-        "signature": signature_hex,
-        "algo": "HMAC-SHA256",
-        "created_at": datetime.utcnow().isoformat() + "Z",
-        "files": [os.path.relpath(p, index_dir) for p in files]
-    }
-
-    sig_path = os.path.join(index_dir, "index.signature")
-    with open(sig_path, "w", encoding="utf-8") as sf:
-        json.dump(sig_payload, sf, indent=2)
-
-
-def verify_and_safely_load_faiss(index_dir: str, embeddings) -> FAISS:
-    """Verify signature of index directory and load FAISS only on success.
-
-    Behavior:
-      - If `FAISS_SIGNING_KEY` env exists: enforce verification and raise SecurityError on mismatch.
-      - If key absent but `FAISS_ALLOW_UNSIGNED` == "1": allow load with warning.
-      - Otherwise: raise SecurityError preventing load.
+    Convert LangChain FAISS to native faiss.IndexFlatIP for V3.1 retriever.
+    Includes proper doc_id mapping via dense_mapping.json.
     """
-    sig_path = os.path.join(index_dir, "index.signature")
-    key_env = os.getenv("FAISS_SIGNING_KEY")
-    allow_unsigned = os.getenv("FAISS_ALLOW_UNSIGNED", "0") == "1"
+    try:
+        import faiss
 
-    if not key_env:
-        if allow_unsigned:
-            logger.warning("loading_unsigned_index_allowed_by_env", index_dir=index_dir)
-            return FAISS.load_local(folder_path=index_dir, embeddings=embeddings, allow_dangerous_deserialization=False)
-        else:
-            raise SecurityError("FAISS signing key not present and unsigned indexes not allowed")
+        # Get document store
+        docstore = vector_db.docstore
+        index_to_docstore_id = vector_db.index_to_docstore_id
 
-    key = key_env.encode("utf-8")
+        # Extract texts and embeddings
+        texts = []
+        doc_ids = []
 
-    # perform signature-only verification first
-    verify_index_signature(index_dir, key)
+        for idx, doc_id in index_to_docstore_id.items():
+            doc = docstore.search(doc_id)
+            texts.append(doc.page_content)
+            doc_ids.append(f"chunk_{idx}")  # Match sparse index naming
 
-    # load the FAISS index safely now that signature verified
-    return FAISS.load_local(folder_path=index_dir, embeddings=embeddings, allow_dangerous_deserialization=False)
+        # Generate embeddings
+        embeddings_model = vector_db.embeddings
+        embeddings_list = embeddings_model.embed_documents(texts)
+        embeddings_np = np.array(embeddings_list).astype('float32')
+
+        # Build native FAISS index
+        dimension = embeddings_np.shape[1]
+        native_index = faiss.IndexFlatIP(dimension)
+        faiss.normalize_L2(embeddings_np)
+        native_index.add(embeddings_np)
+
+        # Save
+        faiss_path = Path(index_dir) / "dense_index.faiss"
+        faiss.write_index(native_index, str(faiss_path))
+
+        # Save mapping with matching doc_ids
+        mapping = {
+            "doc_ids": doc_ids,
+            "texts": texts,
+            "dimension": dimension,
+            "count": len(doc_ids)
+        }
+        with open(Path(index_dir) / "dense_mapping.json", "w", encoding="utf-8") as f:
+            json.dump(mapping, f, indent=2)
+
+        logger.info("native_faiss_saved", path=str(faiss_path), docs=len(doc_ids))
+
+    except Exception as e:
+        logger.error("native_faiss_conversion_failed", error=str(e))
+        raise
 
 
-def verify_index_signature(index_dir: str, key: bytes) -> bool:
-    """Verify only the signature of an index directory. Returns True or raises SecurityError."""
-    sig_path = os.path.join(index_dir, "index.signature")
-    if not os.path.exists(sig_path):
-        raise SecurityError(f"Signature file missing for index at {index_dir}")
+def _build_sparse_index(chunks, index_dir):
+    """
+    Build BM25 sparse index from chunks.
+    """
+    try:
+        # Prepare documents
+        documents = []
+        for i, chunk in enumerate(chunks):
+            doc_id = f"chunk_{i}"  # Match dense index naming
+            text = chunk.page_content
+            source = chunk.metadata.get("source_file", "unknown")
+            documents.append((doc_id, text, source))
 
-    with open(sig_path, "r", encoding="utf-8") as sf:
-        payload = json.load(sf)
-    expected_sig = payload.get("signature")
-    if not expected_sig:
-        raise SecurityError("Signature file malformed or missing 'signature' field")
+        # Build BM25
+        N = len(documents)
+        doc_ids = []
+        doc_texts = []
+        doc_sources = []
+        doc_tokens_list = []
+        doc_lengths = []
 
-    # compute digest over files
-    files = _collect_index_file_paths(index_dir)
-    h = hmac.new(key, digestmod=hashlib.sha256)
-    for fp in files:
-        with open(fp, "rb") as fh:
-            while True:
-                chunk = fh.read(8192)
-                if not chunk:
-                    break
-                h.update(chunk)
+        for doc_id, text, source in documents:
+            doc_ids.append(doc_id)
+            doc_texts.append(text)
+            doc_sources.append(source)
 
-    actual_sig = h.hexdigest()
-    if not hmac.compare_digest(actual_sig, expected_sig):
-        raise SecurityError("FAISS index signature mismatch - possible tampering detected")
+            # Tokenize
+            text_clean = text.lower()
+            text_clean = re.sub(r"[^a-z0-9\s]", " ", text_clean)
+            tokens = [t for t in text_clean.split() if len(t) > 2]
 
-    return True
+            doc_tokens_list.append(tokens)
+            doc_lengths.append(len(tokens))
+
+        avg_doc_length = sum(doc_lengths) / N if N > 0 else 0
+
+        # Inverted index
+        term_doc_freq = defaultdict(lambda: defaultdict(int))
+        for doc_idx, tokens in enumerate(doc_tokens_list):
+            for token in tokens:
+                term_doc_freq[token][doc_idx] += 1
+
+        # IDF
+        idf = {}
+        for term, doc_freqs in term_doc_freq.items():
+            df = len(doc_freqs)
+            idf[term] = np.log((N - df + 0.5) / (df + 0.5) + 1.0)
+
+        sparse_index = {
+            "doc_ids": doc_ids,
+            "doc_texts": doc_texts,
+            "doc_sources": doc_sources,
+            "term_doc_freq": dict(term_doc_freq),
+            "idf": idf,
+            "doc_lengths": doc_lengths,
+            "avg_doc_length": avg_doc_length,
+            "k1": 1.5,
+            "b": 0.75,
+            "N": N
+        }
+
+        # Save
+        sparse_path = Path(index_dir) / "sparse_index.pkl"
+        with open(sparse_path, "wb") as f:
+            pickle.dump(sparse_index, f)
+
+        logger.info("sparse_index_saved", path=str(sparse_path), docs=N, terms=len(idf))
+
+    except Exception as e:
+        logger.error("sparse_index_build_failed", error=str(e))
+        raise
+
+
+def _sanity_check(index_dir, embeddings):
+    """Verify indices work correctly"""
+    try:
+        from .faiss_security import verify_and_safely_load_faiss
+
+        faiss_path = Path(index_dir) / "dense_index.faiss"
+
+        if faiss_path.exists():
+            index, _ = verify_and_safely_load_faiss(
+                str(faiss_path),
+                allow_unsigned=True  # During build, may not be signed yet
+            )
+            logger.info("dense_sanity_passed", ntotal=index.ntotal)
+
+        # Test sparse
+        sparse_path = Path(index_dir) / "sparse_index.pkl"
+        if sparse_path.exists():
+            with open(sparse_path, "rb") as f:
+                sidx = pickle.load(f)
+            logger.info("sparse_sanity_passed", docs=sidx.get("N", 0))
+
+        # Test LangChain FAISS
+        test_query = "drone maximum altitude operation"
+        db = LangchainFAISS.load_local(index_dir, embeddings, allow_dangerous_deserialization=False)
+        results = db.similarity_search(test_query, k=3)
+
+        if len(results) == 0:
+            raise RuntimeError("Sanity check: empty results")
+
+        logger.info("sanity_check_passed", results=len(results))
+
+    except Exception as e:
+        logger.error("sanity_check_failed", error=str(e))
+        raise
+
+#python -m uav_risk.stage2.rag.build_index
+

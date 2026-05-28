@@ -4,7 +4,17 @@ Schemas - Data Models + Protocols for RAG System V3.1
 from typing import Optional, List, Dict, Any, Protocol, runtime_checkable
 from dataclasses import dataclass, field
 from datetime import datetime
-from abc import ABC, abstractmethod
+
+from uav_risk.stage2.contracts import (
+    EvidenceBundle,
+    EvidenceCitation,
+    EvidenceClaim,
+    EvidenceOrigin,
+    EvidenceSourceType,
+    EvidenceSupportStatus,
+    EvidenceUse,
+    LegalCitation,
+)
 
 # ═══════════════════════════════════════════════════════════
 # Protocols - توثيق الواجهات المطلوبة
@@ -17,22 +27,26 @@ class EmbedderProtocol(Protocol):
     async def embed(self, text: str) -> List[float]:
         """
         Embed text into vector.
-        Must be async. If using sync embedder (HuggingFace), 
+        Must be async. If using sync embedder (HuggingFace),
         wrap with asyncio.to_thread().
         """
         ...
+
 
 @runtime_checkable
 class LLMProtocol(Protocol):
     """Protocol for LLM clients"""
 
-    async def generate(self, 
-                      prompt: str, 
-                      max_tokens: int = 500,
-                      temperature: float = 0.2,
-                      system_prompt: Optional[str] = None) -> str:
+    async def generate(
+        self,
+        prompt: str,
+        max_tokens: int = 500,
+        temperature: float = 0.2,
+        system_prompt: Optional[str] = None,
+    ) -> str:
         """Generate text from prompt"""
         ...
+
 
 @runtime_checkable
 class RerankerProtocol(Protocol):
@@ -51,6 +65,7 @@ class RerankerProtocol(Protocol):
         """
         ...
 
+
 class SyncEmbedderWrapper:
     """
     Wrapper to convert sync embedder to async.
@@ -65,9 +80,11 @@ class SyncEmbedderWrapper:
 
     async def embed(self, text: str) -> List[float]:
         import asyncio
+
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, self.model.encode, text)
         return result.tolist()
+
 
 # ═══════════════════════════════════════════════════════════
 # Data Models
@@ -76,6 +93,7 @@ class SyncEmbedderWrapper:
 @dataclass
 class DocumentChunk:
     """A chunk of a document with deduplication support"""
+
     chunk_id: str
     text: str
     source: str
@@ -89,12 +107,14 @@ class DocumentChunk:
             "text": self.text,
             "source": self.source,
             "chunk_hash": self.chunk_hash,
-            "metadata": self.metadata
+            "metadata": self.metadata,
         }
+
 
 @dataclass
 class SearchResult:
     """Result from hybrid search"""
+
     doc_id: str
     text: str
     source: str
@@ -106,9 +126,11 @@ class SearchResult:
     chunk_hash: Optional[str] = None
     is_duplicate: bool = False
 
+
 @dataclass
 class ScenarioFeatures:
     """Complete scenario feature set"""
+
     core_features: Dict[str, Any] = field(default_factory=dict)
     optional_features: Dict[str, Any] = field(default_factory=dict)
     shap_features: List[tuple] = field(default_factory=list)
@@ -121,12 +143,34 @@ class ScenarioFeatures:
         merged.update(self.optional_features)
         return merged
 
+
 @dataclass
 class RAGResponse:
     """Final RAG response"""
+
     documents: List[SearchResult]
     analysis: Dict[str, Any]
     scenario_type: str
     confidence: float
     latency_ms: float
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+
+
+__all__ = [
+    "DocumentChunk",
+    "SearchResult",
+    "ScenarioFeatures",
+    "RAGResponse",
+    "EmbedderProtocol",
+    "LLMProtocol",
+    "RerankerProtocol",
+    "SyncEmbedderWrapper",
+    "EvidenceCitation",
+    "LegalCitation",
+    "EvidenceClaim",
+    "EvidenceBundle",
+    "EvidenceSourceType",
+    "EvidenceSupportStatus",
+    "EvidenceUse",
+    "EvidenceOrigin",
+]

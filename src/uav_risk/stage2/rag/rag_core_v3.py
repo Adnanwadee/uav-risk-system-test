@@ -44,7 +44,7 @@ class AsyncRAGCoreV3:
         self.reranker = reranker
         self.dense_index = dense_index
         self.sparse_builder = sparse_index_builder
-        self.index_dir = Path(index_dir) if index_dir else None
+        self.index_dir = Path(index_dir).expanduser().resolve() if index_dir else None
 
         self.intelligence = None
         self.mapper = None
@@ -53,6 +53,18 @@ class AsyncRAGCoreV3:
         self.evidence_log = None
 
         self._initialized = False
+
+    def _resolve_index_dir(self) -> Path:
+        if self.index_dir is not None:
+            return self.index_dir
+
+        config_index_dir = getattr(self.config, "INDEX_DIR", None) if self.config else None
+        if config_index_dir:
+            return Path(config_index_dir).expanduser().resolve()
+
+        from .config_v3 import get_index_dir
+
+        return get_index_dir()
 
     async def initialize(self):
         """Initialize all components with safe loading"""
@@ -76,11 +88,8 @@ class AsyncRAGCoreV3:
             self.embedder = SyncEmbedderWrapper(self.embedder)
 
         # Load dense index if not provided
-        if self.dense_index is None and self.config:
-            index_dir = getattr(self.config, 'INDEX_DIR', Path('indices'))
-            if self.index_dir:
-                index_dir = self.index_dir
-
+        if self.dense_index is None:
+            index_dir = self._resolve_index_dir()
             faiss_path = index_dir / 'dense_index.faiss'
 
             if faiss_path.exists():
@@ -112,15 +121,15 @@ class AsyncRAGCoreV3:
         self.mapper = FeatureQueryMapper(config_module=self.config)
 
         # Build/load sparse index
-        sparse_index = None
-        if self.sparse_builder:
+        sparse_index = getattr(self, "_preloaded_sparse_index", None)
+        if sparse_index is None and self.sparse_builder:
             try:
                 sparse_index = await self.sparse_builder.build_or_load()
             except Exception as e:
                 logger.error(f"Failed to build/load sparse index: {e}")
 
         # Initialize retriever with reranker
-        index_dir_for_retriever = self.index_dir or (self.config.INDEX_DIR if self.config else None)
+        index_dir_for_retriever = self._resolve_index_dir()
         self.retriever = HybridRetriever(
             dense_index=self.dense_index,
             sparse_index=sparse_index,
@@ -187,7 +196,7 @@ class AsyncRAGCoreV3:
         # Step 4: Execute batch search with try/except fallback
         try:
             search_results = await self._execute_batch_search(
-                feature_queries, all_features, scenario_type, use_hyde
+                feature_queries, all_features, scenario_type, use_hyde, free_text
             )
         except Exception as e:
             logger.error(f"Batch search failed: {e}. Falling back to sparse-only search.")
@@ -223,13 +232,13 @@ class AsyncRAGCoreV3:
             "query_count": len(feature_queries),
             "retrieval_stats": {
                 "total_docs": len(final_docs),
-                "avg_score": sum(d.get("final_score", 0) for d in final_docs) / len(final_docs) if final_docs else 0,
-                "top_score": final_docs[0].get("final_score", 0) if final_docs else 0
+                "avg_score": sum(float(getattr(d, "final_score", 0.0)) for d in final_docs) / len(final_docs) if final_docs else 0,
+                "top_score": float(getattr(final_docs[0], "final_score", 0.0)) if final_docs else 0
             }
         }
 
         # Step 9: Record for learning
-        top_score = final_docs[0].get("final_score", 0) if final_docs else 0
+        top_score = float(getattr(final_docs[0], "final_score", 0.0)) if final_docs else 0
         self.intelligence.record_query(
             query=feature_queries[0].query_text if feature_queries else "",
             scenario_type=scenario_type,
@@ -242,12 +251,25 @@ class AsyncRAGCoreV3:
         return RAGResult(
             documents=[{
                 "doc_id": d.doc_id,
+                "chunk_id": d.chunk_id,
+                "vector_id": d.vector_id,
                 "text": d.text,
                 "source": d.source,
+                "source_id": d.source_id,
+                "source_filename": d.source_filename,
+                "source_title": d.source_title,
+                "page_start": d.page_start,
+                "page_end": d.page_end,
+                "section_title": d.section_title,
+                "text_sha256": d.text_sha256,
                 "score": d.final_score,
+                "final_score": d.final_score,
                 "dense_score": d.dense_score,
                 "sparse_score": d.sparse_score,
-                "rerank_score": d.rerank_score
+                "rerank_score": d.rerank_score,
+                "source_match_score": d.source_match_score,
+                "retrieval_method": d.retrieval_method,
+                "domain_match": d.domain_match,
             } for d in final_docs],
             analysis=analysis,
             scenario_type=scenario_type,
@@ -259,7 +281,8 @@ class AsyncRAGCoreV3:
                                    feature_queries: List,
                                    all_features: Dict,
                                    scenario_type: str,
-                                   use_hyde: bool) -> List[List]:
+                                   use_hyde: bool,
+                                   free_text: Optional[str] = None) -> List[List]:
         """Execute batch search for all feature queries"""
 
         corpus_size = 0
@@ -269,6 +292,10 @@ class AsyncRAGCoreV3:
         rrf_k = self.intelligence.get_optimal_rrf_k(corpus_size, scenario_type)
 
         queries = [fq.query_text for fq in feature_queries]
+        if free_text and free_text.strip():
+            q = free_text.strip()
+            if q not in queries:
+                queries.insert(0, q)
 
         # Generate HyDE if needed
         hyde_embeddings = None

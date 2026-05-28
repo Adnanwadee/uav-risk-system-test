@@ -1,0 +1,117 @@
+{
+  "schema_version": "3.0",
+  "build_tool": "uav_risk.stage2.rag.build_index",
+  "build_timestamp": "2026-05-28T00:48:36.031969+00:00",
+  "docs_dir": "/workspaces/uav-risk-system-test/src/uav_risk/stage2/docs",
+  "canonical_index_dir": "/workspaces/uav-risk-system-test/src/uav_risk/stage2/knowledge/vectdb",
+  "source_documents": [
+    {
+      "source_id": "14_cfr_part_107_up_to_date_as_of_5_13_2026_994c0e8c",
+      "filename": "14 CFR Part 107 (up to date as of 5-13-2026).pdf",
+      "path": "/workspaces/uav-risk-system-test/src/uav_risk/stage2/docs/14 CFR Part 107 (up to date as of 5-13-2026).pdf",
+      "sha256": "07024dde16b43bbcccd3e2c023f4d6d00aa084c7f84dbe13f09b6b4db48f27eb",
+      "size_bytes": 211724,
+      "modified_time": "2026-05-15T22:35:00.520305+00:00",
+      "chunk_count": 115
+    },
+    {
+      "source_id": "ac_107_2a_e4f5d790",
+      "filename": "AC_107-2A.pdf",
+      "path": "/workspaces/uav-risk-system-test/src/uav_risk/stage2/docs/AC_107-2A.pdf",
+      "sha256": "9787897fb128e26a737b2d429cca57b83a81cfe2f0019a852f72111ee0b559d5",
+      "size_bytes": 1130681,
+      "modified_time": "2026-05-12T00:47:03.232765+00:00",
+      "chunk_count": 433
+    },
+    {
+      "source_id": "d0593e_2024_07_10_06_26_37_ear_for_unmanned_aircraft_systems_11007386",
+      "filename": "D0593E_2024-07-10_06.26.37_EAR-for-Unmanned-Aircraft-Systems.pdf",
+      "path": "/workspaces/uav-risk-system-test/src/uav_risk/stage2/docs/D0593E_2024-07-10_06.26.37_EAR-for-Unmanned-Aircraft-Systems.pdf",
+      "sha256": "e52f14d22b10b4a8d1599bcbf37cb9e4c7e5e6683e70c5ce5883c29612c7939f",
+      "size_bytes": 6273056,
+      "modified_time": "2026-05-12T00:46:37.325767+00:00",
+      "chunk_count": 1917
+    },
+    {
+      "source_id": "sora_v2_5_annex_a_release_jar_doc_26_pdf_f2899e1a",
+      "filename": "SORA-v2.5-Annex-A-Release.JAR_doc_26-pdf.pdf",
+      "path": "/workspaces/uav-risk-system-test/src/uav_risk/stage2/docs/SORA-v2.5-Annex-A-Release.JAR_doc_26-pdf.pdf",
+      "sha256": "a15e569b66912a5ca2189d1d7bebeac13365700ca0bdc2339bb49b5ac07284ff",
+      "size_bytes": 1230240,
+      "modified_time": "2026-05-15T22:35:00.222305+00:00",
+      "chunk_count": 97
+    },
+    {
+      "source_id": "sora_v2_5_annex_b_release_jar_doc_27pdf_f4a8b131",
+      "filename": "SORA-v2.5-Annex-B-Release.JAR_doc_27pdf.pdf",
+      "path": "/workspaces/uav-risk-system-test/src/uav_risk/stage2/docs/SORA-v2.5-Annex-B-Release.JAR_doc_27pdf.pdf",
+      "sha256": "083f45db9e696a168ed14cc2588b0881f20d7da5165c7d2800f1c3849da2e748",
+      "size_bytes": 428929,
+      "modified_time": "2026-05-15T22:35:00.633305+00:00",
+      "chunk_count": 45
+    },
+    {
+      "source_id": "sora_v2_5_annex_e_release_jar_doc_28pdf_a74dfa71",
+      "filename": "SORA-v2.5-Annex-E-Release.JAR_doc_28pdf.pdf",
+      "path": "/workspaces/uav-risk-system-test/src/uav_risk/stage2/docs/SORA-v2.5-Annex-E-Release.JAR_doc_28pdf.pdf",
+      "sha256": "57724a40a036d56685bb0aef0e144c008354b1803d407eeaeccee78a462d62ab",
+      "size_bytes": 815929,
+      "modified_time": "2026-05-15T22:34:59.896305+00:00",
+      "chunk_count": 178
+    },
+    {
+      "source_id": "sora_v2_5_annex_f_release_jar_doc_29pdf_61f94e71",
+      "filename": "SORA-v2.5-Annex-F-Release.JAR_doc_29pdf.pdf",
+      "path": "/workspaces/uav-risk-system-test/src/uav_risk/stage2/docs/SORA-v2.5-Annex-F-Release.JAR_doc_29pdf.pdf",
+      "sha256": "2eae78c976e5700ee994e0c396da540d0effc36e8e091755bd53a801fcc9cff0",
+      "size_bytes": 4072511,
+      "modified_time": "2026-05-15T22:34:59.721305+00:00",
+      "chunk_count": 507
+    },
+    {
+      "source_id": "sora_v2_5_main_body_release_jar_doc_25_d94fbe03",
+      "filename": "SORA-v2.5-Main-Body-Release-JAR_doc_25.pdf",
+      "path": "/workspaces/uav-risk-system-test/src/uav_risk/stage2/docs/SORA-v2.5-Main-Body-Release-JAR_doc_25.pdf",
+      "sha256": "2471913e55c38999dc5ba0894ac696c3e4722ddb0956b1c62f15e6fbd9a1be1c",
+      "size_bytes": 1344663,
+      "modified_time": "2026-05-15T22:35:00.492305+00:00",
+      "chunk_count": 200
+    },
+    {
+      "source_id": "special_condition_sc_light_uas_medium_risk_01_a202c270",
+      "filename": "special_condition_sc_light-uas_medium_risk_01.pdf",
+      "path": "/workspaces/uav-risk-system-test/src/uav_risk/stage2/docs/special_condition_sc_light-uas_medium_risk_01.pdf",
+      "sha256": "63a10404c4f4afdb1f8db3e586cea91a7efb9374d53b224c2ac0f8b8d790229a",
+      "size_bytes": 483086,
+      "modified_time": "2026-05-15T22:35:00.757305+00:00",
+      "chunk_count": 106
+    }
+  ],
+  "source_count": 9,
+  "chunk_count": 3598,
+  "embedding_model_path": "/workspaces/uav-risk-system-test/src/uav_risk/stage2/knowledge/models/embedding",
+  "reranker_model_path": "/workspaces/uav-risk-system-test/src/uav_risk/stage2/knowledge/models/reranker",
+  "dense_index": "dense_index.faiss",
+  "dense_index_sha256": "5e94d13a04374191cc36e9d5edb6bf64b52da1c1f634b064ce208baaa3da2c38",
+  "dense_mapping": "dense_mapping.json",
+  "dense_mapping_sha256": "90c389e6e61ce027886095ef15aa5deda275da49bac9679756feef4e21c78622",
+  "sparse_index": "sparse_index.pkl",
+  "sparse_index_sha256": "28dfde1233ae6f76e53609af82d0eabc49036d64b1cf8252739d28ad8c2cc476",
+  "faiss_ntotal": 3598,
+  "dense_mapping_count": 3598,
+  "chunking_config": {
+    "chunk_size": 800,
+    "chunk_overlap": 150,
+    "splitter": "RecursiveCharacterTextSplitter"
+  },
+  "signature": {
+    "dense_index_sig": "dense_index.faiss.sig",
+    "dense_index_sig_exists": true
+  },
+  "compatibility_outputs": {
+    "langchain_index_faiss": "index.faiss",
+    "langchain_index_pkl": "index.pkl",
+    "canonical": false,
+    "generated_by_default": false
+  }
+}

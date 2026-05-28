@@ -1,5 +1,5 @@
 """
-RAG V3 Configuration - Dynamic, Environment-aware, Hot-reloadable
+RAG V3 Configuration - Dynamic, Environment-aware, Hot-reloadable.
 Production-ready with local offline model paths.
 """
 import os
@@ -13,19 +13,84 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════
+# Canonical Path Resolvers
+# ═══════════════════════════════════════════════════════════
+_STAGE2_DIR = Path(__file__).resolve().parents[1]
+_DEFAULT_DOCS_DIR = _STAGE2_DIR / "docs"
+_DEFAULT_MODELS_DIR = _STAGE2_DIR / "knowledge" / "models"
+_DEFAULT_INDEX_DIR = _STAGE2_DIR / "knowledge" / "vectdb"
+
+
+def _resolve_path(value: Path | str) -> Path:
+    return Path(value).expanduser().resolve()
+
+
+def get_rag_base_dir() -> Path:
+    # Base dir remains available for explicit compatibility overrides only.
+    raw = os.getenv("UAV_RAG_BASE_DIR", str(_STAGE2_DIR / "knowledge"))
+    return _resolve_path(raw)
+
+
+def get_index_dir() -> Path:
+    raw = os.getenv("UAV_RAG_INDEX_DIR")
+    if raw:
+        candidate = Path(raw).expanduser()
+        if candidate.is_absolute():
+            return _resolve_path(candidate)
+        return _resolve_path(Path.cwd() / candidate)
+    return _resolve_path(_DEFAULT_INDEX_DIR)
+
+
+def get_dense_index_path() -> Path:
+    return _resolve_path(get_index_dir() / "dense_index.faiss")
+
+
+def get_sparse_index_path() -> Path:
+    return _resolve_path(get_index_dir() / "sparse_index.pkl")
+
+
+def get_dense_mapping_path() -> Path:
+    return _resolve_path(get_index_dir() / "dense_mapping.json")
+
+
+def get_index_metadata_path() -> Path:
+    return _resolve_path(get_index_dir() / "metadata.json")
+
+
+def get_docs_dir() -> Path:
+    raw = os.getenv("UAV_RAG_DOCS_DIR")
+    if raw:
+        candidate = Path(raw).expanduser()
+        if candidate.is_absolute():
+            return _resolve_path(candidate)
+        return _resolve_path(Path.cwd() / candidate)
+    return _resolve_path(_DEFAULT_DOCS_DIR)
+
+
+def get_models_dir() -> Path:
+    raw = os.getenv("UAV_RAG_MODELS_DIR")
+    if raw:
+        candidate = Path(raw).expanduser()
+        if candidate.is_absolute():
+            return _resolve_path(candidate)
+        return _resolve_path(Path.cwd() / candidate)
+    return _resolve_path(_DEFAULT_MODELS_DIR)
+
+# ═══════════════════════════════════════════════════════════
 # Base Paths (مرنة عبر Environment)
 # ═══════════════════════════════════════════════════════════
-BASE_DIR = Path(os.getenv("UAV_RAG_BASE_DIR", Path.home() / ".uav_rag"))
-INDEX_DIR = BASE_DIR / "indices"
-CACHE_DIR = BASE_DIR / "cache"
-LOG_DIR = BASE_DIR / "logs"
+BASE_DIR = get_rag_base_dir()
+INDEX_DIR = get_index_dir()
+CACHE_DIR = _resolve_path(BASE_DIR / "cache")
+LOG_DIR = _resolve_path(BASE_DIR / "logs")
 
 # ═══════════════════════════════════════════════════════════
 # Document & Model Paths (من البيئة أو القيم الافتراضية)
 # ═══════════════════════════════════════════════════════════
-DOCS_PATH = Path(os.getenv("UAV_DOCS_PATH", "/workspaces/uav-risk-system-test/src/uav_risk/stage2/docs"))
-EMBEDDING_PATH = Path(os.getenv("UAV_EMBED_PATH", "/workspaces/uav-risk-system-test/src/uav_risk/stage2/knowledge/models/embedding"))
-RERANKER_PATH = Path(os.getenv("UAV_RERANKER_PATH", "/workspaces/uav-risk-system-test/src/uav_risk/stage2/knowledge/models/reranker"))
+DOCS_PATH = get_docs_dir()
+_MODELS_DIR = get_models_dir()
+EMBEDDING_PATH = _resolve_path(_MODELS_DIR / "embedding")
+RERANKER_PATH = _resolve_path(_MODELS_DIR / "reranker")
 
 # Ensure directories exist
 for d in [INDEX_DIR, CACHE_DIR, LOG_DIR]:
@@ -123,6 +188,16 @@ THRESHOLD_MANAGER = DynamicThresholdManager()
 # ═══════════════════════════════════════════════════════════
 class RAGConfig:
     """Centralized configuration with hot-reload support"""
+    BASE_DIR = BASE_DIR
+    INDEX_DIR = INDEX_DIR
+    CACHE_DIR = CACHE_DIR
+    LOG_DIR = LOG_DIR
+    DOCS_PATH = DOCS_PATH
+    DENSE_INDEX_PATH = get_dense_index_path()
+    SPARSE_INDEX_PATH = get_sparse_index_path()
+    DENSE_MAPPING_PATH = get_dense_mapping_path()
+    INDEX_METADATA_PATH = get_index_metadata_path()
+
 
     # Model Settings
     EMBEDDING_MODEL = os.getenv("UAV_EMBED_MODEL", str(EMBEDDING_PATH))

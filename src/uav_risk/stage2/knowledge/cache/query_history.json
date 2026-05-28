@@ -1,0 +1,464 @@
+{
+  "history": [
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.46412000744429316,
+      "result_count": 20,
+      "latency_ms": 12859.82060432434,
+      "timestamp": "2026-05-28T02:15:29.008071"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.4253085673726249,
+      "result_count": 20,
+      "latency_ms": 11484.833717346191,
+      "timestamp": "2026-05-28T02:15:40.518602"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.4304122028816611,
+      "result_count": 20,
+      "latency_ms": 12239.274024963379,
+      "timestamp": "2026-05-28T02:15:52.760503"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.418781562886909,
+      "result_count": 20,
+      "latency_ms": 11790.059089660645,
+      "timestamp": "2026-05-28T02:16:04.553228"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5004699688112937,
+      "result_count": 20,
+      "latency_ms": 11162.664413452148,
+      "timestamp": "2026-05-28T02:16:15.719153"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.48273151421156085,
+      "result_count": 20,
+      "latency_ms": 11600.341081619263,
+      "timestamp": "2026-05-28T02:16:27.322736"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.3959729510410782,
+      "result_count": 20,
+      "latency_ms": 12168.988943099976,
+      "timestamp": "2026-05-28T02:16:39.494809"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.44438210691882024,
+      "result_count": 20,
+      "latency_ms": 11752.654552459717,
+      "timestamp": "2026-05-28T02:16:51.249971"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.4314961755191973,
+      "result_count": 20,
+      "latency_ms": 11510.274410247803,
+      "timestamp": "2026-05-28T02:17:02.762511"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5970951610552824,
+      "result_count": 20,
+      "latency_ms": 11371.149063110352,
+      "timestamp": "2026-05-28T02:17:14.135893"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.590538412458084,
+      "result_count": 20,
+      "latency_ms": 11268.157482147217,
+      "timestamp": "2026-05-28T02:17:25.407296"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.635170341908522,
+      "result_count": 20,
+      "latency_ms": 11530.18307685852,
+      "timestamp": "2026-05-28T02:17:36.939952"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5807350748500479,
+      "result_count": 20,
+      "latency_ms": 11268.028974533081,
+      "timestamp": "2026-05-28T02:17:48.210311"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.4802942042821583,
+      "result_count": 20,
+      "latency_ms": 11044.556140899658,
+      "timestamp": "2026-05-28T02:17:59.257720"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.47363939449356096,
+      "result_count": 20,
+      "latency_ms": 10943.322896957397,
+      "timestamp": "2026-05-28T02:18:10.203255"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5487231998364516,
+      "result_count": 20,
+      "latency_ms": 11216.697454452515,
+      "timestamp": "2026-05-28T02:18:21.422561"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5149385263050752,
+      "result_count": 20,
+      "latency_ms": 11296.128511428833,
+      "timestamp": "2026-05-28T02:18:32.721395"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5199369062777236,
+      "result_count": 20,
+      "latency_ms": 11019.479990005493,
+      "timestamp": "2026-05-28T02:18:43.742927"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5188196188411519,
+      "result_count": 20,
+      "latency_ms": 10908.565521240234,
+      "timestamp": "2026-05-28T02:18:54.653597"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.49804424897496746,
+      "result_count": 20,
+      "latency_ms": 11546.960353851318,
+      "timestamp": "2026-05-28T02:19:06.202771"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5066205546564837,
+      "result_count": 20,
+      "latency_ms": 12114.602088928223,
+      "timestamp": "2026-05-28T02:19:18.320632"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5115239768943174,
+      "result_count": 20,
+      "latency_ms": 12015.388488769531,
+      "timestamp": "2026-05-28T02:19:30.338147"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5073738848580223,
+      "result_count": 20,
+      "latency_ms": 11697.270631790161,
+      "timestamp": "2026-05-28T02:19:42.037827"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.3959729510410782,
+      "result_count": 20,
+      "latency_ms": 12341.122150421143,
+      "timestamp": "2026-05-28T02:19:54.380828"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.3987801789177109,
+      "result_count": 20,
+      "latency_ms": 12086.057901382446,
+      "timestamp": "2026-05-28T02:20:06.469262"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.4134585245671225,
+      "result_count": 20,
+      "latency_ms": 11688.832521438599,
+      "timestamp": "2026-05-28T02:20:18.160301"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.4213429131468789,
+      "result_count": 20,
+      "latency_ms": 11907.954454421997,
+      "timestamp": "2026-05-28T02:20:30.070699"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.419356181063902,
+      "result_count": 20,
+      "latency_ms": 11179.294109344482,
+      "timestamp": "2026-05-28T02:20:41.252840"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.3959729510410782,
+      "result_count": 20,
+      "latency_ms": 12059.190511703491,
+      "timestamp": "2026-05-28T02:20:53.314100"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5199369062777236,
+      "result_count": 20,
+      "latency_ms": 10662.486553192139,
+      "timestamp": "2026-05-28T02:21:03.978547"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.46412000744429316,
+      "result_count": 20,
+      "latency_ms": 13065.171003341675,
+      "timestamp": "2026-05-28T02:34:13.413868"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.4253085673726249,
+      "result_count": 20,
+      "latency_ms": 11409.519672393799,
+      "timestamp": "2026-05-28T02:34:24.847000"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.4314961755191973,
+      "result_count": 20,
+      "latency_ms": 11428.55715751648,
+      "timestamp": "2026-05-28T02:34:36.277543"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5970951610552824,
+      "result_count": 20,
+      "latency_ms": 11283.860445022583,
+      "timestamp": "2026-05-28T02:34:47.563453"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.4802942042821583,
+      "result_count": 20,
+      "latency_ms": 11242.864608764648,
+      "timestamp": "2026-05-28T02:34:58.808924"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5199369062777236,
+      "result_count": 20,
+      "latency_ms": 10806.788206100464,
+      "timestamp": "2026-05-28T02:35:09.618494"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5066205546564837,
+      "result_count": 20,
+      "latency_ms": 11993.082761764526,
+      "timestamp": "2026-05-28T02:35:21.613350"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.3959729510410782,
+      "result_count": 20,
+      "latency_ms": 12431.857109069824,
+      "timestamp": "2026-05-28T02:35:34.047227"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.45864257591921836,
+      "result_count": 20,
+      "latency_ms": 11731.558084487915,
+      "timestamp": "2026-05-28T02:35:45.780748"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.4213429131468789,
+      "result_count": 20,
+      "latency_ms": 11882.994413375854,
+      "timestamp": "2026-05-28T02:35:57.666206"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.46412000744429316,
+      "result_count": 20,
+      "latency_ms": 13213.719367980957,
+      "timestamp": "2026-05-28T03:15:37.802815"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.4253085673726249,
+      "result_count": 20,
+      "latency_ms": 10950.383186340332,
+      "timestamp": "2026-05-28T03:15:48.773646"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.4314961755191973,
+      "result_count": 20,
+      "latency_ms": 11225.768566131592,
+      "timestamp": "2026-05-28T03:16:00.001713"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5970951610552824,
+      "result_count": 20,
+      "latency_ms": 11347.857475280762,
+      "timestamp": "2026-05-28T03:16:11.351668"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.4802942042821583,
+      "result_count": 20,
+      "latency_ms": 11074.060201644897,
+      "timestamp": "2026-05-28T03:16:22.428412"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5199369062777236,
+      "result_count": 20,
+      "latency_ms": 10918.094635009766,
+      "timestamp": "2026-05-28T03:16:33.348816"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.5066205546564837,
+      "result_count": 20,
+      "latency_ms": 11611.061811447144,
+      "timestamp": "2026-05-28T03:16:44.961780"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.3959729510410782,
+      "result_count": 20,
+      "latency_ms": 12232.11145401001,
+      "timestamp": "2026-05-28T03:16:57.196830"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.45864257591921836,
+      "result_count": 20,
+      "latency_ms": 11618.92056465149,
+      "timestamp": "2026-05-28T03:17:08.817701"
+    },
+    {
+      "query": "operation type UAV drone commercial recreational survey inspection normal operation standard procedure",
+      "scenario_type": "general_operation",
+      "used_hyde": false,
+      "top_score": 0.3959729510410782,
+      "result_count": 20,
+      "latency_ms": 11776.923656463623,
+      "timestamp": "2026-05-28T03:17:20.596723"
+    }
+  ],
+  "profiles": {
+    "general_operation": {
+      "scenario_type": "general_operation",
+      "avg_top_score": 0.4763647848031771,
+      "hyde_success_rate": 0.0,
+      "optimal_k": 60,
+      "query_count": 50
+    }
+  },
+  "last_updated": "2026-05-28T03:17:20.597062"
+}

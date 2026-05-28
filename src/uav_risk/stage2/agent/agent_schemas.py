@@ -5,6 +5,15 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 from uav_risk.stage2.rag.schemas import LegalCitation
+from uav_risk.stage2.contracts import (
+    AgentInput as CanonicalAgentInput,
+    AgentResult as CanonicalAgentResult,
+    AgentFinding as CanonicalAgentFinding,
+    AgentActionItem as CanonicalAgentActionItem,
+    AgentRecommendation as CanonicalAgentRecommendation,
+    AgentFindingType as CanonicalAgentFindingType,
+    AgentFindingSeverity as CanonicalAgentFindingSeverity,
+)
 
 class StuckReason(Enum):
     """Reasons for the agent execution loop getting stuck or failing to progress."""
@@ -16,7 +25,7 @@ class StuckReason(Enum):
 @dataclass(frozen=True)
 class ConditionalGoConstraint:
     """شرط فيزيائي وتشريعي ملزم يتم استخراجه حياً لتحويل الرحلة لموافقة مشروطة.
-    
+
     Attributes:
         constraint_id: Unique identifier for the constraint.
         description: Explicit description of the operational limitation.
@@ -88,6 +97,17 @@ class AgentDecision:
     agent_version: str = "v4.5.0-production"
     prompt_hash: str = "sha256_framework_lock_gate6"
     conditional_constraints: List[ConditionalGoConstraint] = field(default_factory=list)
+
+
+# Canonical Stage2 Agent Contract Bridge (for future integration paths)
+AgentInput = CanonicalAgentInput
+AgentResult = CanonicalAgentResult
+AgentFinding = CanonicalAgentFinding
+AgentActionItem = CanonicalAgentActionItem
+AgentRecommendation = CanonicalAgentRecommendation
+AgentFindingType = CanonicalAgentFindingType
+AgentFindingSeverity = CanonicalAgentFindingSeverity
+
 
 # =====================================================================
 # Stage 2 Agent Schemas Submodule Architectural Dependency Report:

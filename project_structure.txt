@@ -13,8 +13,13 @@
 │   ├── stage1_requirements.txt
 │   ├── think.ipynb
 │   └── uav_stage1_clean.parquet
+├── my_current_uncommitted_changes.patch
+├── patch_progress_snapshot.txt
 ├── project_structure.txt
 ├── pyproject.toml
+├── safety_backup
+│   ├── my_current_uncommitted_changes.patch
+│   └── untracked_rag_v3_files.tar.gz
 ├── scripts
 │   ├── generate_safe_values_worklist.py
 │   ├── run_production_simulation.py
@@ -25,9 +30,15 @@
 ├── src
 │   ├── uav_risk
 │   │   ├── api
+│   │   │   ├── dependencies.py
 │   │   │   ├── main.py
-│   │   │   ├── profiles.py
-│   │   │   └── validate.py
+│   │   │   ├── routes
+│   │   │   │   ├── assessments.py
+│   │   │   │   ├── features.py
+│   │   │   │   ├── health.py
+│   │   │   │   └── profiles.py
+│   │   │   ├── schemas.py
+│   │   │   └── storage.py
 │   │   ├── core
 │   │   │   ├── config.py
 │   │   │   ├── contracts.py
@@ -42,6 +53,7 @@
 │   │   │   ├── feature_defs.py
 │   │   │   ├── inference.py
 │   │   │   ├── loader.py
+│   │   │   ├── raw_schema.py
 │   │   │   ├── schemas.py
 │   │   │   └── shap_explain.py
 │   │   ├── stage2
@@ -162,11 +174,23 @@
 │       └── top_level.txt
 ├── test_comprehensive.py
 ├── tests
+│   ├── test_api_metadata.py
+│   ├── test_api_profiles.py
+│   ├── test_api_raw_assessment.py
 │   ├── test_comprehensive_pipeline.py
+│   ├── test_core_ml_api_closure.py
+│   ├── test_core_raw_contracts.py
 │   ├── test_feature_generation.py
+│   ├── test_ml_golden_raw_rows.py
+│   ├── test_ml_serving_contract.py
 │   ├── test_model_trace_scenarios.py
+│   ├── test_raw_end_to_end_ml.py
+│   ├── test_raw_feature_generation.py
+│   ├── test_raw_loader_integration.py
+│   ├── test_raw_schema_contract.py
+│   ├── test_raw_validation.py
 │   └── test_robust_pipeline.py
 └── ui
     └── app.py
 
-28 directories, 142 files
+30 directories, 164 files

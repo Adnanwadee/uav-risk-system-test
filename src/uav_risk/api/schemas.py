@@ -24,3 +24,12 @@ class IssueResponse(BaseModel):
     field: str | None = None
     message: str
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+class Stage2AssessmentRequest(AssessmentRequest):
+    """Backward-compatible extension for Stage2 full assessments.
+
+    Currently identical to `AssessmentRequest` but provided for future
+    Stage2-specific extensions and clearer API typing.
+    """
+    pass

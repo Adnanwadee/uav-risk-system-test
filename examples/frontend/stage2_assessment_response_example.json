@@ -1,0 +1,64 @@
+{
+  "status": "completed",
+  "user_id": "user_1",
+  "profile_id": "profile_1",
+  "assessment_id": null,
+  "warnings": [],
+  "errors": [],
+  "stage1": {
+    "ml": {
+      "predicted_class": "Medium Risk",
+      "probabilities": {"High Risk": 0.2, "Medium Risk": 0.6, "Low Risk": 0.2},
+      "raw_feature_count": 197,
+      "processed_feature_count": 198
+    },
+    "shap": {"top_features": [{"feature": "uav_payload_mass_kg", "value": 0.5, "importance": 0.12}]}
+  },
+  "stage2": {
+    "rag": {
+      "retrieval_usable": true,
+      "rag_quality_is_proven": true,
+      "evidence_bundle_count": 3,
+      "insufficient_evidence_count": 0,
+      "evidence_bundle_details": [
+        {"bundle_id": "b1", "query": "airspace authorization", "support_status": "supported"}
+      ]
+    },
+    "agent": {
+      "recommendation": "caution",
+      "findings": [{"id": "f1", "summary": "C2 link reliability concern"}],
+      "action_items": [{"id": "a1", "description": "Verify uplink/downlink reliability"}],
+      "limitations": []
+    },
+    "decision": {
+      "final_decision": "caution",
+      "decision_score": 0.4403,
+      "confidence_level": "medium",
+      "stage_weights": {"ml": 0.22, "rag": 0.28, "agent": 0.25},
+      "stage_contributions": [],
+      "decision_reasons": ["Weighted decision score is 0.440; final decision is caution."],
+      "blocking_reasons": [],
+      "required_actions": ["Verify airspace authorization"],
+      "limitations": []
+    },
+    "llm_synthesis": {
+      "status": "fallback",
+      "executive_summary": "Final operational decision is caution.",
+      "operational_interpretation": "ML highlighted medium risk; verify weather and C2 link.",
+      "decision_explanation": "Weighted decision score is 0.440; final decision is caution.",
+      "key_risk_drivers": ["ml: Medium Risk", "rag: supported", "agent: caution"],
+      "mitigation_narrative": "Verify airspace class and uplink reliability before launch.",
+      "consistency_warnings": []
+    },
+    "report": {"structured": {}, "markdown": "# Operational Report\nDecision: caution"}
+  },
+  "diagnostics": {
+    "path_resolution_status": "canonical",
+    "index_provenance_status": "current",
+    "retrieval_usable": true,
+    "rag_quality_is_proven": true,
+    "scenario_evidence_complete": true,
+    "llm_mode": "fallback",
+    "external_llm_provider_used": false
+  }
+}

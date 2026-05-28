@@ -1,0 +1,11 @@
+{
+  "status": "blocked",
+  "user_id": "user_1",
+  "profile_id": "profile_1",
+  "assessment_id": null,
+  "issues": [
+    {"code": "PAYLOAD_EXCEEDS_PROFILE_LIMIT", "field": "uav_payload_mass_kg", "message": "Payload exceeds profile limit", "details": {}}
+  ],
+  "ml": null,
+  "decision": {"final_decision": "no_go"}
+}

@@ -1,0 +1,17 @@
+{
+  "user_id": "user_1",
+  "profile_id": "profile_1",
+  "profile_name": "Test Profile 1",
+  "max_payload_kg": 5.0,
+  "max_takeoff_mass_kg": 20.0,
+  "runway_capable": true,
+  "swarm_capable": false,
+  "max_swarm_size": null,
+
+  "uav_mass_kg": 2.0,
+  "uav_battery_wh": 40.0,
+  "uav_max_speed_mps": 15.0,
+  "uav_max_tilt_deg": 30.0,
+  "uav_reserve_fraction": 0.3,
+  "uav_rotorcraft_rotor_count": 4
+}

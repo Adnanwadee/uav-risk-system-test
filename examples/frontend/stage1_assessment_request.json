@@ -1,0 +1,12 @@
+{
+  "scenario": {
+    "mission_time_budget_s": 600.0,
+    "mission_waypoints_count": 2,
+    "uav_payload_mass_kg": 0.5,
+    "environment_weather_wind_mps": 6.0,
+    "environment_weather_gust_mps": 6.0,
+    "environment_weather_wind_dir_deg": 240.0
+  },
+  "secondary_overrides": { "values": {} },
+  "operator_notes": "Stage1 check"
+}

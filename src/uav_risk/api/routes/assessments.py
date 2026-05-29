@@ -104,11 +104,21 @@ def _blocked(user_id: str, profile_id: str, issues: list[dict[str, object]]) -> 
 
 def _blocked_stage2(user_id: str, profile_id: str, issues: list[dict[str, object]]) -> Stage2AssessmentResponse:
     aid = str(uuid4())
+    created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    blocked_trace = SystemWorkTrace(
+        entries=[],
+        summary="Assessment blocked before Stage2 execution.",
+        public_safe=True,
+    ).model_dump()
     return Stage2AssessmentResponse(
         status="blocked",
         user_id=user_id,
         profile_id=profile_id,
         assessment_id=aid,
+        created_at=created_at,
+        persisted=False,
+        persistence_status="not_persisted_blocked",
+        system_work_trace=blocked_trace,
         warnings=[],
         errors=[{"code": "HARD_VETO", "message": "Core structural hard-veto blocked assessment.", "details": {"issues": issues}}],
         stage1=Stage1AssessmentSection(core={"blocked": True, "issues": issues}, ml=None, shap=None),
@@ -125,7 +135,7 @@ def _blocked_stage2(user_id: str, profile_id: str, issues: list[dict[str, object
                 citations=[],
                 limitations=["Assessment blocked before Stage2 execution due to structural hard-veto."],
             ),
-            agent=Stage2AgentSection(),
+            agent=Stage2AgentSection(system_work_trace=blocked_trace),
             decision=Stage2DecisionSection(
                 final_decision="no_go",
                 decision_score=1.0,
@@ -141,6 +151,7 @@ def _blocked_stage2(user_id: str, profile_id: str, issues: list[dict[str, object
             report=Stage2ReportSection(markdown=None, sections=[], generated=False),
         ),
         diagnostics=Stage2DiagnosticsSection(
+            persistence_status="not_persisted_blocked",
             retrieval_usable=False,
             rag_quality_is_proven=False,
             scenario_evidence_complete=None,
@@ -705,11 +716,17 @@ async def create_assessment_stage2(
     reranker_used = stage2_result.metadata.get("reranker_used") if isinstance(stage2_result.metadata, dict) else None
     reranker_reason = stage2_result.metadata.get("reranker_reason") if isinstance(stage2_result.metadata, dict) else None
 
+    created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
     response = Stage2AssessmentResponse(
         status=stage2_result.status.value,
         user_id=user_id,
         profile_id=profile_id,
         assessment_id=stage2_result.assessment_id or aid,
+        created_at=created_at,
+        persisted=True,
+        persistence_status="saved",
+        system_work_trace=safe_system_work_trace,
         warnings=[],
         errors=_clean_forbidden_keys([err.model_dump() for err in stage2_result.errors]),
         stage1=Stage1AssessmentSection(core={"structural_hard_veto_passed": True}, ml=stage1_ml, shap=stage1_shap),
@@ -758,6 +775,7 @@ async def create_assessment_stage2(
         diagnostics=Stage2DiagnosticsSection(
             path_resolution_status=stage2_result.metadata.get("provenance_status") if isinstance(stage2_result.metadata, dict) else None,
             index_provenance_status=stage2_result.metadata.get("provenance_status") if isinstance(stage2_result.metadata, dict) else None,
+            persistence_status="saved",
             retrieval_usable=bool(rag_adapter),
             rag_quality_is_proven=rag_quality,
             scenario_evidence_complete=scenario_evidence_complete,
@@ -780,7 +798,6 @@ async def create_assessment_stage2(
     )
 
     response_payload = jsonable_encoder(response)
-    created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     record = _build_assessment_record_from_response(
         user_id=user_id,
         profile_id=profile_id,

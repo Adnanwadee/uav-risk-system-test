@@ -145,6 +145,7 @@ class Stage2AISection(BaseModel):
 class Stage2DiagnosticsSection(BaseModel):
     path_resolution_status: str | None = None
     index_provenance_status: str | None = None
+    persistence_status: str | None = None
     retrieval_usable: bool = False
     rag_quality_is_proven: bool = False
     scenario_evidence_complete: bool | None = None
@@ -170,6 +171,10 @@ class Stage2AssessmentResponse(BaseModel):
     user_id: str
     profile_id: str
     assessment_id: str
+    created_at: str | None = None
+    persisted: bool | None = None
+    persistence_status: str | None = None
+    system_work_trace: dict[str, Any] | None = None
     warnings: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[dict[str, Any]] = Field(default_factory=list)
     stage1: Stage1AssessmentSection

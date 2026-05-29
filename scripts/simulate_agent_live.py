@@ -1,4 +1,7 @@
 # File Path: scripts/simulate_agent_live.py
+# Legacy/demo/manual-only harness.
+# Not canonical runtime and not final readiness evidence.
+# Canonical readiness commands are listed in README.md.
 import os
 import sys
 import json

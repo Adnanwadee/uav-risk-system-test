@@ -9,6 +9,7 @@ from uav_risk.stage2.contracts import (
     AgentRecommendation,
     AgentResult,
     DecisionEngineResult,
+    DecisionPolicyConfig,
     DecisionStageContribution,
     DecisionStageName,
     EvidenceBundle,
@@ -249,3 +250,48 @@ def test_scenario_profile_metadata_contributes_stage_signal() -> None:
     contrib = next(item for item in decision.stage_contributions if item.stage == DecisionStageName.SCENARIO_PROFILE)
     assert contrib.signal == "concerns_present"
     assert contrib.contribution > 0.10
+
+
+def test_decision_policy_default_weights_sum_to_one() -> None:
+    policy = DecisionPolicyConfig()
+    total = (
+        policy.ml_weight
+        + policy.shap_weight
+        + policy.rag_weight
+        + policy.agent_weight
+        + policy.scenario_profile_weight
+        + policy.llm_weight
+    )
+    assert total == pytest.approx(1.0, abs=1e-9)
+
+
+def test_decision_policy_rejects_invalid_thresholds_and_weights() -> None:
+    with pytest.raises(ValidationError):
+        DecisionPolicyConfig(go_threshold=0.8, no_go_threshold=0.7)
+    with pytest.raises(ValidationError):
+        DecisionPolicyConfig(ml_weight=-0.1)
+
+
+def test_weighted_decision_engine_uses_policy_weights_and_thresholds() -> None:
+    policy = DecisionPolicyConfig(go_threshold=0.20, no_go_threshold=0.60)
+    decision = evaluate_stage2_decision(
+        _input(predicted_class="Low Risk", probabilities={"Low Risk": 0.9, "Medium Risk": 0.08, "High Risk": 0.02}),
+        _result(agent=_agent(recommendation=AgentRecommendation.GO, severity="info")),
+        policy=policy,
+    )
+    assert decision.stage_weights[DecisionStageName.ML.value] == policy.ml_weight
+    assert decision.metadata["policy_name"] == policy.policy_name
+    assert decision.metadata["policy_version"] == policy.policy_version
+    assert decision.metadata["go_threshold"] == policy.go_threshold
+    assert decision.metadata["no_go_threshold"] == policy.no_go_threshold
+
+
+def test_pipeline_style_engine_accepts_policy_in_constructor() -> None:
+    policy = DecisionPolicyConfig(go_threshold=0.30, no_go_threshold=0.75)
+    engine = WeightedDecisionEngine(policy=policy)
+    decision = engine.evaluate(
+        _input(predicted_class="Low Risk", probabilities={"Low Risk": 0.9, "Medium Risk": 0.08, "High Risk": 0.02}),
+        _result(agent=_agent(recommendation=AgentRecommendation.GO, severity="info")),
+    )
+    assert decision.metadata["go_threshold"] == 0.30
+    assert decision.metadata["no_go_threshold"] == 0.75

@@ -13,6 +13,17 @@
 │   ├── stage1_requirements.txt
 │   ├── think.ipynb
 │   └── uav_stage1_clean.parquet
+├── docs
+│   ├── API_EXAMPLES.md
+│   ├── FRONTEND_HANDOFF.md
+│   └── STAGE2_RAG_READINESS.md
+├── examples
+│   └── frontend
+│       ├── blocked_stage2_response_example.json
+│       ├── create_profile_request.json
+│       ├── stage1_assessment_request.json
+│       ├── stage2_assessment_request.json
+│       └── stage2_assessment_response_example.json
 ├── my_current_uncommitted_changes.patch
 ├── patch_progress_snapshot.txt
 ├── project_structure.txt
@@ -21,12 +32,17 @@
 │   ├── my_current_uncommitted_changes.patch
 │   └── untracked_rag_v3_files.tar.gz
 ├── scripts
+│   ├── check_groq_provider_reachability.py
 │   ├── generate_safe_values_worklist.py
+│   ├── rebuild_stage2_rag_index.py
 │   ├── run_production_simulation.py
+│   ├── run_stage2_pipeline_v2_smoke.py
+│   ├── run_stage2_rag_diagnostic.py
 │   ├── simulate_agent_live.py
 │   ├── simulate_realistic_runs.py
 │   ├── simulate_run.py
-│   └── static_analysis.py
+│   ├── static_analysis.py
+│   └── validate_stage2_rag_index.py
 ├── src
 │   ├── uav_risk
 │   │   ├── api
@@ -59,11 +75,18 @@
 │   │   ├── stage2
 │   │   │   ├── __init__.py
 │   │   │   ├── agent
+│   │   │   │   ├── __init__.py
 │   │   │   │   ├── ace_agent.py
 │   │   │   │   ├── agent_memory.py
 │   │   │   │   ├── agent_schemas.py
 │   │   │   │   ├── agent_tools.py
-│   │   │   │   └── fallback.py
+│   │   │   │   ├── facade.py
+│   │   │   │   ├── fallback.py
+│   │   │   │   ├── operational_agent.py
+│   │   │   │   ├── operational_inspector.py
+│   │   │   │   └── query_planner.py
+│   │   │   ├── contracts.py
+│   │   │   ├── decision_engine.py
 │   │   │   ├── docs
 │   │   │   │   ├── 14 CFR Part 107 (up to date as of 5-13-2026).pdf
 │   │   │   │   ├── AC_107-2A.pdf
@@ -76,6 +99,62 @@
 │   │   │   │   └── special_condition_sc_light-uas_medium_risk_01.pdf
 │   │   │   ├── evidence.py
 │   │   │   ├── knowledge
+│   │   │   │   ├── cache
+│   │   │   │   │   └── query_history.json
+│   │   │   │   ├── logs
+│   │   │   │   │   ├── evidence_20260528_005344.jsonl
+│   │   │   │   │   ├── evidence_20260528_010500.jsonl
+│   │   │   │   │   ├── evidence_20260528_010738.jsonl
+│   │   │   │   │   ├── evidence_20260528_010836.jsonl
+│   │   │   │   │   ├── evidence_20260528_011008.jsonl
+│   │   │   │   │   ├── evidence_20260528_011234.jsonl
+│   │   │   │   │   ├── evidence_20260528_011850.jsonl
+│   │   │   │   │   ├── evidence_20260528_012152.jsonl
+│   │   │   │   │   ├── evidence_20260528_012756.jsonl
+│   │   │   │   │   ├── evidence_20260528_012924.jsonl
+│   │   │   │   │   ├── evidence_20260528_014217.jsonl
+│   │   │   │   │   ├── evidence_20260528_014344.jsonl
+│   │   │   │   │   ├── evidence_20260528_014725.jsonl
+│   │   │   │   │   ├── evidence_20260528_014810.jsonl
+│   │   │   │   │   ├── evidence_20260528_015558.jsonl
+│   │   │   │   │   ├── evidence_20260528_015826.jsonl
+│   │   │   │   │   ├── evidence_20260528_015913.jsonl
+│   │   │   │   │   ├── evidence_20260528_020756.jsonl
+│   │   │   │   │   ├── evidence_20260528_021005.jsonl
+│   │   │   │   │   ├── evidence_20260528_021053.jsonl
+│   │   │   │   │   ├── evidence_20260528_021516.jsonl
+│   │   │   │   │   ├── evidence_20260528_022945.jsonl
+│   │   │   │   │   ├── evidence_20260528_023401.jsonl
+│   │   │   │   │   ├── evidence_20260528_025117.jsonl
+│   │   │   │   │   ├── evidence_20260528_025246.jsonl
+│   │   │   │   │   ├── evidence_20260528_025920.jsonl
+│   │   │   │   │   ├── evidence_20260528_030007.jsonl
+│   │   │   │   │   ├── evidence_20260528_030224.jsonl
+│   │   │   │   │   ├── evidence_20260528_030314.jsonl
+│   │   │   │   │   ├── evidence_20260528_030924.jsonl
+│   │   │   │   │   ├── evidence_20260528_031137.jsonl
+│   │   │   │   │   ├── evidence_20260528_031224.jsonl
+│   │   │   │   │   ├── evidence_20260528_031525.jsonl
+│   │   │   │   │   ├── evidence_20260528_154214.jsonl
+│   │   │   │   │   ├── evidence_20260528_154256.jsonl
+│   │   │   │   │   ├── evidence_20260528_155726.jsonl
+│   │   │   │   │   ├── evidence_20260528_155805.jsonl
+│   │   │   │   │   ├── evidence_20260528_160841.jsonl
+│   │   │   │   │   ├── evidence_20260528_160919.jsonl
+│   │   │   │   │   ├── evidence_20260528_161041.jsonl
+│   │   │   │   │   ├── evidence_20260528_161137.jsonl
+│   │   │   │   │   ├── evidence_20260528_172245.jsonl
+│   │   │   │   │   ├── evidence_20260528_172327.jsonl
+│   │   │   │   │   ├── evidence_20260528_173237.jsonl
+│   │   │   │   │   ├── evidence_20260528_173315.jsonl
+│   │   │   │   │   ├── evidence_20260528_175249.jsonl
+│   │   │   │   │   ├── evidence_20260528_175331.jsonl
+│   │   │   │   │   ├── evidence_20260528_180253.jsonl
+│   │   │   │   │   ├── evidence_20260528_180330.jsonl
+│   │   │   │   │   ├── evidence_20260528_182541.jsonl
+│   │   │   │   │   ├── evidence_20260528_182618.jsonl
+│   │   │   │   │   ├── evidence_20260528_182806.jsonl
+│   │   │   │   │   └── evidence_20260528_182844.jsonl
 │   │   │   │   ├── models
 │   │   │   │   │   ├── embedding
 │   │   │   │   │   │   ├── 1_Pooling
@@ -135,33 +214,40 @@
 │   │   │   │   │       ├── tokenizer.json
 │   │   │   │   │       ├── tokenizer_config.json
 │   │   │   │   │       └── vocab.txt
-│   │   │   │   ├── vector_db
-│   │   │   │   │   ├── index.faiss
-│   │   │   │   │   ├── index.pkl
-│   │   │   │   │   └── metadata.json
-│   │   │   │   └── vector_db_backup_20260512_005519
-│   │   │   │       ├── index.faiss
-│   │   │   │       └── index.pkl
+│   │   │   │   └── vectdb
+│   │   │   │       ├── dense_index.faiss
+│   │   │   │       ├── dense_index.faiss.sig
+│   │   │   │       ├── dense_mapping.json
+│   │   │   │       ├── metadata.json
+│   │   │   │       └── sparse_index.pkl
+│   │   │   ├── legacy_inventory.py
 │   │   │   ├── llm
+│   │   │   │   ├── __init__.py
 │   │   │   │   ├── groq_client.py
+│   │   │   │   ├── orchestrator.py
 │   │   │   │   └── report_writer.py
 │   │   │   ├── pipeline.py
-│   │   │   └── rag
-│   │   │       ├── __init__.py
-│   │   │       ├── build_index.py
-│   │   │       ├── config_v3.py
-│   │   │       ├── evidence_logger.py
-│   │   │       ├── faiss_security.py
-│   │   │       ├── feature_query_mapper.py
-│   │   │       ├── force_download.py
-│   │   │       ├── groq_llm.py
-│   │   │       ├── hybrid_retriever.py
-│   │   │       ├── hyde_pipeline.py
-│   │   │       ├── prompts_v3.py
-│   │   │       ├── query_intelligence.py
-│   │   │       ├── rag_core_v3.py
-│   │   │       ├── schemas.py
-│   │   │       └── sparse_index_builder.py
+│   │   │   ├── pipeline_v2.py
+│   │   │   ├── rag
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── adapter.py
+│   │   │   │   ├── build_index.py
+│   │   │   │   ├── config_v3.py
+│   │   │   │   ├── evidence_logger.py
+│   │   │   │   ├── faiss_security.py
+│   │   │   │   ├── feature_query_mapper.py
+│   │   │   │   ├── force_download.py
+│   │   │   │   ├── groq_llm.py
+│   │   │   │   ├── hybrid_retriever.py
+│   │   │   │   ├── hyde_pipeline.py
+│   │   │   │   ├── prompts_v3.py
+│   │   │   │   ├── quality.py
+│   │   │   │   ├── query_intelligence.py
+│   │   │   │   ├── rag_core_v3.py
+│   │   │   │   ├── runtime_diagnostics.py
+│   │   │   │   ├── schemas.py
+│   │   │   │   └── sparse_index_builder.py
+│   │   │   └── reporting.py
 │   │   ├── utils
 │   │   │   ├── __init__.py
 │   │   │   └── json_sanitize.py
@@ -174,6 +260,7 @@
 │       └── top_level.txt
 ├── test_comprehensive.py
 ├── tests
+│   ├── test_api_assessments_stage2.py
 │   ├── test_api_metadata.py
 │   ├── test_api_profiles.py
 │   ├── test_api_raw_assessment.py
@@ -189,8 +276,33 @@
 │   ├── test_raw_loader_integration.py
 │   ├── test_raw_schema_contract.py
 │   ├── test_raw_validation.py
-│   └── test_robust_pipeline.py
+│   ├── test_robust_pipeline.py
+│   ├── test_stage2_agent_contracts.py
+│   ├── test_stage2_agent_facade.py
+│   ├── test_stage2_agent_tool_safety.py
+│   ├── test_stage2_decision_engine.py
+│   ├── test_stage2_evidence_contracts.py
+│   ├── test_stage2_feature_defs_guard.py
+│   ├── test_stage2_legacy_inventory.py
+│   ├── test_stage2_llm_orchestrator.py
+│   ├── test_stage2_operational_agent.py
+│   ├── test_stage2_pipeline_contracts.py
+│   ├── test_stage2_pipeline_smoke_semantics.py
+│   ├── test_stage2_pipeline_v2.py
+│   ├── test_stage2_pipeline_v2_agent_integration.py
+│   ├── test_stage2_pipeline_v2_safety.py
+│   ├── test_stage2_rag_adapter.py
+│   ├── test_stage2_rag_build_index_contract.py
+│   ├── test_stage2_rag_compatibility.py
+│   ├── test_stage2_rag_index_integrity.py
+│   ├── test_stage2_rag_provenance_schema.py
+│   ├── test_stage2_rag_quality.py
+│   ├── test_stage2_rag_retriever_source_aware.py
+│   ├── test_stage2_rag_runtime_diagnostics.py
+│   ├── test_stage2_rag_runtime_path_resolution.py
+│   ├── test_stage2_reporting.py
+│   └── test_stage2_runtime_scripts_static.py
 └── ui
     └── app.py
 
-30 directories, 164 files
+34 directories, 272 files

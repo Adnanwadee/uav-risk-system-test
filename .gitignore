@@ -23,3 +23,19 @@ build/
 .cache/
 .coverage
 
+# Generated audit/status snapshots
+project_structure.txt
+patch_progress_snapshot.txt
+my_current_uncommitted_changes.patch
+
+# Generated analysis and trace outputs
+analysis/static_analysis.json
+artifacts/scenario_traces/
+artifacts/safe_values_worklist.csv
+artifacts/safe_values_worklist.json
+
+# Runtime caches and logs
+src/uav_risk/stage2/knowledge/cache/query_history.json
+src/uav_risk/stage2/knowledge/logs/*.jsonl
+src/uav_risk/stage2/knowledge/logs/evidence_*.jsonl
+

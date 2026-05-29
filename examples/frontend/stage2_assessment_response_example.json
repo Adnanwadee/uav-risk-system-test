@@ -2,63 +2,168 @@
   "status": "completed",
   "user_id": "user_1",
   "profile_id": "profile_1",
-  "assessment_id": null,
+  "assessment_id": "11111111-1111-1111-1111-111111111111",
   "warnings": [],
   "errors": [],
   "stage1": {
+    "core": {
+      "structural_hard_veto_passed": true
+    },
     "ml": {
       "predicted_class": "Medium Risk",
-      "probabilities": {"High Risk": 0.2, "Medium Risk": 0.6, "Low Risk": 0.2},
+      "probabilities": {
+        "High Risk": 0.2,
+        "Medium Risk": 0.6,
+        "Low Risk": 0.2
+      },
+      "top_probability": 0.6,
       "raw_feature_count": 197,
       "processed_feature_count": 198
     },
-    "shap": {"top_features": [{"feature": "uav_payload_mass_kg", "value": 0.5, "importance": 0.12}]}
+    "shap": {
+      "top_features": [
+        {
+          "feature": "environment_weather_wind_mps",
+          "value": 8.2,
+          "importance": 0.21,
+          "direction": "positive",
+          "metadata": {}
+        }
+      ],
+      "topic_count": 1,
+      "notes": []
+    }
   },
   "stage2": {
+    "profile_context": {
+      "profile_id": "profile_1",
+      "profile_name": "Example Profile"
+    },
+    "policy": {
+      "policy_name": "default_uav_operational_policy_v1",
+      "policy_version": "1.0",
+      "weights": {
+        "ml": 0.22,
+        "shap": 0.1,
+        "rag": 0.28,
+        "agent": 0.25,
+        "scenario_profile": 0.1,
+        "llm": 0.05
+      },
+      "go_threshold": 0.35,
+      "no_go_threshold": 0.7,
+      "weight_rationales": {
+        "ml": "ML provides a learned risk signal but is not the final authority."
+      }
+    },
     "rag": {
       "retrieval_usable": true,
       "rag_quality_is_proven": true,
       "evidence_bundle_count": 3,
       "insufficient_evidence_count": 0,
+      "scenario_evidence_complete": true,
+      "scenario_evidence_status": "complete",
       "evidence_bundle_details": [
-        {"bundle_id": "b1", "query": "airspace authorization", "support_status": "supported"}
-      ]
+        {
+          "bundle_id": "bundle_1",
+          "query": "AC 107-2A preflight weather assessment small UAS wind conditions",
+          "support_status": "supported",
+          "confidence": 0.71,
+          "no_evidence_reason": null
+        }
+      ],
+      "citations": [
+        {
+          "citation_id": "cit_1",
+          "bundle_id": "bundle_1",
+          "source_filename": "AC_107-2A.pdf",
+          "source_title": "AC_107-2A",
+          "page_start": 12,
+          "page_end": 12,
+          "section_title": "Preflight",
+          "quote": "Remote pilots should evaluate weather before operation.",
+          "retrieval_score": 0.78,
+          "confidence_label": "medium",
+          "rank": 1
+        }
+      ],
+      "limitations": []
     },
     "agent": {
       "recommendation": "caution",
-      "findings": [{"id": "f1", "summary": "C2 link reliability concern"}],
-      "action_items": [{"id": "a1", "description": "Verify uplink/downlink reliability"}],
-      "limitations": []
+      "findings": [],
+      "action_items": [],
+      "limitations": [],
+      "tool_trace": [],
+      "working_memory_summary": {
+        "coverage_summary": {
+          "input_signal_count": 12,
+          "feature_assessment_count": 9
+        },
+        "reasoning_summary": "Analyzed mission signals and prioritized evidence-backed concerns.",
+        "limitations": []
+      },
+      "top_input_signals": [],
+      "top_feature_assessments": [],
+      "selected_rag_queries": [
+        "AC 107-2A preflight weather assessment small UAS wind conditions"
+      ],
+      "skipped_rag_queries": []
     },
     "decision": {
       "final_decision": "caution",
       "decision_score": 0.4403,
       "confidence_level": "medium",
-      "stage_weights": {"ml": 0.22, "rag": 0.28, "agent": 0.25},
+      "stage_weights": {
+        "ml": 0.22,
+        "shap": 0.1,
+        "rag": 0.28,
+        "agent": 0.25,
+        "scenario_profile": 0.1,
+        "llm": 0.05
+      },
       "stage_contributions": [],
-      "decision_reasons": ["Weighted decision score is 0.440; final decision is caution."],
+      "decision_reasons": [
+        "Weighted decision score indicates caution."
+      ],
       "blocking_reasons": [],
-      "required_actions": ["Verify airspace authorization"],
+      "required_actions": [
+        "Verify weather and airspace authorization before launch."
+      ],
       "limitations": []
     },
     "llm_synthesis": {
-      "status": "fallback",
-      "executive_summary": "Final operational decision is caution.",
-      "operational_interpretation": "ML highlighted medium risk; verify weather and C2 link.",
-      "decision_explanation": "Weighted decision score is 0.440; final decision is caution.",
-      "key_risk_drivers": ["ml: Medium Risk", "rag: supported", "agent: caution"],
-      "mitigation_narrative": "Verify airspace class and uplink reliability before launch.",
+      "status": "generated",
+      "provider": "groq",
+      "model_name": "llama-3.3-70b-versatile",
+      "external_provider_used": true,
+      "executive_summary": "Mission posture is caution with evidence-backed mitigations.",
+      "operational_interpretation": "Weather and airspace signals require conservative review.",
+      "decision_explanation": "Decision Engine output remains authoritative.",
+      "key_risk_drivers": [
+        "weather",
+        "airspace"
+      ],
+      "mitigation_narrative": "Complete preflight checks and authorization review.",
       "consistency_warnings": []
     },
-    "report": {"structured": {}, "markdown": "# Operational Report\nDecision: caution"}
+    "report": {
+      "markdown": "# Operational Report\n\nDecision: caution",
+      "sections": [],
+      "generated": true
+    }
   },
   "diagnostics": {
-    "path_resolution_status": "canonical",
+    "path_resolution_status": "current",
     "index_provenance_status": "current",
     "retrieval_usable": true,
     "rag_quality_is_proven": true,
     "scenario_evidence_complete": true,
-    "llm_mode": "fallback",
-    "external_llm_provider_used": false
+    "llm_mode": "generated",
+    "external_llm_provider_used": true,
+    "llm_provider": "groq",
+    "llm_model_name": "llama-3.3-70b-versatile",
+    "faiss_secret_configured": null,
+    "warnings": []
   }
 }

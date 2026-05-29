@@ -9,6 +9,7 @@ from uav_risk.stage2.agent.facade import AgentResultFacade
 from uav_risk.stage2.contracts import (
     AgentRecommendation,
     AgentResult,
+    DecisionPolicyConfig,
     EvidenceBundle,
     EvidenceSupportStatus,
     MLAssessmentSnapshot,
@@ -220,3 +221,13 @@ def test_pipeline_v2_does_not_call_core_ml_api_feature_generation() -> None:
     assert "uav_risk.core" not in source
     assert "uav_risk.ml" not in source
     assert "uav_risk.api" not in source
+
+
+@pytest.mark.asyncio
+async def test_pipeline_accepts_decision_policy_and_keeps_behavior_stable() -> None:
+    policy = DecisionPolicyConfig(policy_name="test_policy", policy_version="1.1")
+    pipeline = Stage2PipelineV2(decision_policy=policy)
+    result = await pipeline.run(_stage2_input())
+    assert result.decision is not None
+    assert result.decision.metadata["policy_name"] == "test_policy"
+    assert result.decision.metadata["policy_version"] == "1.1"

@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from pydantic import BaseModel
 
-
+ 
 class Stage2FileStatus(str, Enum):
     ACTIVE_V2 = "active_v2"
     COMPATIBILITY_BRIDGE = "compatibility_bridge"
@@ -11,6 +11,8 @@ class Stage2FileStatus(str, Enum):
     CANDIDATE_FOR_LATER_REMOVAL = "candidate_for_later_removal"
     HEAVY_RUNTIME_RESOURCE = "heavy_runtime_resource"
     UNKNOWN = "unknown"
+
+
 
 
 class Stage2FileInventoryItem(BaseModel):

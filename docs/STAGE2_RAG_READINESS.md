@@ -17,6 +17,19 @@
 - `python scripts/run_stage2_rag_diagnostic.py --run-quality`
 - `python scripts/run_stage2_pipeline_v2_smoke.py --use-real-rag`
 
+## Operational Warnings
+
+- `UAV_FAISS_SECRET` must be configured with a strong non-default secret before treating the canonical FAISS path as release-safe.
+- Evidence and query caches may be written during runtime:
+  - `src/uav_risk/stage2/knowledge/cache/query_history.json`
+  - `src/uav_risk/stage2/knowledge/logs/*.jsonl`
+- The following commands are manual-only and should not be used as casual readiness checks:
+  - `python scripts/rebuild_stage2_rag_index.py --force`
+  - `python src/uav_risk/stage2/rag/build_index.py --force`
+  - `python src/uav_risk/stage2/rag/force_download.py`
+  - `python src/uav_risk/stage2/knowledge/models/embedding/train_script.py`
+  - `python scripts/simulate_agent_live.py`
+
 ## Metric Semantics
 - `rag_quality_is_proven`: global RAG quality harness status across fixed expected/unsupported cases.
 - `scenario_evidence_complete`: scenario-level completeness for current pipeline smoke run.
@@ -27,6 +40,12 @@
 - HyDE-generated text is not evidence.
 - Unsupported/out-of-domain queries must return `insufficient_evidence`.
 - Citation provenance must come from retrieved chunk metadata (`source_id`, source filename/title, page/chunk where available).
+
+
+## Authority Boundaries
+- RAG provides evidence retrieval and citation provenance support.
+- DecisionEngine remains deterministic final authority for `final_decision` and `decision_score`.
+- LLM synthesis is interpretation/reporting only and does not override decision outputs or evidence support status.
 
 ## Active Runtime Files
 - `src/uav_risk/stage2/rag/config_v3.py`
@@ -45,6 +64,9 @@
   - `src/uav_risk/stage2/rag/groq_llm.py`
   - `src/uav_risk/stage2/rag/hyde_pipeline.py`
   - `src/uav_risk/stage2/rag/prompts_v3.py`
+  - `groq_llm.py` is legacy/quarantine-later.
+  - `hyde_pipeline.py` is optional/fallback, not active LLM-backed HyDE in the current factory path.
+  - `reranker` is configurable and available, but its live activation is not proven unless explicitly wired and verified by runtime diagnostics.
 
 ## Non-Canonical Home Cache Cleanup Note
 If stale indices exist under `/home/vscode/.uav_rag/indices`, they are non-canonical for current default runtime.
@@ -90,3 +112,5 @@ Generic scenario phrasing can honestly abstain when evidence safety gates reject
 - Legacy do-not-use runtime files remain quarantined by policy and inventory:
   - `src/uav_risk/stage2/pipeline.py`
   - `src/uav_risk/stage2/agent/ace_agent.py`
+
+The canonical readiness evidence remains the validation command set above; do not use legacy or manual-only tooling as final readiness proof.

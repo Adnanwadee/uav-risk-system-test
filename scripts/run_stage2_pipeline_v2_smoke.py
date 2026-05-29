@@ -7,7 +7,7 @@ import sys
 
 from uav_risk.stage2.agent.operational_agent import OperationalAgentV2
 from uav_risk.stage2.contracts import MLAssessmentSnapshot, SHAPFeatureAttribution, Stage2AssessmentInput
-from uav_risk.stage2.llm.orchestrator import LLMOrchestrator
+from uav_risk.stage2.llm.orchestrator import LLMOrchestrator, build_llm_orchestrator_from_env
 from uav_risk.stage2.pipeline_v2 import Stage2PipelineV2
 from uav_risk.stage2.rag.quality import build_runtime_rag_adapter_if_available
 from uav_risk.stage2.rag.runtime_diagnostics import inspect_rag_index_provenance, run_rag_runtime_diagnostic
@@ -62,6 +62,9 @@ def _llm_synthesis_summary(synthesis) -> dict:
     if synthesis is None:
         return {
             "llm_synthesis_status": None,
+            "llm_provider": None,
+            "llm_model_name": None,
+            "external_llm_provider_used": False,
             "llm_executive_summary": None,
             "llm_operational_interpretation": None,
             "llm_decision_explanation": None,
@@ -72,6 +75,9 @@ def _llm_synthesis_summary(synthesis) -> dict:
 
     return {
         "llm_synthesis_status": synthesis.status.value,
+        "llm_provider": synthesis.provider,
+        "llm_model_name": synthesis.model_name,
+        "external_llm_provider_used": synthesis.status.value == "generated",
         "llm_executive_summary": synthesis.executive_summary,
         "llm_operational_interpretation": synthesis.operational_interpretation,
         "llm_decision_explanation": synthesis.decision_explanation,
@@ -82,6 +88,7 @@ def _llm_synthesis_summary(synthesis) -> dict:
                 "warning_type": warning.warning_type,
                 "message": warning.message,
                 "related_ids": list(warning.related_ids),
+                "metadata": dict(warning.metadata),
             }
             for warning in synthesis.consistency_warnings
         ],
@@ -146,7 +153,7 @@ def _build_input() -> Stage2AssessmentInput:
     )
 
 
-async def _run(use_real_rag: bool, use_llm_fallback: bool = False) -> dict:
+async def _run(use_real_rag: bool, use_llm_fallback: bool = False, use_env_llm: bool = False) -> dict:
     provenance = inspect_rag_index_provenance()
 
     rag_adapter = None
@@ -154,7 +161,15 @@ async def _run(use_real_rag: bool, use_llm_fallback: bool = False) -> dict:
         rag_adapter = build_runtime_rag_adapter_if_available()
 
     operational_agent = OperationalAgentV2(rag_adapter=rag_adapter) if use_real_rag else None
-    llm_orchestrator = LLMOrchestrator() if use_llm_fallback else None
+    if use_llm_fallback and use_env_llm:
+        raise ValueError("--use-llm-fallback and --use-env-llm are mutually exclusive")
+
+    if use_llm_fallback:
+        llm_orchestrator = LLMOrchestrator()
+    elif use_env_llm:
+        llm_orchestrator = build_llm_orchestrator_from_env()
+    else:
+        llm_orchestrator = None
     pipeline = Stage2PipelineV2(
         rag_adapter=rag_adapter,
         operational_agent=operational_agent,
@@ -217,10 +232,15 @@ def main() -> int:
         action="store_true",
         help="Attach deterministic LLM fallback synthesis without a real provider.",
     )
+    parser.add_argument(
+        "--use-env-llm",
+        action="store_true",
+        help="Use environment-configured LLM orchestrator/provider if enabled; safely falls back otherwise.",
+    )
     args = parser.parse_args()
 
     try:
-        payload = asyncio.run(_run(args.use_real_rag, args.use_llm_fallback))
+        payload = asyncio.run(_run(args.use_real_rag, args.use_llm_fallback, args.use_env_llm))
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     except Exception:

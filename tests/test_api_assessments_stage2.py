@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 from fastapi.testclient import TestClient
 
 from uav_risk.api.main import create_app
 from test_api_profiles import profile_payload
 from test_api_raw_assessment import scenario_payload
+
+
+FORBIDDEN_KEYS = {
+    "chain_of_thought",
+    "reasoning_chain",
+    "thought",
+    "scratchpad",
+    "internal_reasoning",
+    "private_reasoning",
+}
 
 
 def _create_profile(client, user_id="user_1", profile_id="profile_1", **updates):
@@ -24,36 +35,101 @@ def _assessment_payload(**scenario_updates):
     }
 
 
-def test_stage2_endpoint_runs_and_returns_full_structure(tmp_path, monkeypatch):
+def _walk_keys(value):
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield str(k).lower()
+            yield from _walk_keys(v)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_keys(item)
+
+
+def test_stage2_endpoint_returns_stable_frontend_ready_structure(tmp_path, monkeypatch):
     monkeypatch.setenv("UAV_PROFILE_STORAGE_DIR", str(tmp_path / "profiles"))
-    # ensure runtime RAG adapter is not used in this test
     monkeypatch.setattr("uav_risk.api.routes.assessments.build_runtime_rag_adapter_if_available", lambda: None)
     with TestClient(create_app()) as client:
         _create_profile(client)
         response = client.post("/users/user_1/profiles/profile_1/assessments/stage2", json=_assessment_payload())
         assert response.status_code == 200
         body = response.json()
+
+        assert set(body.keys()) == {"status", "user_id", "profile_id", "assessment_id", "warnings", "errors", "stage1", "stage2", "diagnostics"}
         assert body["status"] in {"completed", "degraded", "skipped", "failed"}
         assert body["user_id"] == "user_1"
-        assert "stage1" in body and "ml" in body["stage1"]
-        assert "stage2" in body and "agent" in body["stage2"]
-        assert "llm_synthesis" in body["stage2"]
-        assert "report" in body["stage2"]
-        assert body["diagnostics"]["external_llm_provider_used"] is False
+        assert body["profile_id"] == "profile_1"
+        assert isinstance(body["assessment_id"], str)
+        uuid.UUID(body["assessment_id"])
+
+        assert "ml" in body["stage1"] and "shap" in body["stage1"]
+        assert "predicted_class" in body["stage1"]["ml"]
+        assert "top_features" in body["stage1"]["shap"]
+
+        s2 = body["stage2"]
+        assert "profile_context" in s2
+        assert "policy" in s2
+        assert "rag" in s2
+        assert "agent" in s2
+        assert "decision" in s2
+        assert "llm_synthesis" in s2
+        assert "report" in s2
+
+        assert "weights" in s2["policy"]
+        assert "weight_rationales" in s2["policy"]
+        assert s2["profile_context"]["profile_id"] == "profile_1"
+
+        assert "evidence_bundle_details" in s2["rag"]
+        assert "citations" in s2["rag"]
+
+        assert "findings" in s2["agent"]
+        assert "action_items" in s2["agent"]
+        assert "tool_trace" in s2["agent"]
+        assert "working_memory_summary" in s2["agent"]
+        assert "top_feature_assessments" in s2["agent"]
+
+        assert "final_decision" in s2["decision"]
+        assert "decision_score" in s2["decision"]
+        assert "stage_contributions" in s2["decision"]
+
+        assert "status" in s2["llm_synthesis"]
+        assert "provider" in s2["llm_synthesis"]
+        assert "model_name" in s2["llm_synthesis"]
+        assert "external_provider_used" in s2["llm_synthesis"]
+
+        d = body["diagnostics"]
+        assert "retrieval_usable" in d
+        assert "rag_quality_is_proven" in d
+        assert "llm_mode" in d
+        assert "external_llm_provider_used" in d
 
 
-def test_stage2_blocked_hard_veto_returns_blocked(tmp_path, monkeypatch):
+def test_stage2_blocked_response_is_json_safe_and_has_no_fake_outputs(tmp_path, monkeypatch):
     monkeypatch.setenv("UAV_PROFILE_STORAGE_DIR", str(tmp_path / "profiles"))
     monkeypatch.setattr("uav_risk.api.routes.assessments.build_runtime_rag_adapter_if_available", lambda: None)
     with TestClient(create_app()) as client:
-        # create a profile with a low max payload to trigger veto
         _create_profile(client, max_payload_kg=0.1)
         payload = _assessment_payload(uav_payload_mass_kg=2.0)
         response = client.post("/users/user_1/profiles/profile_1/assessments/stage2", json=payload)
         assert response.status_code == 200
         body = response.json()
+
         assert body["status"] == "blocked"
-        assert body.get("decision", {}).get("final_decision") == "no_go"
+        assert body["stage1"]["ml"] is None
+        assert body["stage2"]["decision"]["final_decision"] == "no_go"
+        assert body["stage2"]["rag"]["evidence_bundle_count"] == 0
+        assert body["stage2"]["llm_synthesis"]["external_provider_used"] is False
+
+
+def test_stage2_response_has_no_forbidden_private_reasoning_keys(tmp_path, monkeypatch):
+    monkeypatch.setenv("UAV_PROFILE_STORAGE_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setattr("uav_risk.api.routes.assessments.build_runtime_rag_adapter_if_available", lambda: None)
+    with TestClient(create_app()) as client:
+        _create_profile(client)
+        response = client.post("/users/user_1/profiles/profile_1/assessments/stage2", json=_assessment_payload())
+        assert response.status_code == 200
+        body = response.json()
+        keys = set(_walk_keys(body))
+        assert keys.isdisjoint(FORBIDDEN_KEYS)
 
 
 def test_stage2_missing_profile_returns_404(tmp_path, monkeypatch):
@@ -72,5 +148,19 @@ def test_stage2_response_is_json_serializable(tmp_path, monkeypatch):
         response = client.post("/users/user_1/profiles/profile_1/assessments/stage2", json=_assessment_payload())
         assert response.status_code == 200
         body = response.json()
-        # should be serializable by json
         json.dumps(body)
+
+
+def test_stage2_env_groq_missing_key_keeps_safe_llm_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv("UAV_PROFILE_STORAGE_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setattr("uav_risk.api.routes.assessments.build_runtime_rag_adapter_if_available", lambda: None)
+    monkeypatch.setenv("LLM_ENABLED", "true")
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    with TestClient(create_app()) as client:
+        _create_profile(client)
+        response = client.post("/users/user_1/profiles/profile_1/assessments/stage2", json=_assessment_payload())
+        assert response.status_code == 200
+        body = response.json()
+        assert body["diagnostics"]["external_llm_provider_used"] is False
+        assert body["diagnostics"]["llm_mode"] in {"fallback", "disabled", "generated", "failed"}

@@ -124,6 +124,7 @@ async def test_pipeline_passes_agent_input_with_ml_scenario_notes_and_evidence()
     assert agent.last_input.operator_notes == "notes"
     assert agent.last_input.evidence_bundles
     assert result.evidence_bundles
+    assert result.agent_result is not None
 
 
 @pytest.mark.asyncio
@@ -184,9 +185,10 @@ def test_pipeline_v2_does_not_reference_feature_router_or_legacy_feature_generat
     assert "MasterFlightPayload" not in source
 
 
-def test_pipeline_v2_does_not_call_groq_or_llm() -> None:
+def test_pipeline_v2_does_not_call_external_llm_clients_directly() -> None:
     import uav_risk.stage2.pipeline_v2 as module
 
     source = inspect.getsource(module).lower()
-    assert "groq" not in source
-    assert "llm" not in source
+    assert "groq(" not in source
+    assert "openai(" not in source
+    assert "chat.completions" not in source

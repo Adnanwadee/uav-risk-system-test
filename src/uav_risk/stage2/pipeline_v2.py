@@ -9,6 +9,7 @@ from uav_risk.stage2.llm.orchestrator import LLMOrchestrator
 from uav_risk.stage2.contracts import (
     AgentInput,
     AgentRAGQueryPlan,
+    DecisionPolicyConfig,
     EvidenceBundle,
     EvidenceSupportStatus,
     Stage2AssessmentInput,
@@ -29,6 +30,7 @@ def build_stage2_evidence_query_plan(
     agent_input = AgentInput(
         assessment_id=stage2_input.assessment_id,
         scenario_summary=dict(stage2_input.scenario_summary),
+        profile_context=stage2_input.profile_context,
         ml_prediction=stage2_input.ml.predicted_class,
         ml_probabilities=dict(stage2_input.ml.probabilities),
         shap_top_features=[
@@ -70,6 +72,7 @@ def build_agent_input(
     return AgentInput(
         assessment_id=stage2_input.assessment_id,
         scenario_summary=dict(stage2_input.scenario_summary),
+        profile_context=stage2_input.profile_context,
         ml_prediction=stage2_input.ml.predicted_class,
         ml_probabilities=dict(stage2_input.ml.probabilities),
         shap_top_features=shap_top_features,
@@ -109,6 +112,7 @@ class Stage2PipelineV2:
         agent_facade: AgentResultFacade | None = None,
         operational_agent: Any | None = None,
         llm_orchestrator: LLMOrchestrator | None = None,
+        decision_policy: DecisionPolicyConfig | None = None,
         max_evidence_queries: int = 3,
     ) -> None:
         if max_evidence_queries < 0:
@@ -117,6 +121,7 @@ class Stage2PipelineV2:
         self._agent_facade = agent_facade or AgentResultFacade(agent=None)
         self._operational_agent = operational_agent
         self._llm_orchestrator = llm_orchestrator
+        self._decision_policy = decision_policy
         self._max_evidence_queries = max_evidence_queries
 
     async def run(self, stage2_input: Stage2AssessmentInput) -> Stage2AssessmentResult:
@@ -170,7 +175,7 @@ class Stage2PipelineV2:
                 errors=list(agent_result.errors),
                 metadata=dict(stage2_input.metadata),
             )
-            decision = evaluate_stage2_decision(stage2_input, provisional_result)
+            decision = evaluate_stage2_decision(stage2_input, provisional_result, policy=self._decision_policy)
             result_with_decision = provisional_result.model_copy(update={"decision": decision})
 
             llm_synthesis = None

@@ -1,5 +1,10 @@
-"""Simple harness to simulate realistic API runs against the FastAPI app
-Uses TestClient to call /api/flight/assemble and /v2/evaluate
+"""Legacy/demo/manual-only harness.
+
+This script is not canonical runtime and should not be used as final readiness evidence.
+Canonical readiness commands are listed in README.md.
+
+Simple harness to simulate realistic API runs against the FastAPI app.
+Uses TestClient to call /api/flight/assemble and /v2/evaluate.
 """
 from pathlib import Path
 import json

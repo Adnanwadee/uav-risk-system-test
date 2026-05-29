@@ -1,8 +1,10 @@
 """
 File Path: scripts/run_production_simulation.py
-Purpose: Production integration harness executing ACTUAL repository modules.
+Purpose: Legacy/demo/manual-only integration harness executing ACTUAL repository modules.
          Runs Scenario 1 (40 Core Features) vs Scenario 2 (198 Full Features).
-Dependencies: uav_risk.core.contracts, uav_risk.core.data_validator, 
+Not canonical runtime and not final readiness evidence.
+Canonical readiness commands are listed in README.md.
+Dependencies: uav_risk.core.contracts, uav_risk.core.data_validator,
               uav_risk.core.feature_router, uav_risk.ml.inference, ace_agent
 """
 

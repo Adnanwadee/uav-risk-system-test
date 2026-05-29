@@ -182,7 +182,7 @@ def test_render_markdown_report_includes_expected_headings() -> None:
     )
     md = render_markdown_report(report)
     assert "# Operational Report" in md
-    assert "## ML Signal" in md
+    assert "## ML Assessment" in md
 
 
 def test_markdown_includes_citation_ids_when_present() -> None:

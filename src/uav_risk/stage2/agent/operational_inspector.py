@@ -156,15 +156,40 @@ def _collect_topic_fields(keys: list[str]) -> dict[str, list[str]]:
 
 
 def _profile_context_fields(agent_input: AgentInput) -> dict[str, Any]:
-    # Profile context is partial in current pipeline: we only inspect agent metadata if present.
+    profile_context = agent_input.profile_context
+    if profile_context is not None:
+        return profile_context.model_dump()
+
+    # Backward-compatible fallback for older call paths that only set metadata.
     meta = agent_input.metadata if isinstance(agent_input.metadata, dict) else {}
     return {
         str(k): v
         for k, v in meta.items()
         if any(tok in str(k).lower() for tok in (
-            "uav_", "profile", "payload", "mass", "battery", "reserve", "swarm", "runway", "ceiling", "sensor", "gnss", "lidar", "radar", "camera"
+            "uav_", "profile", "payload", "mass", "battery", "reserve", "swarm", "runway", "ceiling", "sensor", "gnss", "lidar", "radar", "camera", "detect"
         ))
     }
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _as_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lower = value.strip().lower()
+        if lower in {"true", "1", "yes", "y", "on"}:
+            return True
+        if lower in {"false", "0", "no", "n", "off"}:
+            return False
+    return None
 
 
 def inspect_operational_context(
@@ -291,27 +316,19 @@ def inspect_operational_context(
                 )
             )
 
-    # Profile/capability checks (partial availability via metadata only)
+    # Profile/capability checks using structured profile_context when available.
     profile_fields = _profile_context_fields(agent_input)
     if not profile_fields:
         limitations.append("Profile capability context is partial in current Stage2 input; inspector used scenario/SHAP/evidence context only.")
     else:
-        # payload vs max_payload margin if both available
-        payload_val = None
-        max_payload_val = None
-        for k, v in profile_fields.items():
-            lk = k.lower()
-            if payload_val is None and ("payload" in lk and "max" not in lk):
-                try:
-                    payload_val = float(v)
-                except Exception:
-                    pass
-            if max_payload_val is None and ("max_payload" in lk):
-                try:
-                    max_payload_val = float(v)
-                except Exception:
-                    pass
-        if payload_val is not None and max_payload_val is not None and max_payload_val > 0 and payload_val / max_payload_val >= 0.85:
+        payload_scenario_keys = [k for k in scenario_keys if any(tok in k.lower() for tok in ("payload", "mass", "weight", "loading"))]
+        payload_value = None
+        for key in payload_scenario_keys:
+            payload_value = _as_float(agent_input.scenario_summary.get(key))
+            if payload_value is not None:
+                break
+        max_payload = _as_float(profile_fields.get("max_payload_kg"))
+        if payload_value is not None and max_payload is not None and max_payload > 0 and payload_value / max_payload >= 0.85:
             fid = "profile_payload_margin"
             new_findings.append(
                 AgentFinding(
@@ -324,17 +341,169 @@ def inspect_operational_context(
                     metadata={
                         "topic": "payload",
                         "support_status": "profile_derived",
-                        "related_profile_fields": "payload,max_payload",
+                        "related_profile_fields": "max_payload_kg",
+                        "related_scenario_fields": ",".join(payload_scenario_keys),
                     },
                 )
             )
             action_items.append(
                 AgentActionItem(
                     action_id="action_profile_payload_margin",
-                    summary="Review loading/performance margin and confirm expected payload operating envelope.",
+                    summary="Review payload/performance margin before mission launch.",
                     priority=AgentFindingSeverity.MEDIUM,
                     evidence_references=[],
                     metadata={"related_finding_id": fid, "topic": "payload"},
+                )
+            )
+
+        swarm_keys = [k for k in scenario_keys if "swarm" in k.lower() or "multi_uas" in k.lower()]
+        swarm_requested = any(_as_bool(agent_input.scenario_summary.get(k)) is True for k in swarm_keys)
+        swarm_size = None
+        for key in swarm_keys:
+            if "size" in key.lower():
+                swarm_size = _as_float(agent_input.scenario_summary.get(key))
+                if swarm_size is not None:
+                    break
+        profile_swarm_capable = _as_bool(profile_fields.get("swarm_capable"))
+        max_swarm_size = _as_float(profile_fields.get("max_swarm_size"))
+        if (swarm_requested or (swarm_size is not None and swarm_size > 1)) and profile_swarm_capable is False:
+            fid = "profile_swarm_capability"
+            new_findings.append(
+                AgentFinding(
+                    finding_id=fid,
+                    finding_type=AgentFindingType.TOOL_CHECK,
+                    severity=AgentFindingSeverity.HIGH,
+                    summary="Scenario indicates multi-UAS/swarm operation while profile capability is limited; review operational feasibility and coordination controls.",
+                    evidence_references=[],
+                    requires_evidence=False,
+                    metadata={
+                        "topic": "swarm",
+                        "support_status": "profile_derived",
+                        "related_profile_fields": "swarm_capable,max_swarm_size",
+                        "related_scenario_fields": ",".join(swarm_keys),
+                    },
+                )
+            )
+            action_items.append(
+                AgentActionItem(
+                    action_id="action_profile_swarm_capability",
+                    summary="Verify swarm capability and coordination procedures before launch.",
+                    priority=AgentFindingSeverity.HIGH,
+                    evidence_references=[],
+                    metadata={"related_finding_id": fid, "topic": "swarm"},
+                )
+            )
+        elif swarm_size is not None and max_swarm_size is not None and max_swarm_size > 0 and swarm_size > max_swarm_size:
+            fid = "profile_swarm_size_margin"
+            new_findings.append(
+                AgentFinding(
+                    finding_id=fid,
+                    finding_type=AgentFindingType.TOOL_CHECK,
+                    severity=AgentFindingSeverity.HIGH,
+                    summary="Scenario swarm size appears above profile swarm capacity; review operational constraints.",
+                    evidence_references=[],
+                    requires_evidence=False,
+                    metadata={
+                        "topic": "swarm",
+                        "support_status": "profile_derived",
+                        "related_profile_fields": "max_swarm_size",
+                        "related_scenario_fields": ",".join(swarm_keys),
+                    },
+                )
+            )
+
+        obstacle_keys = [k for k in scenario_keys if any(tok in k.lower() for tok in ("obstacle", "traffic", "daa", "detect", "avoid"))]
+        limited_sensors = []
+        if _as_bool(profile_fields.get("detect_and_avoid_available")) is False:
+            limited_sensors.append("detect_and_avoid_available")
+        for field_name in ("gnss_available", "camera_available", "lidar_available", "radar_available"):
+            if _as_bool(profile_fields.get(field_name)) is False:
+                limited_sensors.append(field_name)
+        if obstacle_keys and limited_sensors:
+            fid = "profile_sensor_daa_margin"
+            new_findings.append(
+                AgentFinding(
+                    finding_id=fid,
+                    finding_type=AgentFindingType.TOOL_CHECK,
+                    severity=AgentFindingSeverity.HIGH,
+                    summary="Sensor/DAA capability should be reviewed for obstacle/traffic environment.",
+                    evidence_references=[],
+                    requires_evidence=False,
+                    metadata={
+                        "topic": "ground_risk",
+                        "support_status": "profile_derived",
+                        "related_profile_fields": ",".join(limited_sensors),
+                        "related_scenario_fields": ",".join(obstacle_keys),
+                    },
+                )
+            )
+
+        energy_keys = [k for k in scenario_keys if any(tok in k.lower() for tok in ("duration", "flight_time", "energy", "battery", "reserve", "endurance"))]
+        reserve_fraction = _as_float(profile_fields.get("reserve_fraction"))
+        max_flight_time = _as_float(profile_fields.get("max_flight_time_min"))
+        if energy_keys and (reserve_fraction is not None or max_flight_time is not None):
+            fid = "profile_energy_margin"
+            new_findings.append(
+                AgentFinding(
+                    finding_id=fid,
+                    finding_type=AgentFindingType.TOOL_CHECK,
+                    severity=AgentFindingSeverity.MEDIUM,
+                    summary="Energy/reserve margin should be reviewed for mission duration and contingencies.",
+                    evidence_references=[],
+                    requires_evidence=False,
+                    metadata={
+                        "topic": "energy",
+                        "support_status": "profile_derived",
+                        "related_profile_fields": "reserve_fraction,max_flight_time_min",
+                        "related_scenario_fields": ",".join(energy_keys),
+                    },
+                )
+            )
+            action_items.append(
+                AgentActionItem(
+                    action_id="action_profile_energy_margin",
+                    summary="Review energy/reserve margins for mission profile and contingencies.",
+                    priority=AgentFindingSeverity.MEDIUM,
+                    evidence_references=[],
+                    metadata={"related_finding_id": fid, "topic": "energy"},
+                )
+            )
+
+        altitude_keys = [k for k in scenario_keys if any(tok in k.lower() for tok in ("altitude", "agl", "ceiling"))]
+        scenario_altitude = None
+        for key in altitude_keys:
+            val = _as_float(agent_input.scenario_summary.get(key))
+            if val is not None:
+                scenario_altitude = val
+                break
+        max_altitude = _as_float(profile_fields.get("max_altitude_m"))
+        hover_ceiling = _as_float(profile_fields.get("hover_ceiling_m"))
+        altitude_limit = max(item for item in (max_altitude, hover_ceiling) if item is not None) if any(v is not None for v in (max_altitude, hover_ceiling)) else None
+        if scenario_altitude is not None and altitude_limit is not None and altitude_limit > 0 and scenario_altitude / altitude_limit >= 0.85:
+            fid = "profile_altitude_margin"
+            new_findings.append(
+                AgentFinding(
+                    finding_id=fid,
+                    finding_type=AgentFindingType.TOOL_CHECK,
+                    severity=AgentFindingSeverity.MEDIUM,
+                    summary="Mission altitude may reduce performance margin relative to profile ceiling/altitude limits.",
+                    evidence_references=[],
+                    requires_evidence=False,
+                    metadata={
+                        "topic": "altitude",
+                        "support_status": "profile_derived",
+                        "related_profile_fields": "max_altitude_m,hover_ceiling_m",
+                        "related_scenario_fields": ",".join(altitude_keys),
+                    },
+                )
+            )
+            action_items.append(
+                AgentActionItem(
+                    action_id="action_profile_altitude_margin",
+                    summary="Review altitude/performance margins for planned mission profile.",
+                    priority=AgentFindingSeverity.MEDIUM,
+                    evidence_references=[],
+                    metadata={"related_finding_id": fid, "topic": "altitude"},
                 )
             )
 

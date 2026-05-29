@@ -1,11 +1,9 @@
-"""Simulate a full pipeline run using the integration test payload.
-This script will:
- - load Stage-1 bundle from artifacts/
- - construct MasterFlightPayload from a canned payload
- - run run_ace_pipeline with rag_core in degraded mode and groq_llm=None
- - print the final output summary and any exceptions
+"""Legacy/demo/manual-only harness.
 
-Run: python3 scripts/simulate_run.py
+This script is not canonical runtime and should not be used as final readiness evidence.
+Canonical readiness commands are listed in README.md.
+
+Simulates a full pipeline run using the integration test payload.
 """
 import asyncio
 import json

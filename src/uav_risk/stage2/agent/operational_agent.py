@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 from uav_risk.stage2.agent.operational_inspector import inspect_operational_context
@@ -14,6 +15,13 @@ from uav_risk.stage2.contracts import (
     AgentRAGQueryPlan,
     AgentRecommendation,
     AgentResult,
+    AgentToolCall,
+    AgentToolName,
+    AgentWorkingMemory,
+    AgentInputSignal,
+    AgentFeatureAssessment,
+    AgentRiskRelevance,
+    AgentSignalSource,
     EvidenceBundle,
     EvidenceSupportStatus,
     PublicReasoningTrace,
@@ -291,6 +299,288 @@ def _enrich_bundle_with_query_plan(bundle: EvidenceBundle, plan: AgentRAGQueryPl
     return bundle.model_copy(update={"metadata": merged})
 
 
+def _risk_relevance_from_priority(priority: float) -> AgentRiskRelevance:
+    if priority >= 0.85:
+        return AgentRiskRelevance.CRITICAL
+    if priority >= 0.65:
+        return AgentRiskRelevance.HIGH
+    if priority >= 0.4:
+        return AgentRiskRelevance.MEDIUM
+    return AgentRiskRelevance.LOW
+
+
+def _topic_from_name(name: str) -> str:
+    lower = name.lower()
+    if any(t in lower for t in ("weather", "wind", "gust", "turbulence", "thermal")):
+        return "weather"
+    if any(t in lower for t in ("airspace", "no_fly", "restricted", "authorization", "altitude", "agl", "ceiling")):
+        return "airspace"
+    if any(t in lower for t in ("comms", "uplink", "downlink", "c2", "telemetry", "link")):
+        return "c2"
+    if any(t in lower for t in ("swarm", "multi_uas", "formation")):
+        return "swarm"
+    if any(t in lower for t in ("payload", "mass", "weight", "loading")):
+        return "payload"
+    if any(t in lower for t in ("battery", "reserve", "endurance", "energy", "flight_time")):
+        return "energy"
+    if any(t in lower for t in ("obstacle", "traffic", "landing", "population", "ground_risk")):
+        return "ground_risk"
+    if any(t in lower for t in ("vlos", "visual", "line_of_sight", "los")):
+        return "vlos"
+    return "general"
+
+
+def _extract_input_signals(agent_input: AgentInput) -> list[AgentInputSignal]:
+    signals: list[AgentInputSignal] = []
+
+    ml_probs = agent_input.ml_probabilities
+    if ml_probs:
+        top_class = max(ml_probs, key=ml_probs.get)
+        top_prob = float(ml_probs.get(top_class, 0.0))
+        ml_priority = min(1.0, 0.35 + (0.45 if "high" in top_class.lower() else 0.2 if "medium" in top_class.lower() else 0.05) + 0.2 * top_prob)
+        signals.append(
+            AgentInputSignal(
+                signal_id="sig_ml_prediction",
+                source=AgentSignalSource.ML,
+                name="ml_prediction",
+                value_summary=f"predicted_class={top_class} top_probability={top_prob:.3f}",
+                topic="ml_signal",
+                priority=ml_priority,
+                risk_relevance=_risk_relevance_from_priority(ml_priority),
+                needs_rag_evidence=False,
+                metadata={"predicted_class": top_class, "top_probability": top_prob},
+            )
+        )
+
+    for idx, shap in enumerate(agent_input.shap_top_features[:8], start=1):
+        feature = str(shap.get("feature", "")).strip()
+        if not feature:
+            continue
+        importance = abs(float(shap.get("importance", 0.0) or 0.0))
+        topic = _topic_from_name(feature)
+        priority = min(1.0, 0.2 + min(0.6, importance) + (0.1 if topic in {"airspace", "c2", "swarm", "weather"} else 0.0))
+        signals.append(
+            AgentInputSignal(
+                signal_id=f"sig_shap_{idx}",
+                source=AgentSignalSource.SHAP,
+                name=feature,
+                value_summary=f"importance={importance:.3f}",
+                topic=topic,
+                priority=priority,
+                risk_relevance=_risk_relevance_from_priority(priority),
+                needs_rag_evidence=topic in {"weather", "airspace", "c2", "vlos", "ground_risk", "swarm"},
+                related_shap_features=[feature],
+                metadata={"importance": importance},
+            )
+        )
+
+    for key, value in list(agent_input.scenario_summary.items())[:30]:
+        k = str(key).strip()
+        if not k:
+            continue
+        topic = _topic_from_name(k)
+        base = 0.28 if topic == "general" else 0.5
+        if isinstance(value, bool) and topic in {"c2", "swarm"} and value is False:
+            base += 0.25
+        priority = min(1.0, base)
+        signals.append(
+            AgentInputSignal(
+                signal_id=f"sig_scenario_{k}",
+                source=AgentSignalSource.SCENARIO,
+                name=k,
+                value_summary=f"value={value}",
+                topic=topic,
+                priority=priority,
+                risk_relevance=_risk_relevance_from_priority(priority),
+                needs_rag_evidence=topic in {"weather", "airspace", "c2", "payload", "ground_risk", "vlos"},
+                related_scenario_fields=[k],
+                metadata={},
+            )
+        )
+
+    profile = agent_input.profile_context
+    if profile is not None:
+        for name, value in [
+            ("max_payload_kg", profile.max_payload_kg),
+            ("max_altitude_m", profile.max_altitude_m),
+            ("hover_ceiling_m", profile.hover_ceiling_m),
+            ("reserve_fraction", profile.reserve_fraction),
+            ("swarm_capable", profile.swarm_capable),
+            ("detect_and_avoid_available", profile.detect_and_avoid_available),
+        ]:
+            if value is None:
+                continue
+            topic = _topic_from_name(name)
+            priority = 0.45 if topic != "general" else 0.3
+            signals.append(
+                AgentInputSignal(
+                    signal_id=f"sig_profile_{name}",
+                    source=AgentSignalSource.PROFILE,
+                    name=name,
+                    value_summary=f"value={value}",
+                    topic=topic if topic != "general" else "profile_capability",
+                    priority=priority,
+                    risk_relevance=_risk_relevance_from_priority(priority),
+                    needs_rag_evidence=False,
+                    related_profile_fields=[name],
+                    metadata={},
+                )
+            )
+
+    note = (agent_input.operator_notes or "").strip()
+    if note:
+        topic = _topic_from_name(note)
+        priority = 0.52 if topic != "general" else 0.35
+        signals.append(
+            AgentInputSignal(
+                signal_id="sig_operator_notes",
+                source=AgentSignalSource.OPERATOR_NOTES,
+                name="operator_notes",
+                value_summary=note[:180],
+                topic=topic,
+                priority=priority,
+                risk_relevance=_risk_relevance_from_priority(priority),
+                needs_rag_evidence=topic in {"weather", "airspace", "c2", "vlos", "ground_risk", "swarm"},
+                metadata={"untrusted_context": True},
+            )
+        )
+
+    signals.sort(key=lambda item: item.priority, reverse=True)
+    return signals
+
+
+def _build_working_memory(
+    agent_input: AgentInput,
+    plan_items: list[AgentRAGQueryPlan],
+    evidence_bundles: list[EvidenceBundle],
+    findings: list[AgentFinding],
+    action_items: list[AgentActionItem],
+    limitations: list[str],
+) -> AgentWorkingMemory:
+    signals = _extract_input_signals(agent_input)
+    selected_rag_queries = [item.query_text for item in plan_items]
+
+    selected_topics = {_topic_from_name(item.query_text) for item in plan_items}
+    skipped_rag_queries: list[str] = []
+    for sig in signals:
+        if not sig.needs_rag_evidence:
+            continue
+        if sig.topic in selected_topics:
+            continue
+        skipped_rag_queries.append(f"{sig.topic}:{sig.name}")
+
+    bundles_by_query_id: dict[str, list[EvidenceBundle]] = defaultdict(list)
+    for bundle in evidence_bundles:
+        qid = str((bundle.metadata or {}).get("query_id", "")).strip()
+        if qid:
+            bundles_by_query_id[qid].append(bundle)
+
+    findings_by_query_id: dict[str, list[AgentFinding]] = defaultdict(list)
+    for finding in findings:
+        qid = str((finding.metadata or {}).get("query_id", "")).strip()
+        if qid:
+            findings_by_query_id[qid].append(finding)
+
+    actions_by_query_id: dict[str, list[AgentActionItem]] = defaultdict(list)
+    for action in action_items:
+        qid = str((action.metadata or {}).get("query_id", "")).strip()
+        if qid:
+            actions_by_query_id[qid].append(action)
+
+    plan_by_topic: dict[str, AgentRAGQueryPlan] = {}
+    for plan in plan_items:
+        topic = _topic_from_name(plan.query_text)
+        plan_by_topic.setdefault(topic, plan)
+
+    assessments: list[AgentFeatureAssessment] = []
+    for idx, sig in enumerate(signals[:12], start=1):
+        plan = plan_by_topic.get(sig.topic)
+        query_id = plan.query_id if plan else ""
+        linked_bundles = bundles_by_query_id.get(query_id, []) if query_id else []
+        linked_findings = findings_by_query_id.get(query_id, []) if query_id else []
+        linked_actions = actions_by_query_id.get(query_id, []) if query_id else []
+
+        evidence_status = "local_operational_concern"
+        if linked_bundles:
+            statuses = {item.support_status.value for item in linked_bundles}
+            if "insufficient_evidence" in statuses:
+                evidence_status = "insufficient_evidence"
+            elif "supported" in statuses or "partially_supported" in statuses:
+                evidence_status = "supported_concern"
+            else:
+                evidence_status = sorted(statuses)[0]
+        elif sig.needs_rag_evidence:
+            evidence_status = "not_queried"
+
+        conclusion = "monitoring_only"
+        if sig.priority >= 0.7:
+            conclusion = "supported concern" if evidence_status in {"supported_concern", "supported", "partially_supported"} else "local operational concern"
+        elif evidence_status == "insufficient_evidence":
+            conclusion = "insufficient evidence"
+        elif sig.priority < 0.35:
+            conclusion = "not risk-significant"
+
+        assessments.append(
+            AgentFeatureAssessment(
+                assessment_id=f"fa_{idx}",
+                signal_id=sig.signal_id,
+                feature_name=sig.name,
+                source=sig.source,
+                topic=sig.topic,
+                priority=sig.priority,
+                risk_relevance=sig.risk_relevance,
+                raw_value_summary=sig.value_summary,
+                rag_query=plan.query_text if plan else None,
+                evidence_status=evidence_status,
+                evidence_bundle_ids=[item.bundle_id for item in linked_bundles],
+                finding_ids=[item.finding_id for item in linked_findings],
+                action_item_ids=[item.action_id for item in linked_actions],
+                conclusion=conclusion,
+                limitations=[lim for lim in limitations if sig.topic in lim.lower()][:2],
+                metadata={
+                    "needs_rag_evidence": sig.needs_rag_evidence,
+                    "related_profile_fields": ",".join(sig.related_profile_fields),
+                    "related_scenario_fields": ",".join(sig.related_scenario_fields),
+                    "related_shap_features": ",".join(sig.related_shap_features),
+                },
+            )
+        )
+
+    coverage_summary = {
+        "input_signal_count": len(signals),
+        "feature_assessment_count": len(assessments),
+        "selected_rag_query_count": len(selected_rag_queries),
+        "skipped_rag_query_count": len(skipped_rag_queries),
+    }
+    reasoning_summary = (
+        f"Analyzed {len(signals)} signals across ML/SHAP/scenario/profile/operator context; "
+        f"built {len(assessments)} feature assessments and selected {len(selected_rag_queries)} RAG queries."
+    )
+
+    return AgentWorkingMemory(
+        input_signals=signals,
+        feature_assessments=assessments,
+        selected_rag_queries=selected_rag_queries,
+        skipped_rag_queries=skipped_rag_queries,
+        reasoning_summary=reasoning_summary,
+        coverage_summary=coverage_summary,
+        limitations=limitations[:8],
+        metadata={},
+    )
+
+
+def _dedupe_action_items(items: list[AgentActionItem]) -> list[AgentActionItem]:
+    seen: set[str] = set()
+    out: list[AgentActionItem] = []
+    for item in items:
+        key = " ".join(item.summary.lower().split())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
 class OperationalAgentV2:
     def __init__(
         self,
@@ -308,6 +598,7 @@ class OperationalAgentV2:
         checks_performed = ["ingest_agent_input", "summarize_ml_signal", "evaluate_evidence"]
         limitations: list[str] = []
         errors: list[Stage2Error] = []
+        plan_items: list[AgentRAGQueryPlan] = []
 
         if self._rag_adapter is None and not evidence_bundles:
             evidence_bundles.append(
@@ -348,6 +639,8 @@ class OperationalAgentV2:
         )
         findings.extend(inspector_findings)
         limitations.extend(inspector_limitations)
+
+        action_items = _dedupe_action_items(evidence_actions + inspector_actions)
 
         if any(bundle.support_status == EvidenceSupportStatus.INSUFFICIENT_EVIDENCE for bundle in evidence_bundles):
             findings.append(
@@ -402,13 +695,76 @@ class OperationalAgentV2:
             limitations=limitations,
         )
 
+        working_memory = _build_working_memory(
+            agent_input,
+            plan_items,
+            evidence_bundles,
+            findings,
+            action_items,
+            limitations,
+        )
+
+        query_ids = [str((item.metadata or {}).get("query_id", "")) for item in plan_items]
+        query_ids = [item for item in query_ids if item]
+        evidence_ids = [bundle.bundle_id for bundle in evidence_bundles]
+        finding_ids = [finding.finding_id for finding in findings]
+
+        tool_trace = [
+            AgentToolCall(
+                tool_name=AgentToolName.SHAP_TOPIC_MAPPER,
+                purpose="Derive UAV operational evidence topics from SHAP/scenario/operator context.",
+                input_summary=f"shap_features={len(agent_input.shap_top_features)} scenario_keys={len(agent_input.scenario_summary)}",
+                output_summary=f"planned_queries={len(plan_items)}",
+                status="ok",
+                related_query_ids=query_ids,
+                related_evidence_ids=[],
+                related_finding_ids=[],
+                metadata={},
+            ),
+            AgentToolCall(
+                tool_name=AgentToolName.RAG_RETRIEVAL,
+                purpose="Retrieve source-grounded evidence bundles for planned agent queries.",
+                input_summary=f"query_count={len(plan_items)} adapter_configured={self._rag_adapter is not None}",
+                output_summary=f"evidence_bundles={len(evidence_bundles)}",
+                status="ok" if not errors else "partial",
+                related_query_ids=query_ids,
+                related_evidence_ids=evidence_ids,
+                related_finding_ids=[],
+                metadata={},
+            ),
+            AgentToolCall(
+                tool_name=AgentToolName.SCENARIO_PROFILE_INSPECTOR,
+                purpose="Inspect scenario/profile operational constraints and enrich topic-level findings.",
+                input_summary=f"profile_context_present={agent_input.profile_context is not None}",
+                output_summary=f"total_findings={len(findings)}",
+                status="ok",
+                related_query_ids=query_ids,
+                related_evidence_ids=evidence_ids,
+                related_finding_ids=finding_ids,
+                metadata={},
+            ),
+            AgentToolCall(
+                tool_name=AgentToolName.FEATURE_RISK_ASSESSOR,
+                purpose="Prioritize mission signals and map them to feature-level operational assessments.",
+                input_summary=f"input_signals={len(working_memory.input_signals)}",
+                output_summary=f"feature_assessments={len(working_memory.feature_assessments)} selected_queries={len(working_memory.selected_rag_queries)}",
+                status="ok",
+                related_query_ids=query_ids,
+                related_evidence_ids=evidence_ids,
+                related_finding_ids=finding_ids,
+                metadata={},
+            ),
+        ]
+
         return AgentResult(
             status=Stage2Status.COMPLETED,
             recommendation=recommendation,
             confidence=confidence,
             findings=findings,
-            action_items=evidence_actions + inspector_actions,
+            action_items=action_items,
             reasoning_trace=trace,
+            tool_trace=tool_trace,
+            working_memory=working_memory,
             evidence_bundles=evidence_bundles,
             errors=errors,
             metadata=dict(agent_input.metadata),

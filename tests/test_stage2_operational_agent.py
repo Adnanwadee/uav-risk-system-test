@@ -14,6 +14,7 @@ from uav_risk.stage2.contracts import (
     AgentRecommendation,
     AgentResult,
     EvidenceSupportStatus,
+    Stage2ProfileContext,
 )
 
 
@@ -145,6 +146,11 @@ async def test_run_with_fake_supported_adapter_calls_retrieve_evidence() -> None
     assert calls
     assert all("risk class" not in c.lower() for c in calls)
     assert isinstance(result, AgentResult)
+    assert result.tool_trace
+    names = {item.tool_name.value for item in result.tool_trace}
+    assert "shap_topic_mapper" in names
+    assert "rag_retrieval" in names
+    assert "scenario_profile_inspector" in names
 
 
 @pytest.mark.asyncio
@@ -497,3 +503,181 @@ async def test_action_items_link_to_findings_metadata() -> None:
     result = await OperationalAgentV2(rag_adapter=FakeInsufficientAdapter(), max_queries=1).run(ai)
     assert result.action_items
     assert any("related_finding_id" in item.metadata for item in result.action_items)
+
+
+@pytest.mark.asyncio
+async def test_profile_context_drives_payload_and_swarm_concerns() -> None:
+    class FakeAdapter:
+        async def retrieve_evidence(self, query: str, *, scenario_context=None):
+            from uav_risk.stage2.contracts import EvidenceBundle, EvidenceCitation, EvidenceOrigin, EvidenceSourceType
+
+            citation = EvidenceCitation(
+                citation_id="c-prof",
+                source_id="src-prof",
+                source_title="AC_107-2A",
+                source_type=EvidenceSourceType.INTERNAL_DOC,
+                origin=EvidenceOrigin.LOCAL_DOCUMENT,
+                quote="supported quote",
+            )
+            return EvidenceBundle(
+                bundle_id="b-prof",
+                query=query,
+                claims=[],
+                citations=[citation],
+                support_status=EvidenceSupportStatus.SUPPORTED,
+                confidence=0.8,
+            )
+
+    ai = _agent_input("Medium Risk")
+    ai.scenario_summary.update({
+        "uav_payload_mass_kg": 9.0,
+        "swarm_enabled": True,
+        "swarm_size": 4.0,
+    })
+    ai.profile_context = Stage2ProfileContext(
+        profile_id="p1",
+        max_payload_kg=10.0,
+        swarm_capable=False,
+        max_swarm_size=2,
+    )
+
+    result = await OperationalAgentV2(rag_adapter=FakeAdapter(), max_queries=1).run(ai)
+    summaries = "\n".join(f.summary for f in result.findings)
+    assert "payload appears close to profile payload capacity" in summaries.lower()
+    assert "multi-uas/swarm operation" in summaries.lower()
+
+
+@pytest.mark.asyncio
+async def test_missing_profile_context_preserves_existing_behavior() -> None:
+    class FakeInsufficientAdapter:
+        async def retrieve_evidence(self, query: str, *, scenario_context=None):
+            from uav_risk.stage2.contracts import make_insufficient_evidence_bundle
+
+            return make_insufficient_evidence_bundle(query, "No sufficient evidence candidates passed retrieval safety checks.")
+
+    ai = _agent_input("Medium Risk")
+    ai.profile_context = None
+    result = await OperationalAgentV2(rag_adapter=FakeInsufficientAdapter(), max_queries=1).run(ai)
+    assert result.findings
+    assert result.recommendation in {AgentRecommendation.INSUFFICIENT_EVIDENCE, AgentRecommendation.CAUTION}
+
+
+@pytest.mark.asyncio
+async def test_tool_trace_does_not_expose_private_reasoning_fields() -> None:
+    result = await OperationalAgentV2(rag_adapter=None).run(_agent_input())
+    serialized = str([item.model_dump() for item in result.tool_trace]).lower()
+    assert "chain_of_thought" not in serialized
+    assert "scratchpad" not in serialized
+    assert "internal_reasoning" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_agent_result_includes_working_memory_signals_and_assessments() -> None:
+    class FakeAdapter:
+        async def retrieve_evidence(self, query: str, *, scenario_context=None):
+            from uav_risk.stage2.contracts import EvidenceBundle, EvidenceCitation, EvidenceOrigin, EvidenceSourceType
+
+            citation = EvidenceCitation(
+                citation_id="c-wm",
+                source_id="src-wm",
+                source_title="AC_107-2A",
+                source_type=EvidenceSourceType.INTERNAL_DOC,
+                origin=EvidenceOrigin.LOCAL_DOCUMENT,
+                quote="weather preflight quote",
+            )
+            return EvidenceBundle(
+                bundle_id="b-wm",
+                query=query,
+                claims=[],
+                citations=[citation],
+                support_status=EvidenceSupportStatus.SUPPORTED,
+                confidence=0.8,
+            )
+
+    ai = _agent_input("Medium Risk")
+    ai.profile_context = Stage2ProfileContext(max_payload_kg=2.5, max_altitude_m=120.0, swarm_capable=False)
+    result = await OperationalAgentV2(rag_adapter=FakeAdapter(), max_queries=3).run(ai)
+    assert result.working_memory is not None
+    sources = {s.source.value for s in result.working_memory.input_signals}
+    assert {"ml", "shap", "scenario", "profile", "operator_notes"}.issubset(sources)
+    assert result.working_memory.feature_assessments
+
+
+@pytest.mark.asyncio
+async def test_high_priority_signals_are_selected_for_rag_queries() -> None:
+    class FakeAdapter:
+        async def retrieve_evidence(self, query: str, *, scenario_context=None):
+            from uav_risk.stage2.contracts import make_insufficient_evidence_bundle
+
+            return make_insufficient_evidence_bundle(query, "not enough")
+
+    result = await OperationalAgentV2(rag_adapter=FakeAdapter(), max_queries=3).run(_agent_input("High Risk"))
+    assert result.working_memory is not None
+    assert result.working_memory.selected_rag_queries
+    assert all("risk class" not in q.lower() for q in result.working_memory.selected_rag_queries)
+
+
+@pytest.mark.asyncio
+async def test_feature_assessments_link_to_evidence_and_findings_when_available() -> None:
+    class FakeAdapter:
+        async def retrieve_evidence(self, query: str, *, scenario_context=None):
+            from uav_risk.stage2.contracts import EvidenceBundle, EvidenceCitation, EvidenceOrigin, EvidenceSourceType
+
+            citation = EvidenceCitation(
+                citation_id="c-link",
+                source_id="src-link",
+                source_title="SORA",
+                source_type=EvidenceSourceType.INTERNAL_DOC,
+                origin=EvidenceOrigin.LOCAL_DOCUMENT,
+                quote="command and control guidance",
+            )
+            return EvidenceBundle(
+                bundle_id="b-link",
+                query=query,
+                claims=[],
+                citations=[citation],
+                support_status=EvidenceSupportStatus.SUPPORTED,
+                confidence=0.8,
+            )
+
+    result = await OperationalAgentV2(rag_adapter=FakeAdapter(), max_queries=2).run(_agent_input("Medium Risk"))
+    assert result.working_memory is not None
+    assert any(item.evidence_bundle_ids for item in result.working_memory.feature_assessments)
+    assert any(item.finding_ids or item.action_item_ids for item in result.working_memory.feature_assessments)
+
+
+@pytest.mark.asyncio
+async def test_action_items_are_deduplicated() -> None:
+    class SameAdapter:
+        async def retrieve_evidence(self, query: str, *, scenario_context=None):
+            from uav_risk.stage2.contracts import EvidenceBundle, EvidenceCitation, EvidenceOrigin, EvidenceSourceType
+
+            citation = EvidenceCitation(
+                citation_id="c-dup",
+                source_id="src-dup",
+                source_title="AC_107-2A",
+                source_type=EvidenceSourceType.INTERNAL_DOC,
+                origin=EvidenceOrigin.LOCAL_DOCUMENT,
+                quote="same quote",
+            )
+            return EvidenceBundle(
+                bundle_id="b-dup",
+                query="AC 107-2A airspace authorization controlled airspace small UAS operation",
+                claims=[],
+                citations=[citation],
+                support_status=EvidenceSupportStatus.SUPPORTED,
+                confidence=0.8,
+                metadata={"source_intent": "ac107", "query_id": "q-dup", "derived_from": "scenario"},
+            )
+
+    result = await OperationalAgentV2(rag_adapter=SameAdapter(), max_queries=2).run(_agent_input("Medium Risk"))
+    summaries = [item.summary for item in result.action_items]
+    assert len(summaries) == len(set(" ".join(s.lower().split()) for s in summaries))
+
+
+@pytest.mark.asyncio
+async def test_tool_trace_includes_feature_risk_assessor() -> None:
+    result = await OperationalAgentV2(rag_adapter=None).run(_agent_input("Medium Risk"))
+    names = {item.tool_name.value for item in result.tool_trace}
+    assert "feature_risk_assessor" in names
+

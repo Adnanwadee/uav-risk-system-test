@@ -1,0 +1,30 @@
+.git
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.cache/
+
+# Local generated analysis/snapshots
+analysis/static_analysis.json
+project_structure.txt
+patch_progress_snapshot.txt
+my_current_uncommitted_changes.patch
+safety_backup/
+
+# Local notebooks and non-runtime docs/tests for API-runtime image builds
+notebooks/
+docs/
+tests/
+
+# Runtime-generated or local-only artifacts
+artifacts/scenario_traces/
+artifacts/safe_values_worklist.csv
+artifacts/safe_values_worklist.json
+src/uav_risk/stage2/knowledge/cache/
+src/uav_risk/stage2/knowledge/logs/

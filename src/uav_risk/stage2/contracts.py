@@ -307,6 +307,46 @@ class LLMSynthesisStatus(str, Enum):
     FAILED = "failed"
 
 
+class LLMRuntimeConfig(BaseModel):
+    enabled: bool = False
+    provider: str = "fallback"
+    model_name: str | None = None
+    temperature: float = 0.1
+    max_tokens: int = 1200
+    timeout_seconds: float = 20.0
+    use_fallback_on_error: bool = True
+    allow_external_provider: bool = False
+
+    @field_validator("provider")
+    @classmethod
+    def _validate_provider(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if not cleaned:
+            return "fallback"
+        return cleaned
+
+    @field_validator("temperature")
+    @classmethod
+    def _validate_temperature(cls, value: float) -> float:
+        if not (0.0 <= value <= 2.0):
+            raise ValueError("temperature must be within [0.0, 2.0]")
+        return value
+
+    @field_validator("max_tokens")
+    @classmethod
+    def _validate_max_tokens(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("max_tokens must be >= 1")
+        return value
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def _validate_timeout_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("timeout_seconds must be > 0")
+        return value
+
+
 class LLMSynthesisWarning(BaseModel):
     warning_type: str
     message: str
@@ -368,6 +408,94 @@ class LLMAgentSynthesis(BaseModel):
         return value
 
 
+class DecisionPolicyConfig(BaseModel):
+    ml_weight: float = 0.22
+    shap_weight: float = 0.10
+    rag_weight: float = 0.28
+    agent_weight: float = 0.25
+    scenario_profile_weight: float = 0.10
+    llm_weight: float = 0.05
+    go_threshold: float = 0.35
+    no_go_threshold: float = 0.70
+    policy_name: str = "default_uav_operational_policy_v1"
+    policy_version: str = "1.0"
+    weight_rationales: dict[str, str] = Field(
+        default_factory=lambda: {
+            "ml": "ML provides a learned risk signal but is not the final authority.",
+            "shap": "SHAP explains the model output and is used as interpretability context only.",
+            "rag": "RAG receives a high weight because it provides evidence-grounded citations and limitations.",
+            "agent": "The operational agent aggregates evidence, scenario concerns, and action items.",
+            "scenario_profile": "Scenario and profile context represent direct operational constraints.",
+            "llm": "LLM synthesis is used for narrative coordination and consistency warnings, not final authority.",
+        }
+    )
+
+    @field_validator(
+        "ml_weight",
+        "shap_weight",
+        "rag_weight",
+        "agent_weight",
+        "scenario_profile_weight",
+        "llm_weight",
+        "go_threshold",
+        "no_go_threshold",
+    )
+    @classmethod
+    def _validate_non_negative_and_unit_interval(cls, value: float) -> float:
+        if value < 0.0:
+            raise ValueError("policy values must be non-negative")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_policy(self) -> "DecisionPolicyConfig":
+        for threshold_name, threshold in (("go_threshold", self.go_threshold), ("no_go_threshold", self.no_go_threshold)):
+            if not (0.0 <= threshold <= 1.0):
+                raise ValueError(f"{threshold_name} must be within [0, 1]")
+        if self.go_threshold >= self.no_go_threshold:
+            raise ValueError("go_threshold must be less than no_go_threshold")
+
+        total_weight = (
+            self.ml_weight
+            + self.shap_weight
+            + self.rag_weight
+            + self.agent_weight
+            + self.scenario_profile_weight
+            + self.llm_weight
+        )
+        if abs(total_weight - 1.0) > 0.02:
+            raise ValueError("decision policy weights must sum close to 1.0")
+
+        required_rationales = {"ml", "shap", "rag", "agent", "scenario_profile", "llm"}
+        missing = sorted(item for item in required_rationales if not str(self.weight_rationales.get(item, "")).strip())
+        if missing:
+            raise ValueError(f"missing weight rationales: {', '.join(missing)}")
+        return self
+
+
+class Stage2ProfileContext(BaseModel):
+    profile_id: str | None = None
+    profile_name: str | None = None
+    uav_mass_kg: float | None = None
+    max_payload_kg: float | None = None
+    max_takeoff_mass_kg: float | None = None
+    max_speed_mps: float | None = None
+    max_flight_time_min: float | None = None
+    reserve_fraction: float | None = None
+    hover_ceiling_m: float | None = None
+    max_altitude_m: float | None = None
+    swarm_capable: bool | None = None
+    max_swarm_size: int | None = None
+    runway_required: bool | None = None
+    gnss_available: bool | None = None
+    camera_available: bool | None = None
+    lidar_available: bool | None = None
+    radar_available: bool | None = None
+    parachute_available: bool | None = None
+    detect_and_avoid_available: bool | None = None
+    sensor_summary: list[str] = Field(default_factory=list)
+    metadata: MetadataMap = Field(default_factory=dict)
+
+
 class AgentRecommendation(str, Enum):
     GO = "go"
     CAUTION = "caution"
@@ -423,6 +551,96 @@ class AgentRAGQueryPlan(BaseModel):
         if value < 1:
             raise ValueError("priority must be >= 1")
         return value
+
+
+class AgentToolName(str, Enum):
+    RAG_RETRIEVAL = "rag_retrieval"
+    SHAP_TOPIC_MAPPER = "shap_topic_mapper"
+    SCENARIO_PROFILE_INSPECTOR = "scenario_profile_inspector"
+    FEATURE_RISK_ASSESSOR = "feature_risk_assessor"
+    DECISION_EXPLAINER = "decision_explainer"
+    LLM_REPORT_SYNTHESIZER = "llm_report_synthesizer"
+
+
+class AgentToolCall(BaseModel):
+    tool_name: AgentToolName
+    purpose: str
+    input_summary: str
+    output_summary: str
+    status: str
+    related_query_ids: list[str] = Field(default_factory=list)
+    related_evidence_ids: list[str] = Field(default_factory=list)
+    related_finding_ids: list[str] = Field(default_factory=list)
+    metadata: MetadataMap = Field(default_factory=dict)
+
+    @field_validator("purpose", "input_summary", "output_summary", "status")
+    @classmethod
+    def _validate_non_empty_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value must be non-empty")
+        return value
+
+    @field_validator("related_query_ids", "related_evidence_ids", "related_finding_ids")
+    @classmethod
+    def _validate_ids(cls, value: list[str]) -> list[str]:
+        for item in value:
+            if not item.strip():
+                raise ValueError("related id lists cannot contain empty strings")
+        return value
+
+
+
+class SystemWorkTraceEntry(BaseModel):
+    step_id: str
+    stage: str
+    tool_name: str | None = None
+    status: str
+    input_summary: str | None = None
+    output_summary: str | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    started_at: str | None = None
+    completed_at: str | None = None
+    duration_ms: int | None = None
+    public_safe: bool = True
+
+    @field_validator("step_id", "stage", "status")
+    @classmethod
+    def _validate_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value must be non-empty")
+        return value
+
+    @field_validator("tool_name", "input_summary", "output_summary", "started_at", "completed_at")
+    @classmethod
+    def _normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @field_validator("duration_ms")
+    @classmethod
+    def _validate_duration_ms(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError("duration_ms must be >= 0")
+        return value
+
+
+class SystemWorkTrace(BaseModel):
+    entries: list[SystemWorkTraceEntry] = Field(default_factory=list)
+    summary: str | None = None
+    public_safe: bool = True
+
+    @field_validator("summary")
+    @classmethod
+    def _normalize_summary(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
 
 
 class AgentFindingType(str, Enum):
@@ -485,9 +703,110 @@ class AgentActionItem(BaseModel):
         return value
 
 
+class AgentSignalSource(str, Enum):
+    PROFILE = "profile"
+    SCENARIO = "scenario"
+    ML = "ml"
+    SHAP = "shap"
+    OPERATOR_NOTES = "operator_notes"
+    RAG = "rag"
+    INSPECTOR = "inspector"
+
+
+class AgentRiskRelevance(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class AgentInputSignal(BaseModel):
+    signal_id: str
+    source: AgentSignalSource
+    name: str
+    value_summary: str
+    topic: str
+    priority: float
+    risk_relevance: AgentRiskRelevance
+    needs_rag_evidence: bool = False
+    related_profile_fields: list[str] = Field(default_factory=list)
+    related_scenario_fields: list[str] = Field(default_factory=list)
+    related_shap_features: list[str] = Field(default_factory=list)
+    metadata: MetadataMap = Field(default_factory=dict)
+
+    @field_validator("signal_id", "name", "value_summary", "topic")
+    @classmethod
+    def _validate_non_empty_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value must be non-empty")
+        return value
+
+    @field_validator("priority")
+    @classmethod
+    def _validate_priority(cls, value: float) -> float:
+        if not (0.0 <= value <= 1.0):
+            raise ValueError("priority must be within [0.0, 1.0]")
+        return value
+
+
+class AgentFeatureAssessment(BaseModel):
+    assessment_id: str
+    signal_id: str
+    feature_name: str
+    source: AgentSignalSource
+    topic: str
+    priority: float
+    risk_relevance: AgentRiskRelevance
+    raw_value_summary: str
+    rag_query: str | None = None
+    evidence_status: str
+    evidence_bundle_ids: list[str] = Field(default_factory=list)
+    finding_ids: list[str] = Field(default_factory=list)
+    action_item_ids: list[str] = Field(default_factory=list)
+    conclusion: str
+    limitations: list[str] = Field(default_factory=list)
+    metadata: MetadataMap = Field(default_factory=dict)
+
+    @field_validator(
+        "assessment_id",
+        "signal_id",
+        "feature_name",
+        "topic",
+        "raw_value_summary",
+        "evidence_status",
+        "conclusion",
+    )
+    @classmethod
+    def _validate_non_empty_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value must be non-empty")
+        return value
+
+    @field_validator("priority")
+    @classmethod
+    def _validate_priority(cls, value: float) -> float:
+        if not (0.0 <= value <= 1.0):
+            raise ValueError("priority must be within [0.0, 1.0]")
+        return value
+
+
+class AgentWorkingMemory(BaseModel):
+    input_signals: list[AgentInputSignal] = Field(default_factory=list)
+    feature_assessments: list[AgentFeatureAssessment] = Field(default_factory=list)
+    selected_rag_queries: list[str] = Field(default_factory=list)
+    skipped_rag_queries: list[str] = Field(default_factory=list)
+    reasoning_summary: str = ""
+    coverage_summary: MetadataMap = Field(default_factory=dict)
+    limitations: list[str] = Field(default_factory=list)
+    metadata: MetadataMap = Field(default_factory=dict)
+
+
 class AgentInput(BaseModel):
     assessment_id: str | None = None
     scenario_summary: MetadataMap = Field(default_factory=dict)
+    profile_context: Stage2ProfileContext | None = None
     ml_prediction: str | None = None
     ml_probabilities: dict[str, float] = Field(default_factory=dict)
     shap_top_features: list[MetadataMap] = Field(default_factory=list)
@@ -511,6 +830,8 @@ class AgentResult(BaseModel):
     findings: list[AgentFinding] = Field(default_factory=list)
     action_items: list[AgentActionItem] = Field(default_factory=list)
     reasoning_trace: PublicReasoningTrace
+    tool_trace: list[AgentToolCall] = Field(default_factory=list)
+    working_memory: AgentWorkingMemory | None = None
     evidence_bundles: list[EvidenceBundle] = Field(default_factory=list)
     errors: list[Stage2Error] = Field(default_factory=list)
     metadata: MetadataMap = Field(default_factory=dict)
@@ -603,6 +924,7 @@ class Stage2AssessmentInput(BaseModel):
     user_id: str
     profile_id: str
     scenario_summary: MetadataMap = Field(default_factory=dict)
+    profile_context: Stage2ProfileContext | None = None
     ml: MLAssessmentSnapshot
     evidence_bundles: list[EvidenceBundle] = Field(default_factory=list)
     operator_notes: str | None = None
@@ -646,6 +968,7 @@ class OperationalReportSectionType(str, Enum):
     DECISION_ENGINE = "decision_engine"
     LLM_SYNTHESIS = "llm_synthesis"
     AGENT_ASSESSMENT = "agent_assessment"
+    AGENT_TOOL_TRACE = "agent_tool_trace"
     LIMITATIONS = "limitations"
     OPERATOR_ACTIONS = "operator_actions"
     ERRORS = "errors"

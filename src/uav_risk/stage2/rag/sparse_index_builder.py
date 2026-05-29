@@ -1,5 +1,10 @@
 """
-Sparse Index Builder - Secure, Rebuildable, Corpus-aware
+Legacy/demo/manual-only sparse index builder.
+
+This module is not canonical runtime and should not be used as final readiness evidence.
+Canonical readiness commands are listed in README.md.
+
+Sparse Index Builder - Secure, Rebuildable, Corpus-aware.
 Builds sparse index (TF-IDF/BM25) from corpus with state tracking.
 """
 import json

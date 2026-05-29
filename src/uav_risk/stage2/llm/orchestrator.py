@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
@@ -9,6 +11,7 @@ from uav_risk.stage2.contracts import (
     AgentActionItem,
     AgentFinding,
     AgentResult,
+    LLMRuntimeConfig,
     DecisionEngineResult,
     EvidenceBundle,
     LLMAgentSynthesis,
@@ -33,6 +36,30 @@ class LLMProviderProtocol(Protocol):
         ...
 
 
+def _env_true(name: str) -> bool:
+    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def load_llm_runtime_config_from_env() -> LLMRuntimeConfig:
+    enabled = _env_true("LLM_ENABLED")
+    provider = str(os.getenv("LLM_PROVIDER", "fallback") or "fallback").strip().lower()
+    model_name = str(os.getenv("GROQ_MODEL", "") or "").strip() or None
+
+    api_key_present = bool(str(os.getenv("GROQ_API_KEY", "") or "").strip())
+    externally_allowed = enabled and provider == "groq" and api_key_present
+
+    return LLMRuntimeConfig(
+        enabled=enabled,
+        provider=provider if externally_allowed else "fallback",
+        model_name=model_name,
+        temperature=float(os.getenv("LLM_TEMPERATURE", "0.1") or 0.1),
+        max_tokens=int(os.getenv("LLM_MAX_TOKENS", "1200") or 1200),
+        timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "20.0") or 20.0),
+        use_fallback_on_error=_env_true("LLM_USE_FALLBACK_ON_ERROR") if os.getenv("LLM_USE_FALLBACK_ON_ERROR") is not None else True,
+        allow_external_provider=externally_allowed,
+    )
+
+
 @dataclass(frozen=True)
 class LLMOrchestratorConfig:
     enabled: bool = True
@@ -42,17 +69,49 @@ class LLMOrchestratorConfig:
     max_quote_preview_chars: int = 280
 
 
+def build_llm_orchestrator_from_env() -> "LLMOrchestrator":
+    runtime = load_llm_runtime_config_from_env()
+    config = LLMOrchestratorConfig(
+        enabled=runtime.enabled,
+        use_fallback_without_provider=runtime.use_fallback_on_error,
+        model_name=runtime.model_name,
+        provider_name=runtime.provider,
+    )
+
+    if not runtime.allow_external_provider or runtime.provider != "groq":
+        return LLMOrchestrator(provider=None, config=config)
+
+    try:
+        from uav_risk.stage2.llm.groq_client import GroqLLMProvider
+
+        provider = GroqLLMProvider(
+            api_key=os.getenv("GROQ_API_KEY"),
+            model_name=runtime.model_name,
+            temperature=runtime.temperature,
+            max_tokens=runtime.max_tokens,
+            timeout_seconds=runtime.timeout_seconds,
+        )
+        return LLMOrchestrator(provider=provider, config=config)
+    except Exception:
+        return LLMOrchestrator(provider=None, config=config)
+
+
 def _clean_text(value: Any, fallback: str) -> str:
     text = str(value or "").strip()
     return text or fallback
 
 
-def _warning(warning_type: str, message: str, related_ids: list[str] | None = None) -> LLMSynthesisWarning:
+def _warning(
+    warning_type: str,
+    message: str,
+    related_ids: list[str] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> LLMSynthesisWarning:
     return LLMSynthesisWarning(
         warning_type=warning_type,
         message=message,
         related_ids=related_ids or [],
-        metadata={},
+        metadata=dict(metadata or {}),
     )
 
 
@@ -211,6 +270,50 @@ def build_llm_synthesis_context(
             "findings": findings,
             "action_items": action_items,
             "limitations": list(agent.reasoning_trace.limitations),
+            "tool_trace": [
+                {
+                    "tool_name": item.tool_name.value,
+                    "purpose": item.purpose,
+                    "status": item.status,
+                    "input_summary": item.input_summary,
+                    "output_summary": item.output_summary,
+                    "related_query_ids": list(item.related_query_ids),
+                    "related_evidence_ids": list(item.related_evidence_ids),
+                    "related_finding_ids": list(item.related_finding_ids),
+                }
+                for item in agent.tool_trace
+            ],
+            "working_memory": None
+            if agent.working_memory is None
+            else {
+                "coverage_summary": dict(agent.working_memory.coverage_summary),
+                "reasoning_summary": agent.working_memory.reasoning_summary,
+                "selected_rag_queries": list(agent.working_memory.selected_rag_queries),
+                "limitations": list(agent.working_memory.limitations),
+                "top_input_signals": [
+                    {
+                        "signal_id": item.signal_id,
+                        "source": item.source.value,
+                        "name": item.name,
+                        "topic": item.topic,
+                        "priority": item.priority,
+                        "risk_relevance": item.risk_relevance.value,
+                        "needs_rag_evidence": item.needs_rag_evidence,
+                    }
+                    for item in agent.working_memory.input_signals[:10]
+                ],
+                "top_feature_assessments": [
+                    {
+                        "assessment_id": item.assessment_id,
+                        "feature_name": item.feature_name,
+                        "topic": item.topic,
+                        "priority": item.priority,
+                        "evidence_status": item.evidence_status,
+                        "conclusion": item.conclusion,
+                    }
+                    for item in agent.working_memory.feature_assessments[:10]
+                ],
+            },
         },
         "allowed_reference_ids": sorted(_allowed_reference_ids(stage2_result)),
         "safety_rules": [
@@ -223,11 +326,32 @@ def build_llm_synthesis_context(
 
 
 def _build_prompt(context: Mapping[str, Any]) -> str:
+    allowed_fields = [
+        "status",
+        "executive_summary",
+        "operational_interpretation",
+        "decision_explanation",
+        "key_risk_drivers",
+        "mitigation_narrative",
+        "consistency_warnings",
+        "evidence_reference_ids",
+        "finding_ids",
+        "action_item_ids",
+        "limitation_ids",
+        "model_name",
+        "provider",
+        "metadata",
+    ]
     return (
         "You are a constrained UAV operational report synthesis assistant. "
         "Use only the JSON context. Do not invent facts, citations, evidence, or support statuses. "
-        "Do not change the final decision. Do not include chain-of-thought. "
-        "Return valid JSON matching LLMAgentSynthesis.\n\n"
+        "Do not change the final decision. Do not include chain-of-thought or hidden reasoning. "
+        "Return exactly one JSON object and no surrounding text. "
+        "Allowed top-level fields only: " + ", ".join(allowed_fields) + ". "
+        "Use only reference IDs provided in allowed_reference_ids; if unsure, return empty lists for reference IDs. "
+        "Do not invent numeric scores, confidence values, evidence counts, or citation counts; use exact provided values only or omit numbers. "
+        "Do not set provider, model_name, or runtime metadata; backend will attach runtime ownership fields. "
+        "Do not produce legal conclusions beyond provided deterministic outputs.\n\n"
         + json.dumps(context, indent=2, sort_keys=True, ensure_ascii=False)
     )
 
@@ -309,6 +433,49 @@ def _fallback_synthesis(
     )
 
 
+
+_DECISION_SCORE_PATTERN = re.compile(r"decision\s*score[^0-9]*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+_CONFIDENCE_PATTERN = re.compile(r"confidence(?:\s*level)?[^a-z]*(low|medium|high)", re.IGNORECASE)
+_DECISION_WORD_PATTERN = re.compile(r"final\s+decision\s+(?:is|=)?\s*(go|caution|no[_\s-]?go)", re.IGNORECASE)
+
+
+def _validate_generated_narrative_consistency(synthesis: LLMAgentSynthesis, decision: DecisionEngineResult | None) -> None:
+    if decision is None:
+        return
+
+    combined = " ".join(
+        [
+            synthesis.executive_summary,
+            synthesis.operational_interpretation,
+            synthesis.decision_explanation,
+            synthesis.mitigation_narrative,
+        ]
+    )
+
+    score_match = _DECISION_SCORE_PATTERN.search(combined)
+    if score_match is not None:
+        try:
+            mentioned = float(score_match.group(1))
+        except Exception:
+            mentioned = None
+        if mentioned is not None and abs(mentioned - float(decision.decision_score)) > 0.02:
+            raise ValueError("LLM narrative decision score inconsistent with backend decision score")
+
+    confidence_match = _CONFIDENCE_PATTERN.search(combined)
+    if confidence_match is not None:
+        mentioned_conf = confidence_match.group(1).lower().strip()
+        expected_conf = decision.confidence_level.value.lower().strip()
+        if mentioned_conf != expected_conf:
+            raise ValueError("LLM narrative confidence level inconsistent with backend confidence level")
+
+    decision_word_match = _DECISION_WORD_PATTERN.search(combined)
+    if decision_word_match is not None:
+        mentioned_decision = decision_word_match.group(1).lower().replace("_", "-").replace(" ", "-").strip()
+        expected_decision = decision.final_decision.value.lower().replace("_", "-").strip()
+        if mentioned_decision != expected_decision:
+            raise ValueError("LLM narrative final decision inconsistent with backend final decision")
+
+
 def validate_llm_synthesis_output(
     raw_output: Mapping[str, Any],
     *,
@@ -327,12 +494,25 @@ def validate_llm_synthesis_output(
     payload = dict(raw_output)
     payload.pop("final_decision", None)
     payload["status"] = LLMSynthesisStatus.GENERATED.value
-    payload.setdefault("model_name", model_name)
-    payload.setdefault("provider", provider_name)
+    # Backend-owned runtime fields: always overwrite any provider/model proposed by LLM.
+    payload["model_name"] = model_name
+    payload["provider"] = provider_name
     payload.setdefault("metadata", {})
-    payload["metadata"] = {**dict(payload.get("metadata") or {}), "llm_called": True}
+    metadata = dict(payload.get("metadata") or {})
+    for blocked_key in (
+        "final_decision",
+        "decision_score",
+        "confidence_level",
+        "ml_probabilities",
+        "evidence_count",
+        "citation_count",
+    ):
+        metadata.pop(blocked_key, None)
+    metadata["llm_called"] = True
+    payload["metadata"] = metadata
 
     synthesis = LLMAgentSynthesis.model_validate(payload)
+    _validate_generated_narrative_consistency(synthesis, decision)
     allowed = _allowed_reference_ids(stage2_result)
     referenced = set(synthesis.evidence_reference_ids) | set(synthesis.finding_ids) | set(synthesis.action_item_ids)
     unknown = sorted(item for item in referenced if item not in allowed)
@@ -385,11 +565,58 @@ class LLMOrchestrator:
                 model_name=self.config.model_name,
             )
         except Exception as exc:
+            reason_code = str(getattr(exc, "reason_code", "provider_invalid") or "provider_invalid")
+            safe_message = str(getattr(exc, "safe_message", "") or "").strip()
+            raw_message = safe_message or str(exc or "provider error")
+            lowered = raw_message.lower()
+
+            reason_to_short = {
+                "sdk_missing": "provider sdk missing",
+                "client_init_error": "provider client init error",
+                "network_call_error": "provider network call error",
+                "empty_response": "provider empty response",
+                "invalid_json": "invalid json",
+                "response_parse_error": "provider response parse error",
+                "unsupported_response_format": "unsupported response format",
+                "model_error": "provider model error",
+                "auth_error": "provider auth error",
+                "rate_limit": "provider rate limited",
+                "timeout": "provider timeout",
+                "schema_unavailable": "provider schema unavailable",
+                "unknown_api_error": "provider api error",
+                "provider_invalid": "provider response invalid",
+            }
+            redacted_message = reason_to_short.get(reason_code, "provider response invalid")
+            if "forbidden" in lowered:
+                redacted_message = "forbidden field detected"
+            elif "unknown id" in lowered or "referenced unknown" in lowered:
+                redacted_message = "unknown reference ids"
+            elif "json" in lowered and reason_code == "provider_invalid":
+                redacted_message = "invalid json"
+
+            invalid_reference_count = 0
+            if "unknown IDs:" in raw_message:
+                suffix = raw_message.split("unknown IDs:", 1)[-1].strip()
+                invalid_reference_count = len([item for item in suffix.split(",") if item.strip()])
+
+            warning_meta = {
+                "provider_error_type": reason_code,
+                "provider_error_message_short": redacted_message,
+                "validation_error_type": type(exc).__name__,
+                "invalid_reference_count": invalid_reference_count,
+                "forbidden_field_detected": "forbidden" in lowered,
+            }
             return _fallback_synthesis(
                 stage2_input,
                 stage2_result,
                 status=LLMSynthesisStatus.FALLBACK,
-                warnings=[_warning("llm_provider_invalid", "LLM provider output was unavailable or failed validation.")],
+                warnings=[
+                    _warning(
+                        "llm_provider_invalid",
+                        "LLM provider output was unavailable or failed validation.",
+                        metadata=warning_meta,
+                    )
+                ],
                 config=self.config,
             )
 

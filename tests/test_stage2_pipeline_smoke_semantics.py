@@ -137,7 +137,7 @@ async def test_smoke_separates_global_quality_from_scenario_sufficiency(monkeypa
 
     monkeypatch.setattr(smoke, "run_rag_runtime_diagnostic", fake_run_diag)
 
-    result = await smoke._run(use_real_rag=True, use_llm_fallback=True)
+    result = await smoke._run(use_real_rag=True, use_llm_fallback=True, use_env_llm=False)
     assert result["rag_quality_is_proven"] is True
     assert result["quality_is_proven"] is True
     assert result["scenario_evidence_complete"] is False
@@ -181,5 +181,97 @@ async def test_smoke_separates_global_quality_from_scenario_sufficiency(monkeypa
             "warning_type": "llm_fallback",
             "message": "Fallback synthesis used.",
             "related_ids": [],
+            "metadata": {},
         }
     ]
+
+    assert result["llm_provider"] is None
+    assert result["llm_model_name"] is None
+    assert result["external_llm_provider_used"] is False
+
+
+@pytest.mark.asyncio
+async def test_smoke_env_llm_path_selected_without_real_network_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    import scripts.run_stage2_pipeline_v2_smoke as smoke
+
+    class FakePipeline:
+        def __init__(self, *args, **kwargs) -> None:
+            assert kwargs.get("llm_orchestrator") is not None
+
+        async def run(self, _):
+            return Stage2AssessmentResult(
+                status=Stage2Status.COMPLETED,
+                assessment_id="a2",
+                evidence_bundles=[],
+                agent_result=AgentResult(
+                    status=Stage2Status.COMPLETED,
+                    recommendation=AgentRecommendation.CAUTION,
+                    confidence=0.5,
+                    findings=[
+                        {
+                            "finding_id": "f2",
+                            "finding_type": "limitation",
+                            "severity": "low",
+                            "summary": "ok",
+                            "requires_evidence": False,
+                        }
+                    ],
+                    action_items=[],
+                    reasoning_trace=PublicReasoningTrace(),
+                    evidence_bundles=[],
+                    errors=[],
+                ),
+                decision=DecisionEngineResult(
+                    final_decision=FinalDecision.CAUTION,
+                    decision_score=0.4,
+                    confidence_level=DecisionConfidenceLevel.MEDIUM,
+                    stage_weights={},
+                    stage_contributions=[],
+                    decision_reasons=[],
+                    blocking_reasons=[],
+                    required_actions=[],
+                    limitations=[],
+                    evidence_refs=[],
+                ),
+                llm_synthesis=LLMAgentSynthesis(
+                    status=LLMSynthesisStatus.GENERATED,
+                    executive_summary="summary",
+                    operational_interpretation="interpretation",
+                    decision_explanation="explanation",
+                    key_risk_drivers=[],
+                    mitigation_narrative="mitigation",
+                    consistency_warnings=[],
+                    evidence_reference_ids=[],
+                    finding_ids=[],
+                    action_item_ids=[],
+                    limitation_ids=[],
+                    provider="groq",
+                    model_name="test-model",
+                ),
+                errors=[],
+                metadata={},
+            )
+
+    class FakeProv:
+        provenance_status = "current"
+        index_path = "/tmp/dense_index.faiss"
+        sparse_index_path = "/tmp/sparse_index.pkl"
+        path_resolution_status = "canonical"
+
+    monkeypatch.setattr(smoke, "Stage2PipelineV2", FakePipeline)
+    monkeypatch.setattr(smoke, "inspect_rag_index_provenance", lambda: FakeProv())
+    monkeypatch.setattr(smoke, "build_llm_orchestrator_from_env", lambda: object())
+
+    result = await smoke._run(use_real_rag=False, use_llm_fallback=False, use_env_llm=True)
+    assert result["llm_synthesis_status"] == "generated"
+    assert result["llm_provider"] == "groq"
+    assert result["llm_model_name"] == "test-model"
+    assert result["external_llm_provider_used"] is True
+
+
+@pytest.mark.asyncio
+async def test_smoke_rejects_conflicting_llm_flags() -> None:
+    import scripts.run_stage2_pipeline_v2_smoke as smoke
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        await smoke._run(use_real_rag=False, use_llm_fallback=True, use_env_llm=True)

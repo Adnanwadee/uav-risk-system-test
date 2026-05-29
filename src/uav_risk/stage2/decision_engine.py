@@ -10,6 +10,7 @@ from uav_risk.stage2.contracts import (
     AgentRecommendation,
     DecisionConfidenceLevel,
     DecisionEngineResult,
+    DecisionPolicyConfig,
     DecisionStageContribution,
     DecisionStageName,
     EvidenceBundle,
@@ -20,18 +21,21 @@ from uav_risk.stage2.contracts import (
     Stage2Status,
 )
 
+_DEFAULT_POLICY = DecisionPolicyConfig()
+
 DEFAULT_STAGE_WEIGHTS: dict[str, float] = {
     DecisionStageName.CORE.value: 0.0,
-    DecisionStageName.ML.value: 0.22,
-    DecisionStageName.SHAP.value: 0.10,
-    DecisionStageName.RAG.value: 0.28,
-    DecisionStageName.AGENT.value: 0.25,
-    DecisionStageName.SCENARIO_PROFILE.value: 0.10,
-    DecisionStageName.LLM.value: 0.05,
+    DecisionStageName.ML.value: _DEFAULT_POLICY.ml_weight,
+    DecisionStageName.SHAP.value: _DEFAULT_POLICY.shap_weight,
+    DecisionStageName.RAG.value: _DEFAULT_POLICY.rag_weight,
+    DecisionStageName.AGENT.value: _DEFAULT_POLICY.agent_weight,
+    DecisionStageName.SCENARIO_PROFILE.value: _DEFAULT_POLICY.scenario_profile_weight,
+    DecisionStageName.LLM.value: _DEFAULT_POLICY.llm_weight,
 }
 
-_GO_THRESHOLD = 0.35
-_NO_GO_THRESHOLD = 0.70
+_GO_THRESHOLD = _DEFAULT_POLICY.go_threshold
+_NO_GO_THRESHOLD = _DEFAULT_POLICY.no_go_threshold
+
 _CONFIDENCE_MARGIN = 0.12
 
 _SEVERITY_SCORE = {
@@ -121,8 +125,22 @@ class _StageEvaluation:
 
 
 class WeightedDecisionEngine:
-    def __init__(self, *, stage_weights: dict[str, float] | None = None) -> None:
-        weights = dict(DEFAULT_STAGE_WEIGHTS)
+    def __init__(
+        self,
+        *,
+        policy: DecisionPolicyConfig | None = None,
+        stage_weights: dict[str, float] | None = None,
+    ) -> None:
+        self.policy = policy or DecisionPolicyConfig()
+        weights = {
+            DecisionStageName.CORE.value: 0.0,
+            DecisionStageName.ML.value: self.policy.ml_weight,
+            DecisionStageName.SHAP.value: self.policy.shap_weight,
+            DecisionStageName.RAG.value: self.policy.rag_weight,
+            DecisionStageName.AGENT.value: self.policy.agent_weight,
+            DecisionStageName.SCENARIO_PROFILE.value: self.policy.scenario_profile_weight,
+            DecisionStageName.LLM.value: self.policy.llm_weight,
+        }
         if stage_weights:
             weights.update(stage_weights)
         self.stage_weights = weights
@@ -178,9 +196,9 @@ class WeightedDecisionEngine:
         if has_hard_block:
             final_decision = FinalDecision.NO_GO
             score = 1.0
-        elif score >= _NO_GO_THRESHOLD:
+        elif score >= self.policy.no_go_threshold:
             final_decision = FinalDecision.NO_GO
-        elif score >= _GO_THRESHOLD or has_insufficient or has_critical_finding or elevated_ml_signal:
+        elif score >= self.policy.go_threshold or has_insufficient or has_critical_finding or elevated_ml_signal:
             final_decision = FinalDecision.CAUTION
         else:
             final_decision = FinalDecision.GO
@@ -208,8 +226,16 @@ class WeightedDecisionEngine:
             evidence_refs=self._dedupe_refs(evidence_refs),
             metadata={
                 "engine_version": "decision_engine_v1",
-                "go_threshold": _GO_THRESHOLD,
-                "no_go_threshold": _NO_GO_THRESHOLD,
+                "policy_name": self.policy.policy_name,
+                "policy_version": self.policy.policy_version,
+                "weight_rationale_ml": self.policy.weight_rationales.get("ml"),
+                "weight_rationale_shap": self.policy.weight_rationales.get("shap"),
+                "weight_rationale_rag": self.policy.weight_rationales.get("rag"),
+                "weight_rationale_agent": self.policy.weight_rationales.get("agent"),
+                "weight_rationale_scenario_profile": self.policy.weight_rationales.get("scenario_profile"),
+                "weight_rationale_llm": self.policy.weight_rationales.get("llm"),
+                "go_threshold": self.policy.go_threshold,
+                "no_go_threshold": self.policy.no_go_threshold,
                 "score_meaning": "higher means higher operational concern",
             },
         )
@@ -507,7 +533,7 @@ class WeightedDecisionEngine:
     ) -> DecisionConfidenceLevel:
         if hard_block or has_insufficient or has_errors or len(limitations) >= 3:
             return DecisionConfidenceLevel.LOW
-        distance = min(abs(score - _GO_THRESHOLD), abs(score - _NO_GO_THRESHOLD))
+        distance = min(abs(score - self.policy.go_threshold), abs(score - self.policy.no_go_threshold))
         if distance >= _CONFIDENCE_MARGIN and not limitations:
             return DecisionConfidenceLevel.HIGH
         return DecisionConfidenceLevel.MEDIUM
@@ -582,5 +608,7 @@ class WeightedDecisionEngine:
 def evaluate_stage2_decision(
     stage2_input: Stage2AssessmentInput,
     stage2_result: Stage2AssessmentResult,
+    *,
+    policy: DecisionPolicyConfig | None = None,
 ) -> DecisionEngineResult:
-    return WeightedDecisionEngine().evaluate(stage2_input, stage2_result)
+    return WeightedDecisionEngine(policy=policy).evaluate(stage2_input, stage2_result)

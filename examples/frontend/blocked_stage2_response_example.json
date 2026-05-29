@@ -2,10 +2,120 @@
   "status": "blocked",
   "user_id": "user_1",
   "profile_id": "profile_1",
-  "assessment_id": null,
-  "issues": [
-    {"code": "PAYLOAD_EXCEEDS_PROFILE_LIMIT", "field": "uav_payload_mass_kg", "message": "Payload exceeds profile limit", "details": {}}
+  "assessment_id": "22222222-2222-2222-2222-222222222222",
+  "warnings": [],
+  "errors": [
+    {
+      "code": "HARD_VETO",
+      "message": "Core structural hard-veto blocked assessment.",
+      "details": {
+        "issues": [
+          {
+            "code": "PAYLOAD_EXCEEDS_PROFILE_LIMIT",
+            "field": "uav_payload_mass_kg",
+            "message": "Payload exceeds profile limit",
+            "details": {}
+          }
+        ]
+      }
+    }
   ],
-  "ml": null,
-  "decision": {"final_decision": "no_go"}
+  "stage1": {
+    "core": {
+      "blocked": true,
+      "issues": [
+        {
+          "code": "PAYLOAD_EXCEEDS_PROFILE_LIMIT",
+          "field": "uav_payload_mass_kg",
+          "message": "Payload exceeds profile limit",
+          "details": {}
+        }
+      ]
+    },
+    "ml": null,
+    "shap": null
+  },
+  "stage2": {
+    "profile_context": null,
+    "policy": {
+      "policy_name": null,
+      "policy_version": null,
+      "weights": {},
+      "go_threshold": null,
+      "no_go_threshold": null,
+      "weight_rationales": {}
+    },
+    "rag": {
+      "retrieval_usable": false,
+      "rag_quality_is_proven": false,
+      "evidence_bundle_count": 0,
+      "insufficient_evidence_count": 0,
+      "scenario_evidence_complete": null,
+      "scenario_evidence_status": "blocked",
+      "evidence_bundle_details": [],
+      "citations": [],
+      "limitations": [
+        "Assessment blocked before Stage2 execution due to structural hard-veto."
+      ]
+    },
+    "agent": {
+      "recommendation": null,
+      "findings": [],
+      "action_items": [],
+      "limitations": [],
+      "tool_trace": [],
+      "working_memory_summary": {},
+      "top_input_signals": [],
+      "top_feature_assessments": [],
+      "selected_rag_queries": [],
+      "skipped_rag_queries": []
+    },
+    "decision": {
+      "final_decision": "no_go",
+      "decision_score": 1.0,
+      "confidence_level": "high",
+      "stage_weights": {},
+      "stage_contributions": [],
+      "decision_reasons": [
+        "Core hard-veto blocked mission input."
+      ],
+      "blocking_reasons": [
+        "core_hard_veto"
+      ],
+      "required_actions": [
+        "Resolve hard-veto issues before retrying Stage2 assessment."
+      ],
+      "limitations": []
+    },
+    "llm_synthesis": {
+      "status": "disabled",
+      "provider": null,
+      "model_name": null,
+      "external_provider_used": false,
+      "executive_summary": "",
+      "operational_interpretation": "",
+      "decision_explanation": "",
+      "key_risk_drivers": [],
+      "mitigation_narrative": "",
+      "consistency_warnings": []
+    },
+    "report": {
+      "markdown": null,
+      "sections": [],
+      "generated": false
+    }
+  },
+  "diagnostics": {
+    "path_resolution_status": null,
+    "index_provenance_status": null,
+    "retrieval_usable": false,
+    "rag_quality_is_proven": false,
+    "scenario_evidence_complete": null,
+    "llm_mode": "disabled",
+    "external_llm_provider_used": false,
+    "llm_provider": null,
+    "llm_model_name": null,
+    "faiss_secret_configured": null,
+    "warnings": []
+  }
 }

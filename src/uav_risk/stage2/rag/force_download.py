@@ -1,9 +1,16 @@
 """
+Legacy/demo/manual-only model bootstrap helper.
+
+This module is not canonical runtime and should not be used as final readiness evidence.
+Canonical readiness commands are listed in README.md.
+
 Module: src/uav_risk/stage2/rag/force_download.py
 Author: Elite Technical Partner + V3.1 Fix
 Description: Binds with RAGConfig paths to pull embedding and reranker weights offline.
              Updated for config_v3 with local model paths.
 """
+
+
 
 import os
 import logging
@@ -57,8 +64,7 @@ if __name__ == "__main__":
     logger.info("all_models_downloaded_successfully")
 
 # =====================================================================
-# Stage 2 Architectural Dependency Comment Block:
-# Deployment bootstrap utility to seed local intelligence weights.
-# Dependencies: src/uav_risk/stage2/rag/config_v3.py -> RAGConfig Paths
-# Dependent Files: None (Standalone Setup Script)
+# Legacy/demo/manual-only bootstrap utility.
+# Not canonical runtime and not final readiness evidence.
+# Canonical readiness commands are listed in README.md.
 # =====================================================================

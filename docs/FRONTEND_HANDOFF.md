@@ -39,7 +39,9 @@ The backend is intended to serve drone operators and dashboard frontends that ne
 
 - Assessment endpoints
   - `POST /users/{user_id}/profiles/{profile_id}/assessments` (Stage1: Core/ML/SHAP)
-  - `POST /users/{user_id}/profiles/{profile_id}/assessments/stage2` (Stage2: full AI pipeline + report)
+  - `POST /users/{user_id}/profiles/{profile_id}/assessments/stage2` (Stage2: full AI pipeline + report + persistence)
+  - `GET /users/{user_id}/assessments` (list persisted assessments; optional `profile_id` filter)
+  - `GET /users/{user_id}/assessments/{assessment_id}` (get one persisted assessment)
 
 ## 4. Which Endpoint Should Frontend Use?
 - Use the Stage2 endpoint for the final UI experience (full decision, evidence, agent, and report).
@@ -59,7 +61,7 @@ Top-level keys returned in Stage2 response:
 - `status` — e.g., `completed`, `blocked`, `degraded`, `failed`
 - `user_id`
 - `profile_id`
-- `assessment_id` — generated per response for traceability (not persisted for retrieval in current stage)
+- `assessment_id` — generated and persisted for retrieval
 - `warnings` — array
 - `errors` — array
 - `stage1` — Stage1/ML/SHAP snapshot
@@ -122,6 +124,16 @@ Top-level keys returned in Stage2 response:
 - `llm_mode` (e.g., `fallback`)
 - `external_llm_provider_used` (bool)
 
+## 6A. Persisted Assessment Retrieval Shapes
+`GET /users/{user_id}/assessments` returns list items with:
+- `assessment_id`, `user_id`, `profile_id`, `created_at`, `status`
+- `final_decision`, `decision_score`, `confidence_level`
+- `summary`
+
+`GET /users/{user_id}/assessments/{assessment_id}` returns full persisted record including:
+- `stage1`, `stage2`, `report`, `system_work_trace`, `diagnostics`
+- normalized `warnings` and `errors`
+
 ## 7. Status Meanings
 - `completed` — pipeline completed successfully
 - `blocked` — structural hard veto prevented ML/Stage2 execution
@@ -161,7 +173,7 @@ Top-level keys returned in Stage2 response:
 
 ## 12A. Public-Safe Trace Rendering
 - Treat `working_memory_summary`, `tool_trace`, and `system_work_trace` as frontend-displayable transparency metadata.
-- Do not expect hidden chain-of-thought, raw prompts/completions, or secret-bearing internal logs in these fields.
+- Do not expect hidden chain-of-thought, raw prompts/completions, raw tool history, or secret-bearing internal logs in these fields.
 - Render summaries, statuses, evidence/citation IDs, and action/finding references.
 
 ## 13. Blocked Response Behavior
@@ -171,8 +183,8 @@ Top-level keys returned in Stage2 response:
   - Show blocking reasons and do not display fabricated ML/RAG results
 
 ## 14. Known Limitations
-- `assessment_id` is generated in responses but persistence/GET/LIST retrieval is not implemented yet.
-- Stage2 results are not persisted in storage.
+- Assessment persistence uses local JSON storage and is scoped to public-safe records only.
+- No assessment delete endpoint is implemented in this stage.
 - RAG adapter may be missing if local index files are absent.
 - LLM is deterministic fallback (no external provider configured by default).
 - Raw feature map is trimmed from responses to ensure JSON-safe metadata.

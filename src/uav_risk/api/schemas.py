@@ -156,3 +156,33 @@ class Stage2AssessmentResponse(BaseModel):
     stage1: Stage1AssessmentSection
     stage2: Stage2AISection
     diagnostics: Stage2DiagnosticsSection
+
+
+class AssessmentRecord(BaseModel):
+    assessment_id: str
+    user_id: str
+    profile_id: str
+    created_at: str
+    status: str
+    final_decision: str | None = None
+    decision_score: float | None = None
+    confidence_level: str | None = None
+    stage1: dict[str, Any] = Field(default_factory=dict)
+    stage2: dict[str, Any] = Field(default_factory=dict)
+    report: dict[str, Any] | str | None = None
+    system_work_trace: dict[str, Any] | list[dict[str, Any]] | None = None
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class AssessmentListItem(BaseModel):
+    assessment_id: str
+    user_id: str
+    profile_id: str
+    created_at: str
+    status: str
+    final_decision: str | None = None
+    decision_score: float | None = None
+    confidence_level: str | None = None
+    summary: str | None = None

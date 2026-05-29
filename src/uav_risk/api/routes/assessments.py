@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 
-from uav_risk.api.dependencies import get_profile_storage_root, get_stage1_bundle
+from uav_risk.api.dependencies import (
+    get_assessment_storage_root,
+    get_profile_storage_root,
+    get_stage1_bundle,
+)
 from uav_risk.api.schemas import (
+    AssessmentListItem,
+    AssessmentRecord,
     AssessmentRequest,
     Stage2AISection,
     Stage2AgentSection,
@@ -22,7 +29,12 @@ from uav_risk.api.schemas import (
     Stage1MLSection,
     Stage1SHAPSection,
 )
-from uav_risk.api.storage import LocalProfileStorage
+from uav_risk.api.storage import (
+    AssessmentNotFoundError,
+    AssessmentStorageError,
+    LocalAssessmentStorage,
+    LocalProfileStorage,
+)
 from uav_risk.core.contracts import AssessmentCoreInput, DroneProfileRaw
 from uav_risk.core.data_validator import run_structural_hard_veto
 from uav_risk.ml.inference import run_stage1_inference
@@ -48,6 +60,7 @@ from uav_risk.utils.json_sanitize import (
 )
 
 router = APIRouter(prefix="/users/{user_id}/profiles/{profile_id}/assessments", tags=["assessments"])
+history_router = APIRouter(prefix="/users/{user_id}/assessments", tags=["assessments"])
 
 FORBIDDEN_KEYS = {
     "reasoning_steps",
@@ -262,6 +275,63 @@ def _top_probability(probs: dict[str, float]) -> float | None:
     if not probs:
         return None
     return max(probs.values())
+
+
+def _assessment_storage() -> LocalAssessmentStorage:
+    return LocalAssessmentStorage(get_assessment_storage_root())
+
+
+def _normalize_messages(value: list[object]) -> list[str]:
+    messages: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            code = str(item.get("code", "")).strip()
+            message = str(item.get("message", "")).strip()
+            if code and message:
+                messages.append(f"{code}: {message}")
+            elif message:
+                messages.append(message)
+            elif code:
+                messages.append(code)
+            else:
+                messages.append(str(item))
+        else:
+            messages.append(str(item))
+    return messages
+
+
+def _is_invalid_storage_segment(exc: AssessmentStorageError) -> bool:
+    return str(exc).startswith("Invalid ")
+
+
+def _build_assessment_record_from_response(
+    *,
+    user_id: str,
+    profile_id: str,
+    response_payload: dict[str, object],
+    created_at: str,
+) -> AssessmentRecord:
+    stage2_payload = response_payload.get("stage2") if isinstance(response_payload.get("stage2"), dict) else {}
+    stage2_agent = stage2_payload.get("agent") if isinstance(stage2_payload, dict) and isinstance(stage2_payload.get("agent"), dict) else {}
+    stage2_decision = stage2_payload.get("decision") if isinstance(stage2_payload, dict) and isinstance(stage2_payload.get("decision"), dict) else {}
+
+    return AssessmentRecord(
+        assessment_id=str(response_payload.get("assessment_id", "")),
+        user_id=user_id,
+        profile_id=profile_id,
+        created_at=created_at,
+        status=str(response_payload.get("status", "")),
+        final_decision=stage2_decision.get("final_decision"),
+        decision_score=stage2_decision.get("decision_score"),
+        confidence_level=stage2_decision.get("confidence_level"),
+        stage1=_clean_forbidden_keys(response_payload.get("stage1") if isinstance(response_payload.get("stage1"), dict) else {}),
+        stage2=_clean_forbidden_keys(stage2_payload if isinstance(stage2_payload, dict) else {}),
+        report=_clean_forbidden_keys(stage2_payload.get("report") if isinstance(stage2_payload, dict) else None),
+        system_work_trace=_clean_forbidden_keys(stage2_agent.get("system_work_trace") if isinstance(stage2_agent, dict) else None),
+        diagnostics=_clean_forbidden_keys(response_payload.get("diagnostics") if isinstance(response_payload.get("diagnostics"), dict) else {}),
+        warnings=_normalize_messages(response_payload.get("warnings") if isinstance(response_payload.get("warnings"), list) else []),
+        errors=_normalize_messages(response_payload.get("errors") if isinstance(response_payload.get("errors"), list) else []),
+    )
 
 
 @router.post("")
@@ -581,4 +651,44 @@ async def create_assessment_stage2(
         ),
     )
 
-    return jsonable_encoder(response)
+    response_payload = jsonable_encoder(response)
+    created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    record = _build_assessment_record_from_response(
+        user_id=user_id,
+        profile_id=profile_id,
+        response_payload=response_payload,
+        created_at=created_at,
+    )
+    try:
+        _assessment_storage().save_assessment(record)
+    except AssessmentStorageError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Assessment persistence failed: {exc}",
+        ) from exc
+
+    return response_payload
+
+@history_router.get("", response_model=list[AssessmentListItem])
+def list_assessments_for_user(
+    user_id: str,
+    profile_id: str | None = Query(default=None),
+) -> list[AssessmentListItem]:
+    try:
+        return _assessment_storage().list_assessments(user_id, profile_id=profile_id)
+    except AssessmentStorageError as exc:
+        if _is_invalid_storage_segment(exc):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Assessment listing failed") from exc
+
+
+@history_router.get("/{assessment_id}", response_model=AssessmentRecord)
+def get_assessment_for_user(user_id: str, assessment_id: str) -> AssessmentRecord:
+    try:
+        return _assessment_storage().get_assessment(user_id, assessment_id)
+    except AssessmentNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found") from exc
+    except AssessmentStorageError as exc:
+        if _is_invalid_storage_segment(exc):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Assessment retrieval failed") from exc

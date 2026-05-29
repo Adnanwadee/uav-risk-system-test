@@ -31,3 +31,7 @@ def get_stage1_bundle(request: Request) -> Stage1Bundle:
 
 def get_profile_storage_root() -> Path:
     return Path(os.getenv("UAV_PROFILE_STORAGE_DIR", "data/profiles"))
+
+
+def get_assessment_storage_root() -> Path:
+    return Path(os.getenv("UAV_ASSESSMENT_STORAGE_DIR", "data/assessments"))

@@ -11,13 +11,32 @@ from test_api_raw_assessment import scenario_payload
 
 
 FORBIDDEN_KEYS = {
+    "reasoning_steps",
     "chain_of_thought",
     "reasoning_chain",
+    "thoughts",
     "thought",
     "scratchpad",
+    "raw_prompt",
+    "prompt",
+    "raw_completion",
+    "completion",
+    "raw_llm_response",
+    "tool_history",
+    "internal_memory",
     "internal_reasoning",
     "private_reasoning",
+    "hidden",
+    "api_key",
+    "secret",
+    "token",
+    "authorization",
 }
+
+
+def _set_storage_roots(monkeypatch, tmp_path):
+    monkeypatch.setenv("UAV_PROFILE_STORAGE_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("UAV_ASSESSMENT_STORAGE_DIR", str(tmp_path / "assessments"))
 
 
 def _create_profile(client, user_id="user_1", profile_id="profile_1", **updates):
@@ -46,7 +65,7 @@ def _walk_keys(value):
 
 
 def test_stage2_endpoint_returns_stable_frontend_ready_structure(tmp_path, monkeypatch):
-    monkeypatch.setenv("UAV_PROFILE_STORAGE_DIR", str(tmp_path / "profiles"))
+    _set_storage_roots(monkeypatch, tmp_path)
     monkeypatch.setattr("uav_risk.api.routes.assessments.build_runtime_rag_adapter_if_available", lambda: None)
     with TestClient(create_app()) as client:
         _create_profile(client)
@@ -84,6 +103,7 @@ def test_stage2_endpoint_returns_stable_frontend_ready_structure(tmp_path, monke
         assert "findings" in s2["agent"]
         assert "action_items" in s2["agent"]
         assert "tool_trace" in s2["agent"]
+        assert "system_work_trace" in s2["agent"]
         assert "working_memory_summary" in s2["agent"]
         assert "top_feature_assessments" in s2["agent"]
 
@@ -103,8 +123,63 @@ def test_stage2_endpoint_returns_stable_frontend_ready_structure(tmp_path, monke
         assert "external_llm_provider_used" in d
 
 
+def test_stage2_create_persists_record_and_get_by_id(tmp_path, monkeypatch):
+    _set_storage_roots(monkeypatch, tmp_path)
+    monkeypatch.setattr("uav_risk.api.routes.assessments.build_runtime_rag_adapter_if_available", lambda: None)
+    with TestClient(create_app()) as client:
+        _create_profile(client)
+        create_response = client.post("/users/user_1/profiles/profile_1/assessments/stage2", json=_assessment_payload())
+        assert create_response.status_code == 200
+        assessment_id = create_response.json()["assessment_id"]
+
+        get_response = client.get(f"/users/user_1/assessments/{assessment_id}")
+        assert get_response.status_code == 200
+        body = get_response.json()
+
+        assert body["assessment_id"] == assessment_id
+        assert body["user_id"] == "user_1"
+        assert body["profile_id"] == "profile_1"
+        assert isinstance(body["created_at"], str)
+        assert body["stage2"]["agent"]["system_work_trace"]["public_safe"] is True
+
+        keys = set(_walk_keys(body))
+        assert keys.isdisjoint(FORBIDDEN_KEYS)
+
+
+def test_stage2_list_assessments_returns_records_and_filters_profile(tmp_path, monkeypatch):
+    _set_storage_roots(monkeypatch, tmp_path)
+    monkeypatch.setattr("uav_risk.api.routes.assessments.build_runtime_rag_adapter_if_available", lambda: None)
+    with TestClient(create_app()) as client:
+        _create_profile(client, profile_id="profile_1")
+        _create_profile(client, profile_id="profile_2")
+
+        response_1 = client.post("/users/user_1/profiles/profile_1/assessments/stage2", json=_assessment_payload())
+        response_2 = client.post("/users/user_1/profiles/profile_2/assessments/stage2", json=_assessment_payload())
+        assert response_1.status_code == 200
+        assert response_2.status_code == 200
+
+        list_response = client.get("/users/user_1/assessments")
+        assert list_response.status_code == 200
+        items = list_response.json()
+        assert len(items) == 2
+        assert {item["profile_id"] for item in items} == {"profile_1", "profile_2"}
+
+        filtered_response = client.get("/users/user_1/assessments", params={"profile_id": "profile_2"})
+        assert filtered_response.status_code == 200
+        filtered_items = filtered_response.json()
+        assert len(filtered_items) == 1
+        assert filtered_items[0]["profile_id"] == "profile_2"
+
+
+def test_stage2_get_missing_assessment_returns_404(tmp_path, monkeypatch):
+    _set_storage_roots(monkeypatch, tmp_path)
+    with TestClient(create_app()) as client:
+        response = client.get("/users/user_1/assessments/missing")
+        assert response.status_code == 404
+
+
 def test_stage2_blocked_response_is_json_safe_and_has_no_fake_outputs(tmp_path, monkeypatch):
-    monkeypatch.setenv("UAV_PROFILE_STORAGE_DIR", str(tmp_path / "profiles"))
+    _set_storage_roots(monkeypatch, tmp_path)
     monkeypatch.setattr("uav_risk.api.routes.assessments.build_runtime_rag_adapter_if_available", lambda: None)
     with TestClient(create_app()) as client:
         _create_profile(client, max_payload_kg=0.1)
@@ -121,7 +196,7 @@ def test_stage2_blocked_response_is_json_safe_and_has_no_fake_outputs(tmp_path, 
 
 
 def test_stage2_response_has_no_forbidden_private_reasoning_keys(tmp_path, monkeypatch):
-    monkeypatch.setenv("UAV_PROFILE_STORAGE_DIR", str(tmp_path / "profiles"))
+    _set_storage_roots(monkeypatch, tmp_path)
     monkeypatch.setattr("uav_risk.api.routes.assessments.build_runtime_rag_adapter_if_available", lambda: None)
     with TestClient(create_app()) as client:
         _create_profile(client)
@@ -133,7 +208,7 @@ def test_stage2_response_has_no_forbidden_private_reasoning_keys(tmp_path, monke
 
 
 def test_stage2_missing_profile_returns_404(tmp_path, monkeypatch):
-    monkeypatch.setenv("UAV_PROFILE_STORAGE_DIR", str(tmp_path / "profiles"))
+    _set_storage_roots(monkeypatch, tmp_path)
     with TestClient(create_app()) as client:
         payload = _assessment_payload()
         response = client.post("/users/user_1/profiles/missing/assessments/stage2", json=payload)
@@ -141,7 +216,7 @@ def test_stage2_missing_profile_returns_404(tmp_path, monkeypatch):
 
 
 def test_stage2_response_is_json_serializable(tmp_path, monkeypatch):
-    monkeypatch.setenv("UAV_PROFILE_STORAGE_DIR", str(tmp_path / "profiles"))
+    _set_storage_roots(monkeypatch, tmp_path)
     monkeypatch.setattr("uav_risk.api.routes.assessments.build_runtime_rag_adapter_if_available", lambda: None)
     with TestClient(create_app()) as client:
         _create_profile(client)
@@ -152,7 +227,7 @@ def test_stage2_response_is_json_serializable(tmp_path, monkeypatch):
 
 
 def test_stage2_env_groq_missing_key_keeps_safe_llm_mode(tmp_path, monkeypatch):
-    monkeypatch.setenv("UAV_PROFILE_STORAGE_DIR", str(tmp_path / "profiles"))
+    _set_storage_roots(monkeypatch, tmp_path)
     monkeypatch.setattr("uav_risk.api.routes.assessments.build_runtime_rag_adapter_if_available", lambda: None)
     monkeypatch.setenv("LLM_ENABLED", "true")
     monkeypatch.setenv("LLM_PROVIDER", "groq")

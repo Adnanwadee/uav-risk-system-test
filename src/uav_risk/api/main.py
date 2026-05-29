@@ -5,7 +5,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from uav_risk.api.dependencies import load_cached_stage1_bundle
-from uav_risk.api.routes.assessments import router as assessments_router
+from uav_risk.api.routes.assessments import (
+    history_router as assessment_history_router,
+    router as assessments_router,
+)
 from uav_risk.api.routes.features import router as features_router
 from uav_risk.api.routes.health import router as health_router
 from uav_risk.api.routes.profiles import router as profiles_router
@@ -28,6 +31,7 @@ def create_app() -> FastAPI:
     app.include_router(features_router)
     app.include_router(profiles_router)
     app.include_router(assessments_router)
+    app.include_router(assessment_history_router)
     return app
 
 

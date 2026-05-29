@@ -1,10 +1,17 @@
 # Smart Skies — API Examples
 
-## Primary Frontend Endpoint
+## Primary Assessment Execution Endpoint
 `POST /users/{user_id}/profiles/{profile_id}/assessments/stage2`
 
 Use this endpoint for the full backend flow:
 Core validation -> Stage1 ML + SHAP -> Stage2 RAG -> OperationalAgentV2 -> DecisionEngine -> optional LLM synthesis -> report output.
+
+## Persistence Retrieval Endpoints
+- `GET /users/{user_id}/assessments`
+  - Optional query: `profile_id`
+  - Returns persisted assessment summaries for the user (filtered when `profile_id` is provided).
+- `GET /users/{user_id}/assessments/{assessment_id}`
+  - Returns one persisted assessment record.
 
 ## Request Contract (Frontend)
 Frontend sends only:
@@ -20,18 +27,33 @@ Frontend must not send:
 - Full transformed 198-feature vectors
 - Legacy `MasterFlightPayload`
 
-### Example Request
+### Create Stage2 Assessment
 ```bash
 curl -sS -X POST http://localhost:8000/users/user_1/profiles/profile_1/assessments/stage2 \
   -H "Content-Type: application/json" \
   -d @examples/frontend/stage2_assessment_request.json
 ```
 
+### List Persisted Assessments (User)
+```bash
+curl -sS "http://localhost:8000/users/user_1/assessments"
+```
+
+### List Persisted Assessments (User + Profile)
+```bash
+curl -sS "http://localhost:8000/users/user_1/assessments?profile_id=profile_1"
+```
+
+### Get Persisted Assessment By ID
+```bash
+curl -sS "http://localhost:8000/users/user_1/assessments/<assessment_id>"
+```
+
 ## Response Examples
 - Completed: `examples/frontend/stage2_assessment_response_example.json`
 - Blocked hard-veto: `examples/frontend/blocked_stage2_response_example.json`
 
-## Response Top-Level Shape
+## Stage2 Response Top-Level Shape
 ```json
 {
   "status": "completed|blocked|degraded|failed",
@@ -46,17 +68,26 @@ curl -sS -X POST http://localhost:8000/users/user_1/profiles/profile_1/assessmen
 }
 ```
 
-## Stage2 Highlights
-- `stage2.rag`: evidence/citation retrieval status and bundle summaries.
-- `stage2.agent`: findings, action items, `working_memory_summary`, sanitized `tool_trace`, and sanitized `system_work_trace` (Transparency Trace).
-- `stage2.decision`: deterministic final authority (`final_decision`, `decision_score`, reasons, required actions).
-- `stage2.llm_synthesis`: interpretation/synthesis only.
-- `stage2.report`: structured report sections plus markdown rendering.
+## Persisted Assessment Record (Stored + GET)
+Persisted records include public-safe fields such as:
+- identity/timing: `assessment_id`, `user_id`, `profile_id`, `created_at`, `status`
+- decision summary: `final_decision`, `decision_score`, `confidence_level`
+- `stage1` ML/SHAP snapshot
+- `stage2` RAG/Agent/Decision/LLM/report bundle
+- `report`
+- `system_work_trace`
+- `diagnostics`
+- normalized `warnings` and `errors`
 
 ## Decision, LLM, and RAG Authority
 - Decision Engine is backend-authoritative for `stage2.decision`.
 - LLM synthesis does not override `final_decision`, `decision_score`, evidence support status, or citations.
 - RAG provides evidence/citations and provenance support, not final authority.
+
+## Persistence Safety Guarantees
+- Persisted records are public-safe by default.
+- Hidden reasoning, raw prompts/completions, raw tool history, and secret-bearing keys are stripped.
+- System Work Trace / Transparency Trace is stored as structured summary metadata only.
 
 ## Blocked Behavior
 When structural hard-veto blocks execution:
@@ -64,12 +95,3 @@ When structural hard-veto blocks execution:
 - `stage1.ml = null`
 - Decision is forced safe (`no_go`) with blocking reasons
 - No fabricated ML/RAG outputs are injected
-
-## Persistence Status
-`assessment_id` is generated per response for traceability.
-Assessment persistence (GET/LIST history retrieval) is not implemented in this stage.
-
-## Public-Safe Trace Policy
-System Work Trace / Transparency Trace is public-safe metadata:
-- Includes step summaries, statuses, and evidence IDs
-- Excludes hidden chain-of-thought, raw prompts/completions, raw tool history, and secrets

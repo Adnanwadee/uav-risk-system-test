@@ -1,117 +1,124 @@
 # Smart Skies — API Examples
 
-## Primary Assessment Execution Endpoint
-`POST /users/{user_id}/profiles/{profile_id}/assessments/stage2`
+## Endpoint Map
 
-Use this endpoint for the full backend flow:
-Core validation -> Stage1 ML + SHAP -> Stage2 RAG -> OperationalAgentV2 -> DecisionEngine -> optional LLM synthesis -> report output.
-
-## Persistence Retrieval Endpoints
-- `GET /users/{user_id}/assessments`
+- Create profile: `POST /users/{user_id}/profiles`
+- Stage2 full assessment: `POST /users/{user_id}/profiles/{profile_id}/assessments/stage2`
+- List persisted assessments: `GET /users/{user_id}/assessments`
   - Optional query: `profile_id`
-  - Returns persisted assessment summaries for the user (filtered when `profile_id` is provided).
-- `GET /users/{user_id}/assessments/{assessment_id}`
-  - Returns one persisted assessment record.
+- Get persisted assessment by id: `GET /users/{user_id}/assessments/{assessment_id}`
 
-## Request Contract (Frontend)
+## Frontend Input Contract (Raw-First)
+
 Frontend sends only:
-- Raw profile fields (created/stored through profile endpoints)
+- Raw drone profile fields (via profile endpoints)
 - Raw `scenario` fields
-- Raw `secondary_overrides.values` scalar overrides
-- `operator_notes` free text
+- Raw `secondary_overrides.values`
+- `operator_notes`
 
 Frontend must not send:
 - Processed features
 - One-hot columns
 - Model predictions
-- Full transformed 198-feature vectors
+- Transformed 198-feature vectors
 - Legacy `MasterFlightPayload`
 
-### Create Stage2 Assessment
+## Create Profile Example
+
+```bash
+curl -sS -X POST http://localhost:8000/users/user_1/profiles \
+  -H "Content-Type: application/json" \
+  -d @examples/frontend/create_profile_request.json
+```
+
+## Create Stage2 Assessment Example
+
 ```bash
 curl -sS -X POST http://localhost:8000/users/user_1/profiles/profile_1/assessments/stage2 \
   -H "Content-Type: application/json" \
   -d @examples/frontend/stage2_assessment_request.json
 ```
 
-### List Persisted Assessments (User)
-```bash
-curl -sS "http://localhost:8000/users/user_1/assessments"
-```
+## Get Assessment By ID Example
 
-### List Persisted Assessments (User + Profile)
-```bash
-curl -sS "http://localhost:8000/users/user_1/assessments?profile_id=profile_1"
-```
-
-### Get Persisted Assessment By ID
 ```bash
 curl -sS "http://localhost:8000/users/user_1/assessments/<assessment_id>"
 ```
 
+## List Assessments Example
+
+```bash
+curl -sS "http://localhost:8000/users/user_1/assessments"
+curl -sS "http://localhost:8000/users/user_1/assessments?profile_id=profile_1"
+```
+
 ## Response Examples
+
 - Completed: `examples/frontend/stage2_assessment_response_example.json`
 - Blocked hard-veto: `examples/frontend/blocked_stage2_response_example.json`
 
-## Stage2 Response Top-Level Shape
-```json
-{
-  "status": "completed|blocked|degraded|failed",
-  "user_id": "...",
-  "profile_id": "...",
-  "assessment_id": "uuid",
-  "warnings": [],
-  "errors": [],
-  "stage1": {},
-  "stage2": {},
-  "diagnostics": {}
-}
-```
+## Stage2 Response Interpretation
 
-## Persisted Assessment Record (Stored + GET)
-Persisted records include public-safe fields such as:
-- identity/timing: `assessment_id`, `user_id`, `profile_id`, `created_at`, `status`
-- decision summary: `final_decision`, `decision_score`, `confidence_level`
-- `stage1` ML/SHAP snapshot
-- `stage2` RAG/Agent/Decision/LLM/report bundle
-- `report`
+Top-level fields include:
+- `status`, `user_id`, `profile_id`, `assessment_id`
+- `created_at`, `persisted`, `persistence_status`
 - `system_work_trace`
-- `diagnostics`
-- normalized `warnings` and `errors`
+- `warnings`, `errors`
+- `stage1`, `stage2`, `diagnostics`
 
-## Decision, LLM, and RAG Authority
-- Decision Engine is backend-authoritative for `stage2.decision`.
-- LLM synthesis does not override `final_decision`, `decision_score`, evidence support status, or citations.
-- RAG provides evidence/citations and provenance support, not final authority.
+`stage1`:
+- ML signal (`predicted_class`, `probabilities`, feature counts)
+- SHAP top features
 
-## Persistence Safety Guarantees
-- Persisted records are public-safe by default.
-- Hidden reasoning, raw prompts/completions, raw tool history, and secret-bearing keys are stripped.
-- System Work Trace / Transparency Trace is stored as structured summary metadata only.
+`stage2.rag`:
+- Evidence bundles, citations, support status
+- Insufficient-evidence signals
+- Coverage status (`corpus_coverage_status`, expected/indexed/missing counts)
+- Reranker runtime status
+- Retrieval origin and synthetic flags where available
+
+`stage2.agent`:
+- Recommendation, findings, action items
+- Selected/skipped queries
+- Sanitized `tool_trace`
+- `working_memory_summary`
+
+`stage2.decision`:
+- `final_decision`, `decision_score`, `confidence_level`
+- Stage weights/contributions
+- Decision reasons / blocking reasons / required actions
+
+`stage2.llm_synthesis`:
+- `status` + compatibility alias `synthesis_status`
+- Provider/model/runtime flags
+- Narrative sections and consistency warnings
+
+`stage2.report`:
+- `sections` (structured report)
+- `markdown`
+
+## Persisted Contract Notes
+
+Persisted assessment records include:
+- `assessment_id`, `user_id`, `profile_id`, `created_at`, `status`
+- `final_decision`, `decision_score`, `confidence_level`
+- `stage1`, `stage2`, `report`, `system_work_trace`, `diagnostics`
+- Public-safe normalized `warnings` and `errors`
+
+History list items include:
+- `assessment_id`, `user_id`, `profile_id`, `created_at`, `status`
+- `final_decision`, `decision_score`, `confidence_level`, `summary`
+
+## Authority Boundaries
+
+- DecisionEngine is final authority for `final_decision` and `decision_score`.
+- LLM synthesis is interpretation-only and never decides.
+- RAG is evidence retrieval/provenance support and never decides.
 
 ## Blocked Behavior
-When structural hard-veto blocks execution:
+
+When structural hard-veto triggers:
 - `status = "blocked"`
 - `stage1.ml = null`
-- Decision is forced safe (`no_go`) with blocking reasons
-- No fabricated ML/RAG outputs are injected
-
-
-## Stage 3 Additive Response Fields
-`stage2.rag` now includes additive transparency fields:
-- `scenario_evidence_status`
-- `corpus_coverage_status`, `expected_source_count`, `indexed_source_count`
-- `source_ids`, `source_titles`, `missing_sources`
-- `reranker_configured`, `reranker_available`, `reranker_used`, `reranker_reason`
-
-`diagnostics` also includes the corresponding coverage/reranker status fields.
-
-Evidence bundle/citation metadata is explicitly public-safe and may include:
-- `retrieval_origin` (`scenario_driven` / `agent_requested` / `fallback`)
-- `evidence_status`
-- `synthetic` (true only for synthetic-only outcomes)
-
-Decision and authority rules remain unchanged:
-- DecisionEngine owns `final_decision` and `decision_score`.
-- LLM synthesis remains interpretation-only.
-- RAG evidence supports decisions but does not decide.
+- Decision is forced safe (`no_go`)
+- No fabricated ML/RAG outputs are inserted

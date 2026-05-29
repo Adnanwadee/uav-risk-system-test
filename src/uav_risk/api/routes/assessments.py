@@ -432,7 +432,11 @@ def _build_assessment_record_from_response(
         stage1=_clean_forbidden_keys(response_payload.get("stage1") if isinstance(response_payload.get("stage1"), dict) else {}),
         stage2=_clean_forbidden_keys(stage2_payload if isinstance(stage2_payload, dict) else {}),
         report=_clean_forbidden_keys(stage2_payload.get("report") if isinstance(stage2_payload, dict) else None),
-        system_work_trace=_clean_forbidden_keys(stage2_agent.get("system_work_trace") if isinstance(stage2_agent, dict) else None),
+        system_work_trace=_clean_forbidden_keys(
+            response_payload.get("system_work_trace")
+            if isinstance(response_payload.get("system_work_trace"), dict)
+            else (stage2_agent.get("system_work_trace") if isinstance(stage2_agent, dict) else None)
+        ),
         diagnostics=_clean_forbidden_keys(response_payload.get("diagnostics") if isinstance(response_payload.get("diagnostics"), dict) else {}),
         warnings=_normalize_messages(response_payload.get("warnings") if isinstance(response_payload.get("warnings"), list) else []),
         errors=_normalize_messages(response_payload.get("errors") if isinstance(response_payload.get("errors"), list) else []),
@@ -678,6 +682,7 @@ async def create_assessment_stage2(
     external_used = bool(llm and llm.status.value == "generated" and llm.provider == "groq")
     stage2_llm = Stage2LLMSection(
         status=llm.status.value if llm else "disabled",
+        synthesis_status=llm.status.value if llm else "disabled",
         provider=llm_provider,
         model_name=llm_model,
         external_provider_used=external_used,
@@ -711,6 +716,18 @@ async def create_assessment_stage2(
     missing_sources = [item.strip() for item in str(missing_sources_raw or "").split(",") if item.strip()]
     source_ids = [item.strip() for item in str(source_ids_raw or "").split(",") if item.strip()]
     source_titles = [item.strip() for item in str(source_titles_raw or "").split(",") if item.strip()]
+    retrieval_origins = sorted(
+        {
+            str((b.metadata or {}).get("retrieval_origin")).strip()
+            for b in evidence_bundles
+            if isinstance(b.metadata, dict) and str((b.metadata or {}).get("retrieval_origin", "")).strip()
+        }
+    )
+    synthetic_bundle_count = sum(
+        1
+        for b in evidence_bundles
+        if isinstance(b.metadata, dict) and bool((b.metadata or {}).get("synthetic"))
+    )
     reranker_configured = stage2_result.metadata.get("reranker_configured") if isinstance(stage2_result.metadata, dict) else None
     reranker_available = stage2_result.metadata.get("reranker_available") if isinstance(stage2_result.metadata, dict) else None
     reranker_used = stage2_result.metadata.get("reranker_used") if isinstance(stage2_result.metadata, dict) else None
@@ -743,9 +760,12 @@ async def create_assessment_stage2(
                 corpus_coverage_status=str(corpus_coverage_status) if corpus_coverage_status is not None else None,
                 expected_source_count=int(expected_source_count) if isinstance(expected_source_count, (int, float)) else None,
                 indexed_source_count=int(indexed_source_count) if isinstance(indexed_source_count, (int, float)) else None,
+                missing_sources_count=len(missing_sources),
                 source_ids=source_ids,
                 source_titles=source_titles,
                 missing_sources=missing_sources,
+                retrieval_origins=retrieval_origins,
+                synthetic_bundle_count=synthetic_bundle_count,
                 reranker_configured=bool(reranker_configured) if isinstance(reranker_configured, bool) else None,
                 reranker_available=bool(reranker_available) if isinstance(reranker_available, bool) else None,
                 reranker_used=bool(reranker_used) if isinstance(reranker_used, bool) else None,
@@ -757,6 +777,8 @@ async def create_assessment_stage2(
                         "support_status": b.support_status.value,
                         "confidence": b.confidence,
                         "no_evidence_reason": b.no_evidence_reason,
+                        "retrieval_origin": (b.metadata.get("retrieval_origin") if isinstance(b.metadata, dict) else None),
+                        "synthetic": bool(b.metadata.get("synthetic")) if isinstance(b.metadata, dict) else False,
                     }
                     for b in evidence_bundles
                 ]),

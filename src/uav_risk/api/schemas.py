@@ -75,9 +75,12 @@ class Stage2RAGSection(BaseModel):
     corpus_coverage_status: str | None = None
     expected_source_count: int | None = None
     indexed_source_count: int | None = None
+    missing_sources_count: int | None = None
     source_ids: list[str] = Field(default_factory=list)
     source_titles: list[str] = Field(default_factory=list)
     missing_sources: list[str] = Field(default_factory=list)
+    retrieval_origins: list[str] = Field(default_factory=list)
+    synthetic_bundle_count: int | None = None
     reranker_configured: bool | None = None
     reranker_available: bool | None = None
     reranker_used: bool | None = None
@@ -115,6 +118,7 @@ class Stage2DecisionSection(BaseModel):
 
 class Stage2LLMSection(BaseModel):
     status: str = "disabled"
+    synthesis_status: str = "disabled"
     provider: str | None = None
     model_name: str | None = None
     external_provider_used: bool = False
@@ -124,6 +128,12 @@ class Stage2LLMSection(BaseModel):
     key_risk_drivers: list[str] = Field(default_factory=list)
     mitigation_narrative: str = ""
     consistency_warnings: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def sync_synthesis_status(self) -> "Stage2LLMSection":
+        if not (self.synthesis_status or "").strip() or (self.synthesis_status == "disabled" and self.status != "disabled"):
+            self.synthesis_status = self.status
+        return self
 
 
 class Stage2ReportSection(BaseModel):

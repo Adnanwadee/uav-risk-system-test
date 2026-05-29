@@ -1,73 +1,105 @@
 # Smart Skies
 
-Smart Skies is a hybrid AI decision framework for UAV flight risk management.
-It combines deterministic core validation, Stage1 ML + SHAP, Stage2 RAG with citations, an operational agent with public-safe reasoning artifacts, and optional Groq-backed LLM synthesis.
+Smart Skies is an evidence-grounded hybrid AI decision framework for UAV flight risk management.
 
-## Active Architecture
+It combines:
+- Core structural validation / hard-veto
+- Stage1 ML risk signal + SHAP risk drivers
+- Stage2 RAG evidence and citation retrieval
+- OperationalAgentV2 operational analysis
+- DecisionEngine deterministic final decision authority
+- Optional LLM synthesis for interpretation/report wording
+- Public-safe System Work Trace and persisted assessment lifecycle
 
-The current production path is:
+## Canonical Backend Flow
 
-`POST /users/{user_id}/profiles/{profile_id}/assessments/stage2`
--> `Stage2AssessmentInput`
--> `build_runtime_rag_adapter_if_available()`
--> `OperationalAgentV2`
+`User Raw Input`
+-> `API`
+-> `Core Validation / Hard Veto`
+-> `Raw Feature Assembly`
+-> `Stage1 ML`
+-> `SHAP`
 -> `Stage2PipelineV2`
--> `decision_engine.py`
--> optional `llm/orchestrator.py`
--> `reporting.py`
+-> `Stage2RAGAdapter`
+-> `OperationalAgentV2`
+-> `DecisionEngine`
+-> `Optional LLMOrchestrator`
+-> `Reporting`
 -> `Stage2AssessmentResponse`
+-> `Persistence`
+-> `Frontend`
 
-Key rules:
+## API Run
 
-- Frontend sends only raw profile data (via profile endpoints), raw scenario fields, raw secondary overrides, and operator notes.
-- Frontend must not send processed feature vectors, one-hot/model columns, or model predictions.
-- `decision_engine.py` owns the final decision and decision score.
-- LLM synthesis is optional and does not override the decision engine, evidence support status, or citations.
-- RAG provides evidence bundles, citations, and provenance; it is not final decision authority.
-- `OperationalAgentV2` exposes findings, action items, working memory summary artifacts, and tool trace summaries.
-- System Work Trace (Transparency Trace) is structured public-safe metadata and must not include hidden chain-of-thought, raw prompts, or raw completions.
-- Legacy ACE stack is not the canonical runtime path for Stage2 v2.
+```bash
+uvicorn uav_risk.api.main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-## Persistence Limitation
+## Current Backend Capabilities
 
-Assessment persistence is not implemented yet.
-`assessment_id` is generated for traceability in API responses, but it is not stored for later retrieval.
+- Raw-first frontend contract (frontend sends raw profile/scenario/secondary overrides/operator notes only).
+- Stage2 full assessment endpoint with typed response contract.
+- Public-safe persistence for Stage2 assessments.
+- History/retrieval endpoints:
+  - `GET /users/{user_id}/assessments`
+  - `GET /users/{user_id}/assessments/{assessment_id}`
+  - Optional `profile_id` filter on list endpoint.
+- RAG diagnostics metadata in API response:
+  - `rag_quality_is_proven`
+  - corpus coverage (`expected_source_count`, `indexed_source_count`, missing sources)
+  - reranker status fields (`reranker_configured`, `reranker_available`, `reranker_used`, `reranker_reason`)
+- Synthetic evidence is marked and must not be treated as grounded evidence.
 
-## Canonical Validation Commands
+## Current Validation Status
 
-Run these checks for readiness:
+- RAG source coverage status: 9 expected / 9 indexed.
+- RAG quality is proven by diagnostics harness.
+- Real RAG smoke succeeded independently.
+- Groq reachability succeeded independently.
+- Combined real-RAG + env-LLM smoke may terminate due to runtime memory/resource pressure.
+
+## Known Limitations
+
+1. FAISS secret:
+   - Default FAISS secret is insecure.
+   - Set `UAV_FAISS_SECRET` outside git for production/release.
+2. Combined RAG + LLM runtime:
+   - Combined real-RAG + env-LLM smoke can terminate from resource pressure.
+   - Treat as runtime efficiency/loading limitation, not confirmed logic failure.
+3. Runtime efficiency:
+   - Possible repeated loading of embedding/reranker/RAG/LLM resources.
+   - Future improvement: in-process caching/reuse.
+4. Legacy files:
+   - ACE stack and older simulation scripts are not the current runtime path.
+5. Local JSON persistence:
+   - Suitable for demo/graduation readiness, not a production multi-process database.
+   - No pagination/retention/delete lifecycle in this stage.
+6. Reranker:
+   - Status fields are exposed, but live production use depends on local model availability/runtime state.
+7. LLM/Groq:
+   - LLM is optional and does not decide.
+
+## Manual Validation Commands
+
+Do not run these casually in automated checks; they are manual readiness commands.
 
 ```bash
 python scripts/validate_stage2_rag_index.py
 python scripts/run_stage2_rag_diagnostic.py --run-quality
 python scripts/run_stage2_pipeline_v2_smoke.py --use-real-rag
 python scripts/check_groq_provider_reachability.py
+python scripts/run_stage2_pipeline_v2_smoke.py --use-real-rag --use-env-llm
 ```
 
-Use `check_groq_provider_reachability.py` only when the environment is configured for Groq/LLM access.
+Note: The combined `--use-real-rag --use-env-llm` smoke may terminate due to resource pressure until runtime caching is improved.
 
-## Manual-Only Commands
+## Security / Repo Hygiene
 
-Do not use these as casual readiness checks:
-
-```bash
-python scripts/rebuild_stage2_rag_index.py --force
-python src/uav_risk/stage2/rag/build_index.py --force
-python src/uav_risk/stage2/rag/force_download.py
-python src/uav_risk/stage2/knowledge/models/embedding/train_script.py
-python scripts/simulate_agent_live.py
-```
-
-These commands can overwrite canonical RAG outputs, download models, train embeddings, or run legacy/demo code paths.
+- Do not commit secrets.
+- Configure runtime secrets (for example `UAV_FAISS_SECRET`, provider keys) outside git.
 
 ## Documentation
 
 - [Frontend Handoff](docs/FRONTEND_HANDOFF.md)
 - [API Examples](docs/API_EXAMPLES.md)
 - [Stage2 RAG Readiness](docs/STAGE2_RAG_READINESS.md)
-
-## Notes For Reviewers
-
-- RAG citations are evidence support, not legal guarantees.
-- The Stage2 response includes a typed public contract for frontend consumption.
-- The current frontend contract is documented in the docs listed above.

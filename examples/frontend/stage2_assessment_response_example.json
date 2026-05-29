@@ -3,6 +3,26 @@
   "user_id": "user_1",
   "profile_id": "profile_1",
   "assessment_id": "11111111-1111-1111-1111-111111111111",
+  "created_at": "2026-05-29T12:00:00Z",
+  "persisted": true,
+  "persistence_status": "saved",
+  "system_work_trace": {
+    "entries": [
+      {
+        "step_id": "stage2_step_1",
+        "stage": "stage2_pipeline_v2",
+        "tool_name": "scenario_rag_query_planner",
+        "status": "ok",
+        "input_summary": "planned_query_count=3",
+        "output_summary": "selected_queries=3 skipped_queries=0",
+        "evidence_ids": [],
+        "warnings": [],
+        "public_safe": true
+      }
+    ],
+    "summary": "4 summarized tool steps are available for public transparency.",
+    "public_safe": true
+  },
   "warnings": [],
   "errors": [],
   "stage1": {
@@ -63,13 +83,28 @@
       "insufficient_evidence_count": 0,
       "scenario_evidence_complete": true,
       "scenario_evidence_status": "complete",
+      "corpus_coverage_status": "complete",
+      "expected_source_count": 9,
+      "indexed_source_count": 9,
+      "missing_sources_count": 0,
+      "source_ids": ["ac107", "part107", "sora"],
+      "source_titles": ["AC 107-2A", "Part 107", "SORA v2.5"],
+      "missing_sources": [],
+      "retrieval_origins": ["scenario_driven", "agent_requested"],
+      "synthetic_bundle_count": 0,
+      "reranker_configured": true,
+      "reranker_available": true,
+      "reranker_used": true,
+      "reranker_reason": "available_and_enabled",
       "evidence_bundle_details": [
         {
           "bundle_id": "bundle_1",
           "query": "AC 107-2A preflight weather assessment small UAS wind conditions",
           "support_status": "supported",
           "confidence": 0.71,
-          "no_evidence_reason": null
+          "no_evidence_reason": null,
+          "retrieval_origin": "scenario_driven",
+          "synthetic": false
         }
       ],
       "citations": [
@@ -84,7 +119,10 @@
           "quote": "Remote pilots should evaluate weather before operation.",
           "retrieval_score": 0.78,
           "confidence_label": "medium",
-          "rank": 1
+          "rank": 1,
+          "retrieval_origin": "scenario_driven",
+          "support_status": "supported",
+          "synthetic": false
         }
       ],
       "limitations": []
@@ -95,13 +133,22 @@
       "action_items": [],
       "limitations": [],
       "tool_trace": [],
+      "system_work_trace": {
+        "entries": [],
+        "summary": "No Stage2 execution trace was available.",
+        "public_safe": true
+      },
       "working_memory_summary": {
         "coverage_summary": {
           "input_signal_count": 12,
           "feature_assessment_count": 9
         },
         "reasoning_summary": "Analyzed mission signals and prioritized evidence-backed concerns.",
-        "limitations": []
+        "limitations": [],
+        "selected_rag_queries": [
+          "AC 107-2A preflight weather assessment small UAS wind conditions"
+        ],
+        "skipped_rag_queries": []
       },
       "top_input_signals": [],
       "top_feature_assessments": [],
@@ -134,6 +181,7 @@
     },
     "llm_synthesis": {
       "status": "generated",
+      "synthesis_status": "generated",
       "provider": "groq",
       "model_name": "llama-3.3-70b-versatile",
       "external_provider_used": true,
@@ -148,17 +196,61 @@
       "consistency_warnings": []
     },
     "report": {
-      "markdown": "# Operational Report\n\nDecision: caution",
-      "sections": [],
+      "markdown": "# Operational Report (completed)",
+      "sections": [
+        {
+          "title": "Executive Summary"
+        },
+        {
+          "title": "Input Summary"
+        },
+        {
+          "title": "ML Assessment"
+        },
+        {
+          "title": "SHAP Risk Drivers"
+        },
+        {
+          "title": "RAG Evidence"
+        },
+        {
+          "title": "Agent Operational Analysis"
+        },
+        {
+          "title": "LLM Synthesis"
+        },
+        {
+          "title": "DecisionEngine Final Decision"
+        },
+        {
+          "title": "Required Actions"
+        },
+        {
+          "title": "System Work Trace"
+        },
+        {
+          "title": "Diagnostics"
+        }
+      ],
       "generated": true
     }
   },
   "diagnostics": {
     "path_resolution_status": "current",
     "index_provenance_status": "current",
+    "persistence_status": "saved",
     "retrieval_usable": true,
     "rag_quality_is_proven": true,
     "scenario_evidence_complete": true,
+    "corpus_coverage_status": "complete",
+    "expected_source_count": 9,
+    "indexed_source_count": 9,
+    "source_ids": ["ac107", "part107", "sora"],
+    "source_titles": ["AC 107-2A", "Part 107", "SORA v2.5"],
+    "reranker_configured": true,
+    "reranker_available": true,
+    "reranker_used": true,
+    "reranker_reason": "available_and_enabled",
     "llm_mode": "generated",
     "external_llm_provider_used": true,
     "llm_provider": "groq",

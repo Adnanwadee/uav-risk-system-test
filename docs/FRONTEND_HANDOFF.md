@@ -1,221 +1,220 @@
 # Smart Skies — Frontend Handoff
 
-## 1. Project Overview
-Smart Skies is a backend service for UAV operational risk assessment. It combines:
-- Core input validation and structural checks
-- ML risk model (Stage1) with SHAP explanations
-- Retrieval-Augmented Generation (RAG) evidence retrieval
-- Deterministic Operational Agent analyses
-- Weighted Decision Engine consolidation
-- LLM deterministic fallback synthesis for human-friendly summaries
+## 1. Product Identity
 
-The backend is intended to serve drone operators and dashboard frontends that need an evidence-driven operational decision and explanation bundle.
+Smart Skies is an evidence-grounded hybrid AI decision framework for UAV flight risk management.
+
+It is not only:
+- an ML API
+- a generic RAG chatbot
+- an LLM decision maker
+
+Frontend should clearly present separate subsystem outputs:
+- ML risk signal
+- SHAP risk drivers
+- RAG evidence/citations
+- Agent recommendation
+- DecisionEngine final decision
+- Optional LLM synthesis
+- System Work Trace
+- Persistence/history lifecycle
 
 ## 2. Recommended Frontend Flow
-1. Create or select a drone profile.
-2. Submit a scenario assessment for that profile.
-3. Prefer the Stage2 endpoint for the full AI report (see below).
-4. Render a decision card first (go / caution / no_go) with score/confidence.
-5. Show ML/SHAP drivers, RAG evidence/citations, Agent findings + action items, and the LLM summary and operational report.
-6. Surface warnings/limitations and a developer diagnostics panel.
 
-## 3. Available Endpoints (summary)
-- Health
-  - `GET /health`
+1. Create or select a profile (`user_id`, `profile_id`).
+2. Submit Stage2 assessment with raw scenario + optional overrides + notes.
+3. Render top decision header first.
+4. Render ML, RAG, Agent, DecisionEngine, LLM, Trace cards.
+5. Save/use `assessment_id` for reload/history.
+6. Use history endpoints for timeline views and profile-filtered history.
 
-- Feature metadata
-  - `GET /model/metadata`
-  - `GET /features/raw-schema`
-  - `GET /features/profile-fields`
-  - `GET /features/scenario-fields`
-  - `GET /features/secondary-overrides`
+## 3. Endpoint Map
 
-- Profile endpoints
-  - `POST /users/{user_id}/profiles`
-  - `GET /users/{user_id}/profiles`
-  - `GET /users/{user_id}/profiles/{profile_id}`
-  - `PUT /users/{user_id}/profiles/{profile_id}`
-  - `DELETE /users/{user_id}/profiles/{profile_id}`
+- `POST /users/{user_id}/profiles`
+- `GET /users/{user_id}/profiles`
+- `GET /users/{user_id}/profiles/{profile_id}`
+- `PUT /users/{user_id}/profiles/{profile_id}`
 
-- Assessment endpoints
-  - `POST /users/{user_id}/profiles/{profile_id}/assessments` (Stage1: Core/ML/SHAP)
-  - `POST /users/{user_id}/profiles/{profile_id}/assessments/stage2` (Stage2: full AI pipeline + report + persistence)
-  - `GET /users/{user_id}/assessments` (list persisted assessments; optional `profile_id` filter)
-  - `GET /users/{user_id}/assessments/{assessment_id}` (get one persisted assessment)
+- `POST /users/{user_id}/profiles/{profile_id}/assessments/stage2`
+- `GET /users/{user_id}/assessments`
+  - Optional query: `profile_id`
+- `GET /users/{user_id}/assessments/{assessment_id}`
 
-## 4. Which Endpoint Should Frontend Use?
-- Use the Stage2 endpoint for the final UI experience (full decision, evidence, agent, and report).
-- Keep the Stage1 endpoint for fast, lightweight ML-only diagnostics or developer debug screens.
+## 4. Input Contract (Raw-First)
 
-## 5. Stage2 Request Shape
-- Path params: `user_id`, `profile_id`
-- Body (JSON):
-  - `scenario` — raw scenario fields (use the scenario raw schema from the backend; send only raw fields)
-  - `secondary_overrides` — `{ "values": { <raw_feature_name>: <numeric_scalar> } }` (optional)
-  - `operator_notes` — optional free-text
+Send only:
+- raw profile data
+- raw scenario fields
+- raw `secondary_overrides.values`
+- `operator_notes`
 
-Important: Do not send processed one-hot/model features or prediction outputs; send raw profile/scenario/override inputs only.
+Never send:
+- processed model features
+- one-hot columns
+- transformed feature vectors
+- model predictions
+- legacy `MasterFlightPayload`
 
-## 6. Stage2 Response Shape (top-level)
-Top-level keys returned in Stage2 response:
-- `status` — e.g., `completed`, `blocked`, `degraded`, `failed`
+## 5. Stage2 Top-Level Response Contract
+
+Top-level keys:
+- `status`
 - `user_id`
 - `profile_id`
-- `assessment_id` — generated and persisted for retrieval
-- `warnings` — array
-- `errors` — array
-- `stage1` — Stage1/ML/SHAP snapshot
-- `stage2` — RAG/Agent/Decision/LLM/Report bundle
-- `diagnostics` — system-level diagnostics
+- `assessment_id`
+- `created_at`
+- `persisted`
+- `persistence_status`
+- `system_work_trace`
+- `warnings`
+- `errors`
+- `stage1`
+- `stage2`
+- `diagnostics`
 
-### stage1
-- `ml.predicted_class`
-- `ml.probabilities`
-- `ml.raw_feature_count`
-- `ml.processed_feature_count`
-- `shap.top_features` — list of SHAP driver objects (feature, value, importance)
+## 6. Rendering Contract (UI Cards)
 
-### stage2.rag
-- `retrieval_usable` (bool)
-- `rag_quality_is_proven` (bool)
-- `evidence_bundle_count` (int)
-- `insufficient_evidence_count` (int)
-- `scenario_evidence_status` (`grounded` / `partial` / `insufficient` / `synthetic_only` / `unavailable`)
-- `corpus_coverage_status` (`complete` / `partial` / `unknown`)
-- `expected_source_count` / `indexed_source_count`
-- `source_ids` / `source_titles` / `missing_sources`
-- `reranker_configured` / `reranker_available` / `reranker_used` / `reranker_reason`
-- `evidence_bundle_details` (list)
+### Header / Status Card
+Render:
+- `status`
+- `assessment_id`
+- `persisted` + `persistence_status`
+- `stage2.decision.final_decision`
+- `stage2.decision.decision_score`
+- `stage2.decision.confidence_level`
 
-### stage2.agent
-- `recommendation` (e.g., `caution`)
-- `findings` (list)
-- `action_items` (list)
-- `limitations` (list)
-- `working_memory_summary` (public-safe summary only)
-- `tool_trace` (sanitized public-safe tool trace)
-- `system_work_trace` (Transparency Trace; structured, summarized, public-safe)
+### ML Card
+Render:
+- `stage1.ml.predicted_class`
+- `stage1.ml.probabilities`
+- `stage1.shap.top_features`
 
-### stage2.decision
-- `final_decision` (`go` / `caution` / `no_go`)
-- `decision_score` (0.0–1.0)
-- `confidence_level` (low/medium/high)
-- `stage_weights` (breakdown by component)
-- `stage_contributions` (list)
-- `decision_reasons` (list)
-- `blocking_reasons` (list)
-- `required_actions` (list)
-- `limitations` (list)
+Display note:
+- ML is a risk signal, not legal authority.
 
-### stage2.llm_synthesis
-- `status` (e.g., `fallback`)
-- `executive_summary`
-- `operational_interpretation`
-- `decision_explanation`
-- `key_risk_drivers`
-- `mitigation_narrative`
+### RAG Evidence Card
+Render:
+- `stage2.rag.evidence_bundle_count`
+- `stage2.rag.citations`
+  - `source_title`
+  - page/chunk fields where available
+  - `support_status`
+  - `retrieval_origin`
+  - `synthetic`
+- `stage2.rag.scenario_evidence_status`
+- `stage2.rag.retrieval_usable`
+- `stage2.rag.rag_quality_is_proven`
+- `stage2.rag.corpus_coverage_status`
+- `stage2.rag.expected_source_count`
+- `stage2.rag.indexed_source_count`
+- `stage2.rag.missing_sources_count`
+- `stage2.rag.reranker_configured`
+- `stage2.rag.reranker_available`
+- `stage2.rag.reranker_used`
+- `stage2.rag.reranker_reason`
+
+Insufficient evidence behavior:
+- If insufficient, highlight limitations and avoid fake certainty.
+
+### Agent Card
+Render:
+- `stage2.agent.recommendation`
+- `stage2.agent.findings`
+- `stage2.agent.action_items`
+- evidence references in findings/actions
+- `stage2.agent.selected_rag_queries`
+- `stage2.agent.skipped_rag_queries`
+- sanitized `stage2.agent.tool_trace`
+- `stage2.agent.working_memory_summary`
+
+### DecisionEngine Card
+Render:
+- `stage2.decision.final_decision`
+- `stage2.decision.decision_score`
+- `stage2.decision.confidence_level`
+- `stage2.decision.stage_contributions`
+- `stage2.decision.required_actions`
+- `stage2.decision.blocking_reasons`
+
+Display note:
+- DecisionEngine is final authority.
+
+### LLM Synthesis Card
+Render only when present (or status not-generated/fallback):
+- `stage2.llm_synthesis.status` (or compatibility alias `synthesis_status`)
+- `provider`, `model_name`, `external_provider_used`
+- narrative fields (`executive_summary`, `operational_interpretation`, `decision_explanation`, `mitigation_narrative`)
 - `consistency_warnings`
 
-### stage2.report
-- `structured` (object) — structured operational report
-- `markdown` (string) — optional markdown rendering of the report
+Display note:
+- LLM does not decide.
 
-### diagnostics
-- `path_resolution_status`
-- `index_provenance_status`
-- `retrieval_usable`
-- `rag_quality_is_proven`
-- `scenario_evidence_complete`
-- `corpus_coverage_status` / `expected_source_count` / `indexed_source_count`
-- `source_ids` / `source_titles`
-- `reranker_configured` / `reranker_available` / `reranker_used` / `reranker_reason`
-- `llm_mode` (e.g., `fallback`)
-- `external_llm_provider_used` (bool)
+### System Work Trace Card
+Render as timeline/table:
+- `stage`
+- `tool_name`
+- `status`
+- `input_summary`
+- `output_summary`
+- `evidence_ids`
+- `warnings`
 
-## 6A. Persisted Assessment Retrieval Shapes
-`GET /users/{user_id}/assessments` returns list items with:
+Do not expect hidden reasoning/raw prompts/raw completions.
+
+## 7. Report Rendering Guide
+
+Use `stage2.report.sections` in stable order:
+1. Executive Summary
+2. Input Summary
+3. ML Assessment
+4. SHAP Risk Drivers
+5. RAG Evidence
+6. Agent Operational Analysis
+7. LLM Synthesis
+8. DecisionEngine Final Decision
+9. Required Actions
+10. System Work Trace
+11. Diagnostics
+
+Optional markdown rendering is in `stage2.report.markdown`.
+
+## 8. Persistence / History Guide
+
+### List endpoint
+`GET /users/{user_id}/assessments` (optional `profile_id` filter)
+
+List item fields:
 - `assessment_id`, `user_id`, `profile_id`, `created_at`, `status`
 - `final_decision`, `decision_score`, `confidence_level`
 - `summary`
 
-`GET /users/{user_id}/assessments/{assessment_id}` returns full persisted record including:
-- `stage1`, `stage2`, `report`, `system_work_trace`, `diagnostics`
-- normalized `warnings` and `errors`
+### Get endpoint
+`GET /users/{user_id}/assessments/{assessment_id}`
 
-## 7. Status Meanings
-- `completed` — pipeline completed successfully
-- `blocked` — structural hard veto prevented ML/Stage2 execution
-- `degraded` — partial results (e.g., RAG unavailable) but a decision returned
-- `failed` — unrecoverable error
+Returns full persisted assessment record for view reload without rerunning pipeline:
+- `stage1`, `stage2`, `report`, `system_work_trace`, `diagnostics`, warnings/errors
 
-## 8. Decision Meanings
-- `go` — mission appears acceptable under provided data
-- `caution` — mission requires review or mitigations
-- `no_go` — mission should not proceed
+## 9. RAG / Agent / Decision / LLM Separation
 
-## 9. Confidence / Score Meaning
-- `decision_score` is a normalized operational concern signal (0.0 = low concern, 1.0 = high concern).
-- `confidence_level` is an overall confidence heuristic (low/medium/high).
-- These are operational guidance only and not legal authority.
+- RAG retrieves evidence and citation provenance.
+- Agent performs evidence-grounded operational analysis.
+- DecisionEngine deterministically computes final decision.
+- LLM is optional synthesis/wording only.
 
-## 10. Rendering Recommendations (UI panels)
-- Final Decision Card (decision + score + confidence)
-- Required Actions / Checklist
-- ML Prediction + Probabilities
-- SHAP Top Drivers (expandable list)
-- RAG Evidence / Citations (click to view document preview/page)
-- Agent Findings and Action Items
-- LLM Operational Summary (concise paragraph)
-- Limitations / Warnings
-- Diagnostics (developer mode)
+## 10. Known Limitations
 
-## 11. Evidence / Citation Rendering
-- Surface the source document and a short quote or page hint when available.
-- Treat RAG as evidence augmentation — do not over-interpret as legal proof.
-- If insufficient evidence, highlight the limitation clearly in the UI.
+1. FAISS secret must be configured outside git (`UAV_FAISS_SECRET`) for production.
+2. Combined real-RAG + env-LLM smoke may terminate under resource pressure.
+3. Runtime may reload heavy resources repeatedly (future caching/reuse improvement).
+4. Legacy ACE/simulation files are not the current runtime path.
+5. Persistence is local JSON (not production multi-process DB behavior).
+6. Reranker production usage depends on local model/runtime availability.
+7. LLM is optional and never decision-authoritative.
 
-## 12. LLM Synthesis Rendering
-- LLM text is deterministic fallback by default unless a provider is configured.
-- It is a synthesis of existing signals, not a primary source of evidence.
-- Display as human-readable summary; always link back to ML/Agent/RAG sections.
+## 11. Blocked Behavior
 
-## 12A. Public-Safe Trace Rendering
-- Treat `working_memory_summary`, `tool_trace`, and `system_work_trace` as frontend-displayable transparency metadata.
-- Do not expect hidden chain-of-thought, raw prompts/completions, raw tool history, or secret-bearing internal logs in these fields.
-- Render summaries, statuses, evidence/citation IDs, and action/finding references.
-
-## 13. Blocked Response Behavior
-- When `status == "blocked"`:
-  - `ml` is `null` (no model output)
-  - `decision.final_decision` can be `no_go`
-  - Show blocking reasons and do not display fabricated ML/RAG results
-
-## 14. Known Limitations
-- Assessment persistence uses local JSON storage and is scoped to public-safe records only.
-- No assessment delete endpoint is implemented in this stage.
-- RAG adapter may be missing if local index files are absent.
-- LLM is deterministic fallback (no external provider configured by default).
-- Raw feature map is trimmed from responses to ensure JSON-safe metadata.
-- FAISS secret warning may appear in development — treat as config issue.
-
-## 15. Minimal Frontend Acceptance Checklist
-- Can create/select a profile
-- Can submit Stage2 assessment
-- Can display final decision, score, and confidence
-- Can display ML/SHAP drivers
-- Can display RAG evidence and citations
-- Can display Agent findings and action items
-- Can display LLM synthesis and the operational report
-- Can correctly handle `blocked` responses
-
-
-----
-Generated by Smart Skies backend docs generator. Keep this in sync with backend changes.
-
-
-## 12B. Scenario-Driven vs Agent-Requested Retrieval
-- `scenario_driven`: RAG queries generated from scenario/profile/ML/SHAP context in pipeline prefetch.
-- `agent_requested`: additional bounded RAG queries requested by OperationalAgentV2 when evidence gaps remain.
-- `fallback`: explicit fallback retrieval context when runtime retrieval is unavailable.
-
-Synthetic/HyDE-like text is never treated as grounded citation evidence.
+When `status == "blocked"`:
+- `stage1.ml` is `null`
+- decision may be forced to `no_go`
+- show blocking reasons
+- do not render fabricated ML/RAG certainty

@@ -1,136 +1,57 @@
 # Stage2 RAG Readiness
 
-## Canonical Paths
-- Docs corpus: `src/uav_risk/stage2/docs/`
-- Models: `src/uav_risk/stage2/knowledge/models/`
-- Canonical vector DB: `src/uav_risk/stage2/knowledge/vectdb/`
+## Current Readiness Status
 
-## Canonical Artifacts
-- `dense_index.faiss`
-- `dense_index.faiss.sig` (if enabled)
-- `dense_mapping.json`
-- `sparse_index.pkl`
-- `metadata.json`
+- RAG source coverage status: **9 expected / 9 indexed**.
+- RAG quality is **proven by diagnostics**.
+- Real RAG smoke completed independently.
+- Groq reachability completed independently.
+- Combined real-RAG + env-LLM smoke may terminate from runtime memory/resource pressure.
 
-## Validation Commands
-- `python scripts/validate_stage2_rag_index.py`
-- `python scripts/run_stage2_rag_diagnostic.py --run-quality`
-- `python scripts/run_stage2_pipeline_v2_smoke.py --use-real-rag`
+## Runtime Metadata Exposed in API
 
-## Operational Warnings
-
-- `UAV_FAISS_SECRET` must be configured with a strong non-default secret before treating the canonical FAISS path as release-safe.
-- Evidence and query caches may be written during runtime:
-  - `src/uav_risk/stage2/knowledge/cache/query_history.json`
-  - `src/uav_risk/stage2/knowledge/logs/*.jsonl`
-- The following commands are manual-only and should not be used as casual readiness checks:
-  - `python scripts/rebuild_stage2_rag_index.py --force`
-  - `python src/uav_risk/stage2/rag/build_index.py --force`
-  - `python src/uav_risk/stage2/rag/force_download.py`
-  - `python src/uav_risk/stage2/knowledge/models/embedding/train_script.py`
-  - `python scripts/simulate_agent_live.py`
-
-## Metric Semantics
-- `rag_quality_is_proven`: global RAG quality harness status across fixed expected/unsupported cases.
-- `scenario_evidence_complete`: scenario-level completeness for current pipeline smoke run.
-- `insufficient_evidence_count`: count of scenario bundles returned with `insufficient_evidence`.
-
-## Current Evidence Safety Rules
-- LLM output is not evidence in current retrieval path.
-- HyDE-generated text is not evidence.
-- Unsupported/out-of-domain queries must return `insufficient_evidence`.
-- Citation provenance must come from retrieved chunk metadata (`source_id`, source filename/title, page/chunk where available).
-
-
-## Authority Boundaries
-- RAG provides evidence retrieval and citation provenance support.
-- DecisionEngine remains deterministic final authority for `final_decision` and `decision_score`.
-- LLM synthesis is interpretation/reporting only and does not override decision outputs or evidence support status.
-
-## Active Runtime Files
-- `src/uav_risk/stage2/rag/config_v3.py`
-- `src/uav_risk/stage2/rag/rag_core_v3.py`
-- `src/uav_risk/stage2/rag/hybrid_retriever.py`
-- `src/uav_risk/stage2/rag/adapter.py`
-- `src/uav_risk/stage2/rag/quality.py`
-- `src/uav_risk/stage2/rag/runtime_diagnostics.py`
-- `src/uav_risk/stage2/pipeline_v2.py`
-- `src/uav_risk/stage2/reporting.py`
-
-## Compatibility / Legacy / Optional
-- Compatibility bridge: `src/uav_risk/stage2/rag/schemas.py`
-- Legacy do-not-use in v2 runtime path: `src/uav_risk/stage2/pipeline.py`, `src/uav_risk/stage2/agent/ace_agent.py`
-- Optional future (not used in current evidence path):
-  - `src/uav_risk/stage2/rag/groq_llm.py`
-  - `src/uav_risk/stage2/rag/hyde_pipeline.py`
-  - `src/uav_risk/stage2/rag/prompts_v3.py`
-  - `groq_llm.py` is legacy/quarantine-later.
-  - `hyde_pipeline.py` is optional/fallback, not active LLM-backed HyDE in the current factory path.
-  - `reranker` is configurable and available, but its live activation is not proven unless explicitly wired and verified by runtime diagnostics.
-
-## Non-Canonical Home Cache Cleanup Note
-If stale indices exist under `/home/vscode/.uav_rag/indices`, they are non-canonical for current default runtime.
-Manual cleanup (optional):
-- `rm -rf /home/vscode/.uav_rag/indices`
-
-Run this only after confirming diagnostics and smoke use canonical `src/uav_risk/stage2/knowledge/vectdb/` paths.
-
-
-## Score / Rank / Confidence Visibility
-- Citations are sorted by highest score first (descending by `final_score` fallback chain).
-- Each citation exposes metadata fields used by downstream agent/report tooling:
-  - `rank` (1-based)
-  - `final_score`
-  - `retrieval_score`
-  - `top_score` (alias for visibility)
-  - `dense_score`
-  - `sparse_score`
-  - `source_match_score`
-  - `confidence_label` (`HIGH` / `MEDIUM` / `LOW` / `VERY LOW`)
-- Citation provenance remains required:
-  - `source_id`, `source_filename/source_title`, `chunk_id`, `page_start/page_end` when available.
-
-## Query Guidance (Generic vs Refined)
-Generic scenario phrasing can honestly abstain when evidence safety gates reject weak candidates.
-
-- Generic (may abstain):
-  - `uav operational guidance for risk class Medium Risk`
-- Refined (expected source-aware support):
-  - `special condition UAS medium risk operational limitations`
-  - `SORA medium risk UAS operational safety objectives`
-
-- Generic airspace query (now source-intent routed to Part107/AC107 family):
-  - `UAS operation controlled airspace restricted area no-fly zone guidance`
-- Refined vlos/weather queries:
-  - `Part 107 visual line of sight small unmanned aircraft operation`
-  - `small UAS preflight weather assessment wind conditions guidance`
-
-## Legacy / Quarantine Notes
-- Current default runtime does **not** use `/home/vscode/.uav_rag/indices`.
-- Optional future components are kept but not active in evidence retrieval path:
-  - `groq_llm.py`, `hyde_pipeline.py`, `prompts_v3.py`
-- Legacy do-not-use runtime files remain quarantined by policy and inventory:
-  - `src/uav_risk/stage2/pipeline.py`
-  - `src/uav_risk/stage2/agent/ace_agent.py`
-
-The canonical readiness evidence remains the validation command set above; do not use legacy or manual-only tooling as final readiness proof.
-
-
-## Stage 3 Runtime Semantics
-- Corpus coverage is surfaced as public diagnostics metadata:
-  - `corpus_coverage_status` (`complete` / `partial` / `unknown`)
-  - `expected_source_count`
-  - `indexed_source_count`
-  - `missing_sources`
-  - `source_ids`, `source_titles`
-- Reranker runtime status is surfaced as public diagnostics metadata:
+Stage2 response/diagnostics expose:
+- `rag_quality_is_proven`
+- `scenario_evidence_status`
+- `corpus_coverage_status`
+- `expected_source_count`
+- `indexed_source_count`
+- `missing_sources`
+- `source_ids`, `source_titles`
+- reranker status fields:
   - `reranker_configured`
   - `reranker_available`
   - `reranker_used`
   - `reranker_reason`
-- Retrieval origins are explicit in evidence metadata:
-  - `scenario_driven`
-  - `agent_requested`
-  - `fallback`
-- Synthetic/HyDE-like candidate text is never promoted to grounded citations.
-  - Synthetic-only retrieval outcomes are marked `evidence_status=synthetic_only`.
+
+## Synthetic Evidence Policy
+
+- Synthetic/HyDE-like text is never promoted to grounded citation evidence.
+- Synthetic-only outcomes must stay marked synthetic and be treated as non-grounded support.
+
+## FAISS Secret Warning
+
+- Default FAISS secret is insecure for production/release.
+- Set `UAV_FAISS_SECRET` outside git with a strong secret before production use.
+
+## Combined RAG + LLM Limitation
+
+- Independent checks succeeded:
+  - real RAG smoke
+  - Groq provider reachability
+- Combined real-RAG + env-LLM smoke may terminate due to resource pressure.
+- Treat this as runtime efficiency/loading limitation, not confirmed backend decision-logic failure.
+
+## Manual Validation Commands
+
+Do not run these automatically in this stage unless explicitly instructed.
+
+```bash
+python scripts/validate_stage2_rag_index.py
+python scripts/run_stage2_rag_diagnostic.py --run-quality
+python scripts/run_stage2_pipeline_v2_smoke.py --use-real-rag
+python scripts/check_groq_provider_reachability.py
+python scripts/run_stage2_pipeline_v2_smoke.py --use-real-rag --use-env-llm
+```
+
+Note: The combined `--use-real-rag --use-env-llm` command may terminate until runtime caching/reuse is improved.

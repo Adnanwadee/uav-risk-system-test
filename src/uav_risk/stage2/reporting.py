@@ -3,7 +3,6 @@ from __future__ import annotations
 from uuid import uuid4
 
 from uav_risk.stage2.contracts import (
-    AgentFindingType,
     EvidenceBundle,
     EvidenceSupportStatus,
     OperationalReport,
@@ -87,7 +86,11 @@ def build_operational_report(
     )
 
     evidence_content: list[str] = []
-    grounded_count = sum(1 for b in evidence_bundles if b.support_status in {EvidenceSupportStatus.SUPPORTED, EvidenceSupportStatus.PARTIALLY_SUPPORTED})
+    grounded_count = sum(
+        1
+        for b in evidence_bundles
+        if b.support_status in {EvidenceSupportStatus.SUPPORTED, EvidenceSupportStatus.PARTIALLY_SUPPORTED}
+    )
     insufficient_count = sum(1 for b in evidence_bundles if b.support_status == EvidenceSupportStatus.INSUFFICIENT_EVIDENCE)
 
     evidence_content.append(
@@ -137,8 +140,8 @@ def build_operational_report(
         )
     )
 
-    if stage2_result.decision is not None:
-        decision = stage2_result.decision
+    decision = stage2_result.decision
+    if decision is not None:
         decision_content = [
             f"final_decision: {decision.final_decision.value}",
             f"decision_score: {decision.decision_score}",
@@ -168,19 +171,21 @@ def build_operational_report(
             decision_content.append(
                 f"decision_evidence_ref claim_id={ref.claim_id} citation_ids={','.join(ref.citation_ids)}"
             )
+    else:
+        decision_content = ["Decision engine output is not available."]
 
-        sections.append(
-            OperationalReportSection(
-                section_type=OperationalReportSectionType.DECISION_ENGINE,
-                title="DecisionEngine Final Decision",
-                content=decision_content,
-                citation_ids=[],
-                metadata={},
-            )
+    sections.append(
+        OperationalReportSection(
+            section_type=OperationalReportSectionType.DECISION_ENGINE,
+            title="DecisionEngine Final Decision",
+            content=decision_content,
+            citation_ids=[],
+            metadata={},
         )
+    )
 
-    if stage2_result.llm_synthesis is not None:
-        synthesis = stage2_result.llm_synthesis
+    synthesis = stage2_result.llm_synthesis
+    if synthesis is not None:
         synthesis_content = [
             "LLM-assisted synthesis based only on deterministic pipeline outputs.",
             f"status: {synthesis.status.value}",
@@ -203,22 +208,34 @@ def build_operational_report(
             synthesis_content.append("finding_ids: " + ",".join(synthesis.finding_ids))
         if synthesis.action_item_ids:
             synthesis_content.append("action_item_ids: " + ",".join(synthesis.action_item_ids))
+    else:
+        synthesis_content = [
+            "LLM-assisted synthesis based only on deterministic pipeline outputs.",
+            "status: not_generated",
+            "provider: not_configured",
+            "model_name: not_configured",
+            "executive_summary: ",
+            "operational_interpretation: ",
+            "decision_explanation: ",
+            "mitigation_narrative: ",
+        ]
 
-        sections.append(
-            OperationalReportSection(
-                section_type=OperationalReportSectionType.LLM_SYNTHESIS,
-                title="LLM Synthesis",
-                content=synthesis_content,
-                citation_ids=[],
-                metadata={},
-            )
+    sections.append(
+        OperationalReportSection(
+            section_type=OperationalReportSectionType.LLM_SYNTHESIS,
+            title="LLM Synthesis",
+            content=synthesis_content,
+            citation_ids=[],
+            metadata={},
         )
+    )
 
-    if stage2_result.agent_result is not None:
-        findings = stage2_result.agent_result.findings
+    agent_result = stage2_result.agent_result
+    if agent_result is not None:
+        findings = agent_result.findings
         assessment_content = [
-            f"recommendation: {stage2_result.agent_result.recommendation.value}",
-            f"confidence: {stage2_result.agent_result.confidence}",
+            f"recommendation: {agent_result.recommendation.value}",
+            f"confidence: {agent_result.confidence}",
             f"findings_count: {len(findings)}",
         ]
         for finding in findings:
@@ -247,8 +264,8 @@ def build_operational_report(
                         f"evidence_ref claim_id={ref.claim_id} citation_ids={','.join(ref.citation_ids)}"
                     )
 
-        if stage2_result.agent_result.working_memory is not None:
-            wm = stage2_result.agent_result.working_memory
+        if agent_result.working_memory is not None:
+            wm = agent_result.working_memory
             assessment_content.append("working_memory_summary: " + (wm.reasoning_summary or "not available"))
             assessment_content.append(
                 "working_memory_coverage: "
@@ -268,19 +285,22 @@ def build_operational_report(
                 assessment_content.append("selected_rag_queries: " + " | ".join(wm.selected_rag_queries[:8]))
             if wm.skipped_rag_queries:
                 assessment_content.append("skipped_rag_queries: " + " | ".join(wm.skipped_rag_queries[:8]))
+    else:
+        assessment_content = ["Agent result is not available."]
 
-        sections.append(
-            OperationalReportSection(
-                section_type=OperationalReportSectionType.AGENT_ASSESSMENT,
-                title="Agent Operational Analysis",
-                content=assessment_content,
-                citation_ids=[],
-                metadata={},
-            )
+    sections.append(
+        OperationalReportSection(
+            section_type=OperationalReportSectionType.AGENT_ASSESSMENT,
+            title="Agent Operational Analysis",
+            content=assessment_content,
+            citation_ids=[],
+            metadata={},
         )
+    )
 
-        tool_trace_lines = []
-        for tool_call in stage2_result.agent_result.tool_trace:
+    tool_trace_lines: list[str] = []
+    if agent_result is not None:
+        for tool_call in agent_result.tool_trace:
             tool_trace_lines.append(
                 f"tool[{tool_call.tool_name.value}] status={tool_call.status}: {tool_call.purpose}"
             )
@@ -293,59 +313,36 @@ def build_operational_report(
             if tool_call.related_finding_ids:
                 tool_trace_lines.append("related_finding_ids: " + ",".join(tool_call.related_finding_ids))
 
-        sections.append(
-            OperationalReportSection(
-                section_type=OperationalReportSectionType.AGENT_TOOL_TRACE,
-                title="System Work Trace",
-                content=tool_trace_lines or ["No agent tool trace was provided."],
-                citation_ids=[],
-                metadata={},
-            )
+    sections.append(
+        OperationalReportSection(
+            section_type=OperationalReportSectionType.AGENT_TOOL_TRACE,
+            title="System Work Trace",
+            content=tool_trace_lines or ["No agent tool trace was provided."],
+            citation_ids=[],
+            metadata={},
         )
+    )
 
-        limitation_lines = [
-            finding.summary
-            for finding in findings
-            if finding.finding_type
-            in {AgentFindingType.LIMITATION, AgentFindingType.OPERATIONAL_UNCERTAINTY}
-        ]
-        sections.append(
-            OperationalReportSection(
-                section_type=OperationalReportSectionType.LIMITATIONS,
-                title="Limitations",
-                content=limitation_lines or ["No explicit limitations were provided."],
-                citation_ids=[],
-                metadata={},
-            )
-        )
-
+    action_lines: list[str] = []
+    if agent_result is not None:
         action_lines = [
             f"{item.summary} (priority={item.priority.value})"
             + (
                 f" [evidence_refs={';'.join([','.join(ref.citation_ids) for ref in item.evidence_references])}]"
                 if item.evidence_references else ""
             )
-            for item in stage2_result.agent_result.action_items
+            for item in agent_result.action_items
         ]
-        sections.append(
-            OperationalReportSection(
-                section_type=OperationalReportSectionType.OPERATOR_ACTIONS,
-                title="Required Actions",
-                content=action_lines or ["No operator action items were provided."],
-                citation_ids=[],
-                metadata={},
-            )
+
+    sections.append(
+        OperationalReportSection(
+            section_type=OperationalReportSectionType.OPERATOR_ACTIONS,
+            title="Required Actions",
+            content=action_lines or ["No operator action items were provided."],
+            citation_ids=[],
+            metadata={},
         )
-    else:
-        sections.append(
-            OperationalReportSection(
-                section_type=OperationalReportSectionType.LIMITATIONS,
-                title="Limitations",
-                content=["Agent result is not available."],
-                citation_ids=[],
-                metadata={},
-            )
-        )
+    )
 
     diagnostics_lines = [
         f"status: {stage2_result.status.value}",
@@ -394,7 +391,6 @@ def build_operational_report(
         OperationalReportSectionType.OPERATOR_ACTIONS: 9,
         OperationalReportSectionType.AGENT_TOOL_TRACE: 10,
         OperationalReportSectionType.ERRORS: 11,
-        OperationalReportSectionType.LIMITATIONS: 12,
     }
     sections = sorted(sections, key=lambda section: section_order.get(section.section_type, 99))
 

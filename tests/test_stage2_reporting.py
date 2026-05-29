@@ -497,3 +497,30 @@ def test_report_section_order_keeps_system_trace_before_diagnostics() -> None:
     assert "System Work Trace" in titles
     assert "Diagnostics" in titles
     assert titles.index("System Work Trace") < titles.index("Diagnostics")
+
+
+def test_report_has_required_stage4_section_order() -> None:
+    report = build_operational_report(
+        _input(),
+        Stage2AssessmentResult(
+            status=Stage2Status.DEGRADED,
+            assessment_id="a1",
+            evidence_bundles=[],
+            agent_result=None,
+            errors=[],
+        ),
+    )
+    titles = [section.title for section in report.sections]
+    assert titles == [
+        "Executive Summary",
+        "Input Summary",
+        "ML Assessment",
+        "SHAP Risk Drivers",
+        "RAG Evidence",
+        "Agent Operational Analysis",
+        "LLM Synthesis",
+        "DecisionEngine Final Decision",
+        "Required Actions",
+        "System Work Trace",
+        "Diagnostics",
+    ]

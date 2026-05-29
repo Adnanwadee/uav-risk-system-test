@@ -73,11 +73,29 @@ def test_stage2_endpoint_returns_stable_frontend_ready_structure(tmp_path, monke
         assert response.status_code == 200
         body = response.json()
 
-        assert set(body.keys()) == {"status", "user_id", "profile_id", "assessment_id", "warnings", "errors", "stage1", "stage2", "diagnostics"}
+        assert set(body.keys()) == {
+            "status",
+            "user_id",
+            "profile_id",
+            "assessment_id",
+            "created_at",
+            "persisted",
+            "persistence_status",
+            "system_work_trace",
+            "warnings",
+            "errors",
+            "stage1",
+            "stage2",
+            "diagnostics",
+        }
         assert body["status"] in {"completed", "degraded", "skipped", "failed"}
         assert body["user_id"] == "user_1"
         assert body["profile_id"] == "profile_1"
         assert isinstance(body["assessment_id"], str)
+        assert isinstance(body["created_at"], str)
+        assert body["persisted"] is True
+        assert body["persistence_status"] == "saved"
+        assert body["system_work_trace"]["public_safe"] is True
         uuid.UUID(body["assessment_id"])
 
         assert "ml" in body["stage1"] and "shap" in body["stage1"]
@@ -103,6 +121,9 @@ def test_stage2_endpoint_returns_stable_frontend_ready_structure(tmp_path, monke
         assert "reranker_configured" in s2["rag"]
         assert "source_ids" in s2["rag"]
         assert "source_titles" in s2["rag"]
+        assert "missing_sources_count" in s2["rag"]
+        assert "retrieval_origins" in s2["rag"]
+        assert "synthetic_bundle_count" in s2["rag"]
 
         assert "findings" in s2["agent"]
         assert "action_items" in s2["agent"]
@@ -116,6 +137,7 @@ def test_stage2_endpoint_returns_stable_frontend_ready_structure(tmp_path, monke
         assert "stage_contributions" in s2["decision"]
 
         assert "status" in s2["llm_synthesis"]
+        assert "synthesis_status" in s2["llm_synthesis"]
         assert "provider" in s2["llm_synthesis"]
         assert "model_name" in s2["llm_synthesis"]
         assert "external_provider_used" in s2["llm_synthesis"]
@@ -146,6 +168,7 @@ def test_stage2_create_persists_record_and_get_by_id(tmp_path, monkeypatch):
         assert body["user_id"] == "user_1"
         assert body["profile_id"] == "profile_1"
         assert isinstance(body["created_at"], str)
+        assert body["system_work_trace"]["public_safe"] is True
         assert body["stage2"]["agent"]["system_work_trace"]["public_safe"] is True
 
         keys = set(_walk_keys(body))
@@ -199,6 +222,7 @@ def test_stage2_blocked_response_is_json_safe_and_has_no_fake_outputs(tmp_path, 
         assert body["stage2"]["decision"]["final_decision"] == "no_go"
         assert body["stage2"]["rag"]["evidence_bundle_count"] == 0
         assert body["stage2"]["llm_synthesis"]["external_provider_used"] is False
+        assert body["stage2"]["llm_synthesis"]["synthesis_status"] == "disabled"
 
 
 def test_stage2_response_has_no_forbidden_private_reasoning_keys(tmp_path, monkeypatch):
@@ -245,3 +269,20 @@ def test_stage2_env_groq_missing_key_keeps_safe_llm_mode(tmp_path, monkeypatch):
         body = response.json()
         assert body["diagnostics"]["external_llm_provider_used"] is False
         assert body["diagnostics"]["llm_mode"] in {"fallback", "disabled", "generated", "failed"}
+
+
+def test_openapi_exposes_stage2_and_history_endpoints():
+    with TestClient(create_app()) as client:
+        spec = client.get("/openapi.json")
+        assert spec.status_code == 200
+        body = spec.json()
+
+    paths = body["paths"]
+    assert "/users/{user_id}/profiles/{profile_id}/assessments/stage2" in paths
+    assert "/users/{user_id}/assessments" in paths
+    assert "/users/{user_id}/assessments/{assessment_id}" in paths
+
+    components = body.get("components", {}).get("schemas", {})
+    assert "Stage2AssessmentResponse" in components
+    assert "AssessmentRecord" in components
+    assert "AssessmentListItem" in components

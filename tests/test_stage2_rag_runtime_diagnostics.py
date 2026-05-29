@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 
 import pytest
 
@@ -218,3 +219,42 @@ async def test_runtime_diagnostic_exposes_rag_quality_alias(monkeypatch: pytest.
     result = await run_rag_runtime_diagnostic(run_quality=True)
     assert result.metadata["rag_quality_is_proven"] is True
     assert result.metadata["quality_is_proven"] is True
+
+
+def test_corpus_coverage_summary_from_fake_metadata(tmp_path) -> None:
+    metadata_path = tmp_path / "metadata.json"
+    dense_mapping_path = tmp_path / "dense_mapping.json"
+
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "source_count": 3,
+                "source_documents": [
+                    {"source_id": "s1", "filename": "Doc 1"},
+                    {"source_id": "s2", "filename": "Doc 2"},
+                    {"source_id": "s3", "filename": "Doc 3"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    dense_mapping_path.write_text(
+        json.dumps(
+            {
+                "chunks": [
+                    {"source_id": "s1", "source_title": "Doc 1"},
+                    {"source_id": "s2", "source_title": "Doc 2"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = runtime_diagnostics.inspect_rag_corpus_coverage(
+        metadata_path=metadata_path,
+        dense_mapping_path=dense_mapping_path,
+    )
+    assert summary.coverage_status == "partial"
+    assert summary.expected_source_count == 3
+    assert summary.indexed_source_count == 2
+    assert "s3" in summary.missing_sources

@@ -111,9 +111,35 @@ class HybridRetriever:
         self.dense_weight = getattr(config, "DENSE_WEIGHT", 0.6) if config else 0.6
         self.sparse_weight = getattr(config, "SPARSE_WEIGHT", 0.4) if config else 0.4
         self.use_reranker = getattr(config, "USE_RERANKER", True) if config else True
+        self._reranker_status: dict[str, Any] = {
+            "reranker_configured": bool(self.use_reranker),
+            "reranker_available": bool(self.reranker is not None),
+            "reranker_used": False,
+            "reranker_reason": "configured_and_available" if self.use_reranker and self.reranker is not None else (
+                "disabled_by_configuration" if not self.use_reranker else "reranker_not_available"
+            ),
+        }
 
         self.min_final_score = 0.08
         self.min_quote_chars = 40
+
+    def _set_reranker_status(
+        self,
+        *,
+        configured: bool,
+        available: bool,
+        used: bool,
+        reason: str,
+    ) -> None:
+        self._reranker_status = {
+            "reranker_configured": configured,
+            "reranker_available": available,
+            "reranker_used": used,
+            "reranker_reason": reason,
+        }
+
+    def get_reranker_status(self) -> dict[str, Any]:
+        return dict(self._reranker_status)
 
     @staticmethod
     def detect_source_intent(query: str) -> dict[str, Any]:
@@ -375,6 +401,17 @@ class HybridRetriever:
 
     async def rerank(self, query: str, documents: list[RetrievedDocument]) -> list[RetrievedDocument]:
         if not self.reranker or not self.use_reranker or not documents:
+            reason = "reranker_not_available"
+            if not self.use_reranker:
+                reason = "disabled_by_configuration"
+            elif not documents:
+                reason = "no_documents_to_rerank"
+            self._set_reranker_status(
+                configured=bool(self.use_reranker),
+                available=bool(self.reranker is not None),
+                used=False,
+                reason=reason,
+            )
             return documents
         try:
             loop = asyncio.get_event_loop()
@@ -384,8 +421,20 @@ class HybridRetriever:
                 d.rerank_score = float(s)
                 d.final_score = 0.45 * d.final_score + 0.35 * d.rerank_score + 0.2 * d.rrf_score
             documents.sort(key=lambda x: x.final_score, reverse=True)
+            self._set_reranker_status(
+                configured=True,
+                available=True,
+                used=True,
+                reason="reranker_invoked",
+            )
         except Exception as exc:
             logger.warning("Reranking failed: %s", exc)
+            self._set_reranker_status(
+                configured=bool(self.use_reranker),
+                available=bool(self.reranker is not None),
+                used=False,
+                reason="reranker_failed",
+            )
         return documents
 
     def _rerank_sync(self, pairs: list[tuple[str, str]]) -> list[float]:
@@ -459,8 +508,20 @@ class HybridRetriever:
         rrf_k: int = 60,
         use_hyde: bool = False,
     ) -> list[RetrievedDocument]:
+        self._set_reranker_status(
+            configured=bool(self.use_reranker),
+            available=bool(self.reranker is not None),
+            used=False,
+            reason="pending",
+        )
         intent = self.detect_source_intent(query)
         if not intent.get("domain_match", False):
+            self._set_reranker_status(
+                configured=bool(self.use_reranker),
+                available=bool(self.reranker is not None),
+                used=False,
+                reason="domain_not_supported",
+            )
             return []
 
         dense_task = self.search_dense(query, query_embedding, top_k * 3)

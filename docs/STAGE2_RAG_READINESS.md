@@ -114,3 +114,23 @@ Generic scenario phrasing can honestly abstain when evidence safety gates reject
   - `src/uav_risk/stage2/agent/ace_agent.py`
 
 The canonical readiness evidence remains the validation command set above; do not use legacy or manual-only tooling as final readiness proof.
+
+
+## Stage 3 Runtime Semantics
+- Corpus coverage is surfaced as public diagnostics metadata:
+  - `corpus_coverage_status` (`complete` / `partial` / `unknown`)
+  - `expected_source_count`
+  - `indexed_source_count`
+  - `missing_sources`
+  - `source_ids`, `source_titles`
+- Reranker runtime status is surfaced as public diagnostics metadata:
+  - `reranker_configured`
+  - `reranker_available`
+  - `reranker_used`
+  - `reranker_reason`
+- Retrieval origins are explicit in evidence metadata:
+  - `scenario_driven`
+  - `agent_requested`
+  - `fallback`
+- Synthetic/HyDE-like candidate text is never promoted to grounded citations.
+  - Synthetic-only retrieval outcomes are marked `evidence_status=synthetic_only`.

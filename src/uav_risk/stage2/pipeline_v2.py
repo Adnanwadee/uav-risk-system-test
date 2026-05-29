@@ -99,9 +99,92 @@ def _enrich_bundle_with_query_plan(bundle: EvidenceBundle, plan: AgentRAGQueryPl
             "derived_from": plan.derived_from.value,
             "related_feature_names": ",".join(plan.related_feature_names),
             "query_priority": plan.priority,
+            "retrieval_origin": str(merged.get("retrieval_origin") or "scenario_driven"),
         }
     )
     return bundle.model_copy(update={"metadata": merged})
+
+
+
+
+def _bundle_metadata(bundle: EvidenceBundle) -> dict[str, Any]:
+    return bundle.metadata if isinstance(bundle.metadata, dict) else {}
+
+
+def _scenario_evidence_status(evidence_bundles: list[EvidenceBundle]) -> tuple[str, bool | None]:
+    scenario_bundles = [
+        b for b in evidence_bundles
+        if str(_bundle_metadata(b).get("retrieval_origin", "scenario_driven")) == "scenario_driven"
+    ]
+    if not scenario_bundles:
+        return "unavailable", None
+
+    statuses = {b.support_status for b in scenario_bundles}
+    if statuses == {EvidenceSupportStatus.SUPPORTED}:
+        return "grounded", True
+    if statuses.issubset({EvidenceSupportStatus.SUPPORTED, EvidenceSupportStatus.PARTIALLY_SUPPORTED}):
+        return "partial", False
+    if statuses == {EvidenceSupportStatus.INSUFFICIENT_EVIDENCE}:
+        synthetic_only = any(bool(_bundle_metadata(b).get("synthetic")) for b in scenario_bundles)
+        return ("synthetic_only" if synthetic_only else "insufficient"), False
+    if EvidenceSupportStatus.INSUFFICIENT_EVIDENCE in statuses:
+        return "partial", False
+    return "unknown", None
+
+
+
+
+async def _retrieve_evidence_with_origin(
+    rag_adapter: Any,
+    *,
+    query_text: str,
+    scenario_context: dict[str, Any],
+    retrieval_origin: str,
+) -> EvidenceBundle:
+    try:
+        return await rag_adapter.retrieve_evidence(
+            query_text,
+            scenario_context=scenario_context,
+            retrieval_origin=retrieval_origin,
+        )
+    except TypeError:
+        return await rag_adapter.retrieve_evidence(
+            query_text,
+            scenario_context=scenario_context,
+        )
+
+
+def _collect_rag_metadata(evidence_bundles: list[EvidenceBundle], *, query_plan: list[AgentRAGQueryPlan]) -> dict[str, Any]:
+    scenario_status, scenario_complete = _scenario_evidence_status(evidence_bundles)
+    first_meta = next((m for m in (_bundle_metadata(b) for b in evidence_bundles) if m), {})
+
+    reranker_configured = first_meta.get("reranker_configured")
+    reranker_available = first_meta.get("reranker_available")
+    reranker_used = first_meta.get("reranker_used")
+    reranker_reason = first_meta.get("reranker_reason")
+
+    coverage_status = first_meta.get("corpus_coverage_status")
+    expected_source_count = first_meta.get("expected_source_count")
+    indexed_source_count = first_meta.get("indexed_source_count")
+    missing_sources = first_meta.get("missing_sources")
+
+    rag_queries = [item.query_text for item in query_plan]
+    return {
+        "scenario_evidence_status": scenario_status,
+        "scenario_evidence_complete": scenario_complete,
+        "planned_scenario_query_count": len(query_plan),
+        "planned_scenario_queries": " | ".join(rag_queries[:8]),
+        "selected_scenario_queries": " | ".join(rag_queries[:8]),
+        "skipped_scenario_queries": "",
+        "reranker_configured": bool(reranker_configured) if isinstance(reranker_configured, bool) else None,
+        "reranker_available": bool(reranker_available) if isinstance(reranker_available, bool) else None,
+        "reranker_used": bool(reranker_used) if isinstance(reranker_used, bool) else None,
+        "reranker_reason": str(reranker_reason) if isinstance(reranker_reason, str) else None,
+        "corpus_coverage_status": str(coverage_status) if isinstance(coverage_status, str) else None,
+        "expected_source_count": int(expected_source_count) if isinstance(expected_source_count, (int, float)) else None,
+        "indexed_source_count": int(indexed_source_count) if isinstance(indexed_source_count, (int, float)) else None,
+        "missing_sources": str(missing_sources) if isinstance(missing_sources, str) else None,
+    }
 
 
 class Stage2PipelineV2:
@@ -133,9 +216,11 @@ class Stage2PipelineV2:
                     stage2_input, self._max_evidence_queries
                 )
                 for item in query_plan:
-                    bundle = await self._rag_adapter.retrieve_evidence(
-                        item.query_text,
+                    bundle = await _retrieve_evidence_with_origin(
+                        self._rag_adapter,
+                        query_text=item.query_text,
                         scenario_context=stage2_input.scenario_summary,
+                        retrieval_origin="scenario_driven",
                     )
                     evidence_bundles.append(_enrich_bundle_with_query_plan(bundle, item))
             elif not evidence_bundles:
@@ -145,7 +230,7 @@ class Stage2PipelineV2:
                     make_insufficient_evidence_bundle(
                         query="stage2_evidence",
                         reason="RAG adapter is not configured.",
-                    )
+                    ).model_copy(update={"metadata": {"retrieval_origin": "fallback", "evidence_status": "unavailable"}})
                 )
 
             agent_input = build_agent_input(stage2_input, evidence_bundles)
@@ -167,13 +252,17 @@ class Stage2PipelineV2:
             else:
                 status = Stage2Status.COMPLETED
 
+            rag_metadata = _collect_rag_metadata(evidence_bundles, query_plan=query_plan if self._rag_adapter is not None else [])
+            merged_metadata = dict(stage2_input.metadata)
+            merged_metadata.update({k: v for k, v in rag_metadata.items() if v is not None})
+
             provisional_result = Stage2AssessmentResult(
                 status=status,
                 assessment_id=stage2_input.assessment_id,
                 evidence_bundles=evidence_bundles,
                 agent_result=agent_result,
                 errors=list(agent_result.errors),
-                metadata=dict(stage2_input.metadata),
+                metadata=merged_metadata,
             )
             decision = evaluate_stage2_decision(stage2_input, provisional_result, policy=self._decision_policy)
             result_with_decision = provisional_result.model_copy(update={"decision": decision})

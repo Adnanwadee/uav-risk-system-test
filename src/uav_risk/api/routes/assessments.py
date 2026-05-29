@@ -209,34 +209,125 @@ def _clean_forbidden_keys(value):
 
 
 
-def _build_system_work_trace(agent_result) -> dict[str, object]:
-    if agent_result is None:
+def _build_system_work_trace(
+    agent_result,
+    *,
+    stage2_result=None,
+) -> dict[str, object]:
+    if agent_result is None and stage2_result is None:
         return SystemWorkTrace(
             entries=[],
-            summary="No agent tool execution trace was available.",
+            summary="No Stage2 execution trace was available.",
             public_safe=True,
         ).model_dump()
 
     entries: list[SystemWorkTraceEntry] = []
-    for idx, tool_call in enumerate(agent_result.tool_trace, start=1):
-        metadata = tool_call.metadata if isinstance(tool_call.metadata, dict) else {}
-        duration_value = metadata.get("duration_ms")
-        duration_ms = int(duration_value) if isinstance(duration_value, (int, float)) and duration_value >= 0 else None
-        warning_lines = [] if tool_call.status.lower() == "ok" else [f"tool_status={tool_call.status}"]
+    if agent_result is not None:
+        for idx, tool_call in enumerate(agent_result.tool_trace, start=1):
+            metadata = tool_call.metadata if isinstance(tool_call.metadata, dict) else {}
+            duration_value = metadata.get("duration_ms")
+            duration_ms = int(duration_value) if isinstance(duration_value, (int, float)) and duration_value >= 0 else None
+            warning_lines = [] if tool_call.status.lower() == "ok" else [f"tool_status={tool_call.status}"]
+
+            entries.append(
+                SystemWorkTraceEntry(
+                    step_id=f"agent_step_{idx}",
+                    stage="operational_agent_v2",
+                    tool_name=tool_call.tool_name.value,
+                    status=tool_call.status,
+                    input_summary=tool_call.input_summary,
+                    output_summary=tool_call.output_summary,
+                    evidence_ids=list(tool_call.related_evidence_ids),
+                    warnings=warning_lines,
+                    started_at=metadata.get("started_at") if isinstance(metadata.get("started_at"), str) else None,
+                    completed_at=metadata.get("completed_at") if isinstance(metadata.get("completed_at"), str) else None,
+                    duration_ms=duration_ms,
+                    public_safe=True,
+                )
+            )
+
+
+    stage2_meta = {}
+    if stage2_result is not None and isinstance(getattr(stage2_result, "metadata", None), dict):
+        stage2_meta = dict(stage2_result.metadata)
+
+    if stage2_meta:
+        planned_queries = str(stage2_meta.get("planned_scenario_queries") or "")
+        selected_queries = str(stage2_meta.get("selected_scenario_queries") or "")
+        skipped_queries = str(stage2_meta.get("skipped_scenario_queries") or "")
+        coverage_status = str(stage2_meta.get("corpus_coverage_status") or "unknown")
+        reranker_reason = str(stage2_meta.get("reranker_reason") or "unknown")
 
         entries.append(
             SystemWorkTraceEntry(
-                step_id=f"agent_step_{idx}",
-                stage="operational_agent_v2",
-                tool_name=tool_call.tool_name.value,
-                status=tool_call.status,
-                input_summary=tool_call.input_summary,
-                output_summary=tool_call.output_summary,
-                evidence_ids=list(tool_call.related_evidence_ids),
-                warnings=warning_lines,
-                started_at=metadata.get("started_at") if isinstance(metadata.get("started_at"), str) else None,
-                completed_at=metadata.get("completed_at") if isinstance(metadata.get("completed_at"), str) else None,
-                duration_ms=duration_ms,
+                step_id=f"stage2_step_{len(entries) + 1}",
+                stage="stage2_pipeline_v2",
+                tool_name="scenario_rag_query_planner",
+                status="ok",
+                input_summary=f"planned_query_count={stage2_meta.get('planned_scenario_query_count')}",
+                output_summary=f"selected_queries={selected_queries or 'none'} skipped_queries={skipped_queries or 'none'}",
+                evidence_ids=[],
+                warnings=[],
+                public_safe=True,
+            )
+        )
+
+        entries.append(
+            SystemWorkTraceEntry(
+                step_id=f"stage2_step_{len(entries) + 1}",
+                stage="stage2_rag_adapter",
+                tool_name="corpus_coverage_check",
+                status="ok" if coverage_status in {"complete", "unknown"} else "partial",
+                input_summary=f"expected_sources={stage2_meta.get('expected_source_count')}",
+                output_summary=f"coverage_status={coverage_status} indexed_sources={stage2_meta.get('indexed_source_count')}",
+                evidence_ids=[],
+                warnings=[f"missing_sources={stage2_meta.get('missing_sources')}"] if stage2_meta.get('missing_sources') else [],
+                public_safe=True,
+            )
+        )
+
+        entries.append(
+            SystemWorkTraceEntry(
+                step_id=f"stage2_step_{len(entries) + 1}",
+                stage="stage2_rag_adapter",
+                tool_name="reranker_status",
+                status="ok" if bool(stage2_meta.get("reranker_used")) else "partial",
+                input_summary=f"configured={stage2_meta.get('reranker_configured')} available={stage2_meta.get('reranker_available')}",
+                output_summary=f"used={stage2_meta.get('reranker_used')} reason={reranker_reason}",
+                evidence_ids=[],
+                warnings=[],
+                public_safe=True,
+            )
+        )
+
+    if stage2_result is not None and getattr(stage2_result, "decision", None) is not None:
+        decision = stage2_result.decision
+        entries.append(
+            SystemWorkTraceEntry(
+                step_id=f"stage2_step_{len(entries) + 1}",
+                stage="decision_engine",
+                tool_name="weighted_decision_engine",
+                status="ok",
+                input_summary=f"stage_contributions={len(decision.stage_contributions)}",
+                output_summary=f"final_decision={decision.final_decision.value} decision_score={decision.decision_score}",
+                evidence_ids=[ref.claim_id for ref in decision.evidence_refs[:8]],
+                warnings=[],
+                public_safe=True,
+            )
+        )
+
+    if stage2_result is not None and getattr(stage2_result, "llm_synthesis", None) is not None:
+        synthesis = stage2_result.llm_synthesis
+        entries.append(
+            SystemWorkTraceEntry(
+                step_id=f"stage2_step_{len(entries) + 1}",
+                stage="llm_orchestrator",
+                tool_name="llm_synthesis",
+                status="ok" if synthesis.status.value in {"generated", "fallback"} else "partial",
+                input_summary=f"provider={synthesis.provider or 'fallback'} model={synthesis.model_name or 'not_configured'}",
+                output_summary=f"synthesis_status={synthesis.status.value} warnings={len(synthesis.consistency_warnings)}",
+                evidence_ids=list(synthesis.evidence_reference_ids[:8]),
+                warnings=[w.warning_type for w in synthesis.consistency_warnings[:8]],
                 public_safe=True,
             )
         )
@@ -266,6 +357,9 @@ def _build_stage2_citations(evidence_bundles) -> list[dict[str, object]]:
                     "retrieval_score": citation.retrieval_score,
                     "confidence_label": meta.get("confidence_label"),
                     "rank": meta.get("rank", rank),
+                    "retrieval_origin": meta.get("retrieval_origin") or (bundle.metadata.get("retrieval_origin") if isinstance(bundle.metadata, dict) else None),
+                    "support_status": meta.get("support_status") or (bundle.metadata.get("evidence_status") if isinstance(bundle.metadata, dict) else None),
+                    "synthetic": bool(meta.get("synthetic") if "synthetic" in meta else (bundle.metadata.get("synthetic") if isinstance(bundle.metadata, dict) else False)),
                 }
             )
     return items
@@ -521,7 +615,9 @@ async def create_assessment_stage2(
     wm = agent_result.working_memory if agent_result else None
     raw_tool_trace = [t.model_dump() for t in (agent_result.tool_trace if agent_result else [])]
     safe_tool_trace = sanitize_tool_trace_public(raw_tool_trace)
-    safe_system_work_trace = sanitize_system_work_trace_public(_build_system_work_trace(agent_result))
+    safe_system_work_trace = sanitize_system_work_trace_public(
+        _build_system_work_trace(agent_result, stage2_result=stage2_result)
+    )
 
     working_memory_summary_payload = {
         "coverage_summary": dict(wm.coverage_summary),
@@ -595,6 +691,19 @@ async def create_assessment_stage2(
     rag_quality = bool(stage2_result.metadata.get("rag_quality_is_proven") if isinstance(stage2_result.metadata, dict) else False)
     scenario_evidence_complete = stage2_result.metadata.get("scenario_evidence_complete") if isinstance(stage2_result.metadata, dict) else None
     scenario_evidence_status = stage2_result.metadata.get("scenario_evidence_status") if isinstance(stage2_result.metadata, dict) else None
+    corpus_coverage_status = stage2_result.metadata.get("corpus_coverage_status") if isinstance(stage2_result.metadata, dict) else None
+    expected_source_count = stage2_result.metadata.get("expected_source_count") if isinstance(stage2_result.metadata, dict) else None
+    indexed_source_count = stage2_result.metadata.get("indexed_source_count") if isinstance(stage2_result.metadata, dict) else None
+    missing_sources_raw = stage2_result.metadata.get("missing_sources") if isinstance(stage2_result.metadata, dict) else None
+    source_ids_raw = stage2_result.metadata.get("source_ids") if isinstance(stage2_result.metadata, dict) else None
+    source_titles_raw = stage2_result.metadata.get("source_titles") if isinstance(stage2_result.metadata, dict) else None
+    missing_sources = [item.strip() for item in str(missing_sources_raw or "").split(",") if item.strip()]
+    source_ids = [item.strip() for item in str(source_ids_raw or "").split(",") if item.strip()]
+    source_titles = [item.strip() for item in str(source_titles_raw or "").split(",") if item.strip()]
+    reranker_configured = stage2_result.metadata.get("reranker_configured") if isinstance(stage2_result.metadata, dict) else None
+    reranker_available = stage2_result.metadata.get("reranker_available") if isinstance(stage2_result.metadata, dict) else None
+    reranker_used = stage2_result.metadata.get("reranker_used") if isinstance(stage2_result.metadata, dict) else None
+    reranker_reason = stage2_result.metadata.get("reranker_reason") if isinstance(stage2_result.metadata, dict) else None
 
     response = Stage2AssessmentResponse(
         status=stage2_result.status.value,
@@ -614,6 +723,16 @@ async def create_assessment_stage2(
                 insufficient_evidence_count=insufficient_count,
                 scenario_evidence_complete=scenario_evidence_complete,
                 scenario_evidence_status=scenario_evidence_status,
+                corpus_coverage_status=str(corpus_coverage_status) if corpus_coverage_status is not None else None,
+                expected_source_count=int(expected_source_count) if isinstance(expected_source_count, (int, float)) else None,
+                indexed_source_count=int(indexed_source_count) if isinstance(indexed_source_count, (int, float)) else None,
+                source_ids=source_ids,
+                source_titles=source_titles,
+                missing_sources=missing_sources,
+                reranker_configured=bool(reranker_configured) if isinstance(reranker_configured, bool) else None,
+                reranker_available=bool(reranker_available) if isinstance(reranker_available, bool) else None,
+                reranker_used=bool(reranker_used) if isinstance(reranker_used, bool) else None,
+                reranker_reason=str(reranker_reason) if isinstance(reranker_reason, str) else None,
                 evidence_bundle_details=_clean_forbidden_keys([
                     {
                         "bundle_id": b.bundle_id,
@@ -642,6 +761,15 @@ async def create_assessment_stage2(
             retrieval_usable=bool(rag_adapter),
             rag_quality_is_proven=rag_quality,
             scenario_evidence_complete=scenario_evidence_complete,
+            corpus_coverage_status=str(corpus_coverage_status) if corpus_coverage_status is not None else None,
+            expected_source_count=int(expected_source_count) if isinstance(expected_source_count, (int, float)) else None,
+            indexed_source_count=int(indexed_source_count) if isinstance(indexed_source_count, (int, float)) else None,
+            source_ids=source_ids,
+            source_titles=source_titles,
+            reranker_configured=bool(reranker_configured) if isinstance(reranker_configured, bool) else None,
+            reranker_available=bool(reranker_available) if isinstance(reranker_available, bool) else None,
+            reranker_used=bool(reranker_used) if isinstance(reranker_used, bool) else None,
+            reranker_reason=str(reranker_reason) if isinstance(reranker_reason, str) else None,
             llm_mode=stage2_llm.status,
             external_llm_provider_used=stage2_llm.external_provider_used,
             llm_provider=stage2_llm.provider,

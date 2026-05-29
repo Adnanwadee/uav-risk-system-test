@@ -231,3 +231,44 @@ async def test_pipeline_accepts_decision_policy_and_keeps_behavior_stable() -> N
     assert result.decision is not None
     assert result.decision.metadata["policy_name"] == "test_policy"
     assert result.decision.metadata["policy_version"] == "1.1"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_metadata_exposes_rag_status_fields_from_bundles() -> None:
+    class FakeRAG:
+        async def retrieve_evidence(self, query: str, *, scenario_context=None, retrieval_origin=None):
+            from uav_risk.stage2.contracts import EvidenceBundle, EvidenceCitation, EvidenceOrigin, EvidenceSourceType
+
+            citation = EvidenceCitation(
+                citation_id="c-meta",
+                source_id="src-meta",
+                source_title="AC_107-2A",
+                source_type=EvidenceSourceType.INTERNAL_DOC,
+                origin=EvidenceOrigin.LOCAL_DOCUMENT,
+                quote="metadata propagation quote for pipeline diagnostics checks.",
+                metadata={"source_filename": "AC_107-2A.pdf", "page_start": 4},
+            )
+            return EvidenceBundle(
+                bundle_id="b-meta",
+                query=query,
+                claims=[],
+                citations=[citation],
+                support_status=EvidenceSupportStatus.SUPPORTED,
+                confidence=0.8,
+                metadata={
+                    "retrieval_origin": retrieval_origin or "scenario_driven",
+                    "reranker_configured": True,
+                    "reranker_available": True,
+                    "reranker_used": True,
+                    "reranker_reason": "reranker_invoked",
+                    "corpus_coverage_status": "complete",
+                    "expected_source_count": 9,
+                    "indexed_source_count": 9,
+                    "missing_sources": "",
+                },
+            )
+
+    result = await Stage2PipelineV2(rag_adapter=FakeRAG(), max_evidence_queries=1).run(_stage2_input())
+    assert result.metadata.get("scenario_evidence_status") in {"grounded", "partial"}
+    assert result.metadata.get("reranker_used") is True
+    assert result.metadata.get("corpus_coverage_status") == "complete"

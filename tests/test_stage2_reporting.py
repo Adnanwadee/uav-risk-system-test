@@ -480,3 +480,20 @@ def test_report_includes_llm_synthesis_section() -> None:
     assert "executive_summary: Final decision is caution." in joined
     assert "consistency_warning[llm_fallback]" in joined
 
+
+
+def test_report_section_order_keeps_system_trace_before_diagnostics() -> None:
+    report = build_operational_report(
+        _input(),
+        Stage2AssessmentResult(
+            status=Stage2Status.COMPLETED,
+            assessment_id="a1",
+            evidence_bundles=[],
+            agent_result=_agent_result(),
+            errors=[],
+        ),
+    )
+    titles = [section.title for section in report.sections]
+    assert "System Work Trace" in titles
+    assert "Diagnostics" in titles
+    assert titles.index("System Work Trace") < titles.index("Diagnostics")

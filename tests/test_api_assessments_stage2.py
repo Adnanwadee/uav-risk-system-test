@@ -99,6 +99,10 @@ def test_stage2_endpoint_returns_stable_frontend_ready_structure(tmp_path, monke
 
         assert "evidence_bundle_details" in s2["rag"]
         assert "citations" in s2["rag"]
+        assert "corpus_coverage_status" in s2["rag"]
+        assert "reranker_configured" in s2["rag"]
+        assert "source_ids" in s2["rag"]
+        assert "source_titles" in s2["rag"]
 
         assert "findings" in s2["agent"]
         assert "action_items" in s2["agent"]
@@ -119,6 +123,8 @@ def test_stage2_endpoint_returns_stable_frontend_ready_structure(tmp_path, monke
         d = body["diagnostics"]
         assert "retrieval_usable" in d
         assert "rag_quality_is_proven" in d
+        assert "corpus_coverage_status" in d
+        assert "reranker_configured" in d
         assert "llm_mode" in d
         assert "external_llm_provider_used" in d
 

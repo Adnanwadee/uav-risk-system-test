@@ -356,3 +356,38 @@ async def test_citations_are_ranked_and_confidence_labeled_by_final_score() -> N
     assert first.metadata.get("retrieval_score") is not None
     assert first.metadata.get("top_score") is not None
     assert first.retrieval_score is not None
+
+
+@pytest.mark.asyncio
+async def test_bundle_metadata_includes_retrieval_origin_when_specified() -> None:
+    adapter = Stage2RAGAdapter(FakeRAGDict())
+    bundle = await adapter.retrieve_evidence("Part 107 remote pilot", retrieval_origin="agent_requested")
+    assert bundle.support_status == EvidenceSupportStatus.SUPPORTED
+    assert bundle.metadata.get("retrieval_origin") == "agent_requested"
+    assert bundle.metadata.get("evidence_status") == "grounded"
+
+
+@pytest.mark.asyncio
+async def test_synthetic_only_candidates_mark_bundle_as_synthetic_only() -> None:
+    class SyntheticOnlyRAG:
+        async def search_scenario(self, **kwargs):
+            return {
+                "documents": [
+                    {
+                        "source_id": "doc",
+                        "source_title": "Doc",
+                        "source_filename": "Doc.pdf",
+                        "chunk_id": "c",
+                        "page_start": 1,
+                        "text": "Synthetic style text with enough length to be considered but should never become grounded evidence.",
+                        "origin": "hyde_generated",
+                        "final_score": 0.92,
+                    }
+                ]
+            }
+
+    adapter = Stage2RAGAdapter(SyntheticOnlyRAG())
+    bundle = await adapter.retrieve_evidence("uav query")
+    assert bundle.support_status == EvidenceSupportStatus.INSUFFICIENT_EVIDENCE
+    assert bundle.metadata.get("evidence_status") == "synthetic_only"
+    assert bundle.metadata.get("synthetic") is True

@@ -681,3 +681,37 @@ async def test_tool_trace_includes_feature_risk_assessor() -> None:
     names = {item.tool_name.value for item in result.tool_trace}
     assert "feature_risk_assessor" in names
 
+
+
+@pytest.mark.asyncio
+async def test_agent_requested_retrieval_is_bounded_and_tagged() -> None:
+    calls: list[str] = []
+
+    class FakeAdapter:
+        async def retrieve_evidence(self, query: str, *, scenario_context=None, retrieval_origin=None):
+            from uav_risk.stage2.contracts import EvidenceBundle, EvidenceCitation, EvidenceOrigin, EvidenceSourceType
+
+            calls.append(query)
+            citation = EvidenceCitation(
+                citation_id=f"c-{len(calls)}",
+                source_id="src",
+                source_title="AC_107-2A",
+                source_type=EvidenceSourceType.INTERNAL_DOC,
+                origin=EvidenceOrigin.LOCAL_DOCUMENT,
+                quote="bounded retrieval quote with provenance and enough operational detail.",
+                metadata={"source_filename": "AC_107-2A.pdf", "page_start": 2},
+            )
+            return EvidenceBundle(
+                bundle_id=f"b-{len(calls)}",
+                query=query,
+                claims=[],
+                citations=[citation],
+                support_status=EvidenceSupportStatus.SUPPORTED,
+                confidence=0.7,
+                metadata={"retrieval_origin": retrieval_origin or "agent_requested"},
+            )
+
+    result = await OperationalAgentV2(rag_adapter=FakeAdapter(), max_queries=5, max_agent_queries=1).run(_agent_input("Medium Risk"))
+    assert len(calls) <= 1
+    tagged = [b for b in result.evidence_bundles if isinstance(b.metadata, dict) and b.metadata.get("retrieval_origin") == "agent_requested"]
+    assert tagged

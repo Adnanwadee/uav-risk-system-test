@@ -72,6 +72,16 @@ class Stage2RAGSection(BaseModel):
     insufficient_evidence_count: int = 0
     scenario_evidence_complete: bool | None = None
     scenario_evidence_status: str | None = None
+    corpus_coverage_status: str | None = None
+    expected_source_count: int | None = None
+    indexed_source_count: int | None = None
+    source_ids: list[str] = Field(default_factory=list)
+    source_titles: list[str] = Field(default_factory=list)
+    missing_sources: list[str] = Field(default_factory=list)
+    reranker_configured: bool | None = None
+    reranker_available: bool | None = None
+    reranker_used: bool | None = None
+    reranker_reason: str | None = None
     evidence_bundle_details: list[dict[str, Any]] = Field(default_factory=list)
     citations: list[dict[str, Any]] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
@@ -138,6 +148,15 @@ class Stage2DiagnosticsSection(BaseModel):
     retrieval_usable: bool = False
     rag_quality_is_proven: bool = False
     scenario_evidence_complete: bool | None = None
+    corpus_coverage_status: str | None = None
+    expected_source_count: int | None = None
+    indexed_source_count: int | None = None
+    source_ids: list[str] = Field(default_factory=list)
+    source_titles: list[str] = Field(default_factory=list)
+    reranker_configured: bool | None = None
+    reranker_available: bool | None = None
+    reranker_used: bool | None = None
+    reranker_reason: str | None = None
     llm_mode: str = "disabled"
     external_llm_provider_used: bool = False
     llm_provider: str | None = None

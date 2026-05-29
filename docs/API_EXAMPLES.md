@@ -95,3 +95,23 @@ When structural hard-veto blocks execution:
 - `stage1.ml = null`
 - Decision is forced safe (`no_go`) with blocking reasons
 - No fabricated ML/RAG outputs are injected
+
+
+## Stage 3 Additive Response Fields
+`stage2.rag` now includes additive transparency fields:
+- `scenario_evidence_status`
+- `corpus_coverage_status`, `expected_source_count`, `indexed_source_count`
+- `source_ids`, `source_titles`, `missing_sources`
+- `reranker_configured`, `reranker_available`, `reranker_used`, `reranker_reason`
+
+`diagnostics` also includes the corresponding coverage/reranker status fields.
+
+Evidence bundle/citation metadata is explicitly public-safe and may include:
+- `retrieval_origin` (`scenario_driven` / `agent_requested` / `fallback`)
+- `evidence_status`
+- `synthetic` (true only for synthetic-only outcomes)
+
+Decision and authority rules remain unchanged:
+- DecisionEngine owns `final_decision` and `decision_score`.
+- LLM synthesis remains interpretation-only.
+- RAG evidence supports decisions but does not decide.

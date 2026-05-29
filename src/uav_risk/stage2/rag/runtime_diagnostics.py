@@ -40,10 +40,20 @@ class RAGIndexProvenanceStatus(BaseModel):
     validation: dict[str, JsonScalar] = Field(default_factory=dict)
 
 
+class RAGCorpusCoverageStatus(BaseModel):
+    expected_source_count: int | None = None
+    indexed_source_count: int | None = None
+    source_ids: list[str] = Field(default_factory=list)
+    source_titles: list[str] = Field(default_factory=list)
+    missing_sources: list[str] = Field(default_factory=list)
+    coverage_status: str = "unknown"
+
+
 class RAGRuntimeDiagnosticResult(BaseModel):
     status: Stage2Status
     resources: list[RAGRuntimeResourceStatus] = Field(default_factory=list)
     index_provenance: RAGIndexProvenanceStatus
+    corpus_coverage: RAGCorpusCoverageStatus | None = None
     quality_report: RAGQualityReport | None = None
     errors: list[Stage2Error] = Field(default_factory=list)
     metadata: dict[str, JsonScalar] = Field(default_factory=dict)
@@ -116,6 +126,90 @@ def _safe_read_json(path: Path) -> dict[str, JsonScalar] | None:
         return None
     except Exception:
         return None
+
+
+def _safe_read_json_any(path: Path) -> Any:
+    try:
+        if not path.exists() or not path.is_file():
+            return None
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def inspect_rag_corpus_coverage(
+    *,
+    metadata_path: Path | None,
+    dense_mapping_path: Path | None,
+) -> RAGCorpusCoverageStatus:
+    expected_source_count: int | None = None
+    expected_ids: list[str] = []
+    expected_titles: list[str] = []
+
+    metadata_payload = _safe_read_json_any(metadata_path) if metadata_path is not None else None
+    if isinstance(metadata_payload, dict):
+        source_docs = metadata_payload.get("source_documents")
+        if isinstance(source_docs, list):
+            for item in source_docs:
+                if not isinstance(item, dict):
+                    continue
+                sid = str(item.get("source_id") or "").strip()
+                if sid and sid not in expected_ids:
+                    expected_ids.append(sid)
+                title = str(item.get("filename") or item.get("source_title") or sid).strip()
+                if title and title not in expected_titles:
+                    expected_titles.append(title)
+            expected_source_count = len(expected_ids) if expected_ids else int(metadata_payload.get("source_count") or 0)
+        elif metadata_payload.get("source_count") is not None:
+            try:
+                expected_source_count = int(metadata_payload.get("source_count"))
+            except Exception:
+                expected_source_count = None
+
+    indexed_ids: list[str] = []
+    indexed_titles: list[str] = []
+    mapping_payload = _safe_read_json_any(dense_mapping_path) if dense_mapping_path is not None else None
+    if isinstance(mapping_payload, dict):
+        chunks = mapping_payload.get("chunks")
+        if isinstance(chunks, list):
+            for chunk in chunks:
+                if not isinstance(chunk, dict):
+                    continue
+                sid = str(chunk.get("source_id") or "").strip()
+                if sid and sid not in indexed_ids:
+                    indexed_ids.append(sid)
+                title = str(chunk.get("source_title") or chunk.get("source_filename") or sid).strip()
+                if title and title not in indexed_titles:
+                    indexed_titles.append(title)
+
+    indexed_source_count = len(indexed_ids) if indexed_ids else None
+    missing_sources: list[str] = []
+    if expected_ids and indexed_ids:
+        missing_sources = sorted(set(expected_ids) - set(indexed_ids))
+
+    coverage_status = "unknown"
+    if expected_source_count is not None:
+        idx_count = indexed_source_count or 0
+        if expected_source_count <= 0:
+            coverage_status = "unknown"
+        elif idx_count >= expected_source_count and not missing_sources:
+            coverage_status = "complete"
+        else:
+            coverage_status = "partial"
+    elif indexed_source_count is not None and indexed_source_count > 0:
+        coverage_status = "unknown"
+
+    source_titles = indexed_titles or expected_titles
+
+    return RAGCorpusCoverageStatus(
+        expected_source_count=expected_source_count,
+        indexed_source_count=indexed_source_count,
+        source_ids=indexed_ids or expected_ids,
+        source_titles=source_titles,
+        missing_sources=missing_sources,
+        coverage_status=coverage_status,
+    )
 
 
 def validate_provenance_metadata(metadata: dict[str, Any]) -> tuple[bool, list[str]]:
@@ -248,6 +342,10 @@ def inspect_rag_index_provenance() -> RAGIndexProvenanceStatus:
 async def run_rag_runtime_diagnostic(*, run_quality: bool = False) -> RAGRuntimeDiagnosticResult:
     resources = inspect_rag_runtime_resources()
     provenance = inspect_rag_index_provenance()
+    corpus_coverage = inspect_rag_corpus_coverage(
+        metadata_path=Path(provenance.metadata_path) if provenance.metadata_path else None,
+        dense_mapping_path=Path(provenance.dense_mapping_path) if provenance.dense_mapping_path else None,
+    )
     errors: list[Stage2Error] = []
     quality_report: RAGQualityReport | None = None
 
@@ -350,6 +448,13 @@ async def run_rag_runtime_diagnostic(*, run_quality: bool = False) -> RAGRuntime
         "faiss_ntotal": provenance.validation.get("faiss_ntotal"),
         "dense_mapping_count": provenance.validation.get("dense_mapping_count"),
         "chunk_provenance_complete": provenance.validation.get("chunk_provenance_complete"),
+        "corpus_coverage_status": corpus_coverage.coverage_status,
+        "expected_source_count": corpus_coverage.expected_source_count,
+        "indexed_source_count": corpus_coverage.indexed_source_count,
+        "missing_sources_count": len(corpus_coverage.missing_sources),
+        "source_ids": ",".join(corpus_coverage.source_ids[:64]),
+        "source_titles": ",".join(corpus_coverage.source_titles[:64]),
+        "missing_sources": ",".join(corpus_coverage.missing_sources[:64]),
     }
 
     if quality_report is not None:
@@ -364,6 +469,7 @@ async def run_rag_runtime_diagnostic(*, run_quality: bool = False) -> RAGRuntime
         status=status,
         resources=resources,
         index_provenance=provenance,
+        corpus_coverage=corpus_coverage,
         quality_report=quality_report,
         errors=errors,
         metadata=metadata,

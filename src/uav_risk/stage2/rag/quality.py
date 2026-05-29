@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -20,6 +21,112 @@ class _AsyncEmbedderFromLangChain:
         loop = asyncio.get_event_loop()
         vec = await loop.run_in_executor(None, self.model.embed_query, text)
         return list(vec)
+
+
+
+
+
+def _collect_corpus_coverage_status(index_dir: Path) -> dict[str, JsonScalar]:
+    metadata_path = index_dir / "metadata.json"
+    dense_mapping_path = index_dir / "dense_mapping.json"
+
+    expected_ids: list[str] = []
+    expected_titles: list[str] = []
+    expected_source_count: int | None = None
+
+    try:
+        if metadata_path.exists():
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if isinstance(metadata, dict):
+                docs = metadata.get("source_documents")
+                if isinstance(docs, list):
+                    for item in docs:
+                        if not isinstance(item, dict):
+                            continue
+                        sid = str(item.get("source_id") or "").strip()
+                        if sid and sid not in expected_ids:
+                            expected_ids.append(sid)
+                        title = str(item.get("filename") or item.get("source_title") or sid).strip()
+                        if title and title not in expected_titles:
+                            expected_titles.append(title)
+                source_count = metadata.get("source_count")
+                if isinstance(source_count, (int, float)):
+                    expected_source_count = int(source_count)
+    except Exception:
+        pass
+
+    indexed_ids: list[str] = []
+    indexed_titles: list[str] = []
+    try:
+        if dense_mapping_path.exists():
+            mapping = json.loads(dense_mapping_path.read_text(encoding="utf-8"))
+            if isinstance(mapping, dict):
+                chunks = mapping.get("chunks")
+                if isinstance(chunks, list):
+                    for item in chunks:
+                        if not isinstance(item, dict):
+                            continue
+                        sid = str(item.get("source_id") or "").strip()
+                        if sid and sid not in indexed_ids:
+                            indexed_ids.append(sid)
+                        title = str(item.get("source_title") or item.get("source_filename") or sid).strip()
+                        if title and title not in indexed_titles:
+                            indexed_titles.append(title)
+    except Exception:
+        pass
+
+    indexed_source_count = len(indexed_ids) if indexed_ids else None
+    missing_sources: list[str] = []
+    if expected_ids and indexed_ids:
+        missing_sources = sorted(set(expected_ids) - set(indexed_ids))
+
+    coverage_status = "unknown"
+    if expected_source_count is not None:
+        idx_count = indexed_source_count or 0
+        if expected_source_count > 0 and idx_count >= expected_source_count and not missing_sources:
+            coverage_status = "complete"
+        elif expected_source_count > 0:
+            coverage_status = "partial"
+
+    return {
+        "corpus_coverage_status": coverage_status,
+        "expected_source_count": expected_source_count,
+        "indexed_source_count": indexed_source_count,
+        "missing_sources": ",".join(missing_sources[:64]),
+        "source_ids": ",".join((indexed_ids or expected_ids)[:64]),
+        "source_titles": ",".join((indexed_titles or expected_titles)[:64]),
+    }
+
+
+def _build_local_reranker_if_available(config_module) -> tuple[object | None, dict[str, JsonScalar]]:
+    configured = bool(getattr(config_module, "USE_RERANKER", True))
+    model_path_raw = getattr(config_module, "RERANKER_PATH", None)
+    model_path = Path(str(model_path_raw)).expanduser().resolve() if model_path_raw else None
+
+    status: dict[str, JsonScalar] = {
+        "reranker_configured": configured,
+        "reranker_available": False,
+        "reranker_used": False,
+        "reranker_reason": "disabled_by_configuration" if not configured else "reranker_not_configured",
+    }
+
+    if not configured:
+        return None, status
+
+    if model_path is None or not model_path.exists():
+        status["reranker_reason"] = "reranker_model_missing"
+        return None, status
+
+    try:
+        from sentence_transformers import CrossEncoder
+
+        reranker = CrossEncoder(str(model_path), device="cpu")
+        status["reranker_available"] = True
+        status["reranker_reason"] = "reranker_model_loaded"
+        return reranker, status
+    except Exception:
+        status["reranker_reason"] = "reranker_init_failed"
+        return None, status
 
 
 class RAGQualityQuery(BaseModel):
@@ -353,6 +460,7 @@ def build_runtime_rag_adapter_if_available() -> Stage2RAGAdapter | None:
         from uav_risk.stage2.rag.config_v3 import EMBEDDING_PATH, get_index_dir, get_sparse_index_path
         from uav_risk.stage2.rag.rag_core_v3 import AsyncRAGCoreV3
 
+        reranker, reranker_status = _build_local_reranker_if_available(config_v3)
         index_dir = get_index_dir()
         sparse_path = get_sparse_index_path()
 
@@ -376,6 +484,7 @@ def build_runtime_rag_adapter_if_available() -> Stage2RAGAdapter | None:
         rag_core = AsyncRAGCoreV3(
             config_module=config_v3,
             embedder=embedder,
+            reranker=reranker,
             sparse_index_builder=None,
             index_dir=str(index_dir),
         )
@@ -384,6 +493,15 @@ def build_runtime_rag_adapter_if_available() -> Stage2RAGAdapter | None:
             rag_core.sparse_builder = None
             rag_core._preloaded_sparse_index = sparse_index  # type: ignore[attr-defined]
 
-        return Stage2RAGAdapter(rag_core=rag_core)
+        rag_core._runtime_status = {  # type: ignore[attr-defined]
+            **reranker_status,
+            **_collect_corpus_coverage_status(index_dir),
+            "index_dir": str(index_dir),
+            "sparse_index_loaded": bool(sparse_index is not None),
+        }
+
+        adapter = Stage2RAGAdapter(rag_core=rag_core)
+        adapter.runtime_status = dict(rag_core._runtime_status)  # type: ignore[attr-defined]
+        return adapter
     except Exception:
         return None

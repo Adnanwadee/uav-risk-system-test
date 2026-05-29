@@ -87,13 +87,31 @@ def build_operational_report(
     )
 
     evidence_content: list[str] = []
+    grounded_count = sum(1 for b in evidence_bundles if b.support_status in {EvidenceSupportStatus.SUPPORTED, EvidenceSupportStatus.PARTIALLY_SUPPORTED})
+    insufficient_count = sum(1 for b in evidence_bundles if b.support_status == EvidenceSupportStatus.INSUFFICIENT_EVIDENCE)
+
     evidence_content.append(
         f"evidence_bundle_count: {len(evidence_bundles)}; citations: {len(citation_ids)}"
     )
+    evidence_content.append(
+        f"grounded_evidence_count: {grounded_count}; insufficient_evidence_count: {insufficient_count}"
+    )
+    if isinstance(stage2_result.metadata, dict):
+        if stage2_result.metadata.get("scenario_evidence_status") is not None:
+            evidence_content.append(f"scenario_evidence_status: {stage2_result.metadata.get('scenario_evidence_status')}")
+        if stage2_result.metadata.get("corpus_coverage_status") is not None:
+            evidence_content.append(
+                f"corpus_coverage_status: {stage2_result.metadata.get('corpus_coverage_status')} expected={stage2_result.metadata.get('expected_source_count')} indexed={stage2_result.metadata.get('indexed_source_count')}"
+            )
+        if stage2_result.metadata.get("reranker_configured") is not None:
+            evidence_content.append(
+                f"reranker_status: configured={stage2_result.metadata.get('reranker_configured')} available={stage2_result.metadata.get('reranker_available')} used={stage2_result.metadata.get('reranker_used')} reason={stage2_result.metadata.get('reranker_reason')}"
+            )
 
     for bundle in evidence_bundles:
+        bundle_meta = bundle.metadata if isinstance(bundle.metadata, dict) else {}
         evidence_content.append(
-            f"bundle[{bundle.bundle_id}] query='{bundle.query}' status={bundle.support_status.value}"
+            f"bundle[{bundle.bundle_id}] query='{bundle.query}' status={bundle.support_status.value} origin={bundle_meta.get('retrieval_origin')} evidence_status={bundle_meta.get('evidence_status')}"
         )
         if bundle.support_status == EvidenceSupportStatus.INSUFFICIENT_EVIDENCE and (bundle.no_evidence_reason or "").strip():
             evidence_content.append(f"insufficient_evidence_reason: {bundle.no_evidence_reason}")
@@ -342,6 +360,16 @@ def build_operational_report(
             diagnostics_lines.append(f"scenario_evidence_status: {stage2_result.metadata.get('scenario_evidence_status')}")
         if "provenance_status" in stage2_result.metadata:
             diagnostics_lines.append(f"provenance_status: {stage2_result.metadata.get('provenance_status')}")
+        if "corpus_coverage_status" in stage2_result.metadata:
+            diagnostics_lines.append(f"corpus_coverage_status: {stage2_result.metadata.get('corpus_coverage_status')}")
+        if "expected_source_count" in stage2_result.metadata:
+            diagnostics_lines.append(f"expected_source_count: {stage2_result.metadata.get('expected_source_count')}")
+        if "indexed_source_count" in stage2_result.metadata:
+            diagnostics_lines.append(f"indexed_source_count: {stage2_result.metadata.get('indexed_source_count')}")
+        if "reranker_configured" in stage2_result.metadata:
+            diagnostics_lines.append(
+                f"reranker_status: configured={stage2_result.metadata.get('reranker_configured')} available={stage2_result.metadata.get('reranker_available')} used={stage2_result.metadata.get('reranker_used')} reason={stage2_result.metadata.get('reranker_reason')}"
+            )
     diagnostics_lines.extend(f"{err.code}: {err.message}" for err in stage2_result.errors)
 
     sections.append(
@@ -364,9 +392,9 @@ def build_operational_report(
         OperationalReportSectionType.LLM_SYNTHESIS: 7,
         OperationalReportSectionType.DECISION_ENGINE: 8,
         OperationalReportSectionType.OPERATOR_ACTIONS: 9,
-        OperationalReportSectionType.LIMITATIONS: 10,
-        OperationalReportSectionType.AGENT_TOOL_TRACE: 11,
-        OperationalReportSectionType.ERRORS: 12,
+        OperationalReportSectionType.AGENT_TOOL_TRACE: 10,
+        OperationalReportSectionType.ERRORS: 11,
+        OperationalReportSectionType.LIMITATIONS: 12,
     }
     sections = sorted(sections, key=lambda section: section_order.get(section.section_type, 99))
 

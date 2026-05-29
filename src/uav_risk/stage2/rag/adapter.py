@@ -31,6 +31,7 @@ class Stage2RAGAdapter:
         *,
         scenario_context: dict[str, JsonScalar] | None = None,
         max_claims: int = 3,
+        retrieval_origin: str = "scenario_driven",
     ) -> EvidenceBundle:
         normalized_query = query.strip()
         if not normalized_query:
@@ -39,15 +40,23 @@ class Stage2RAGAdapter:
             raise ValueError("max_claims must be >= 1")
 
         intent = HybridRetriever.detect_source_intent(normalized_query)
+        safe_origin = self._normalize_retrieval_origin(retrieval_origin)
         if not intent.get("domain_match", False):
-            return make_insufficient_evidence_bundle(
+            return self._insufficient_bundle_with_metadata(
                 normalized_query,
                 "Query appears outside UAV/regulatory corpus scope.",
+                retrieval_origin=safe_origin,
+                runtime_metadata={},
+                evidence_status="unavailable",
             )
 
         if self._rag_core is None:
-            return make_insufficient_evidence_bundle(
-                normalized_query, "RAG core is not configured."
+            return self._insufficient_bundle_with_metadata(
+                normalized_query,
+                "RAG core is not configured.",
+                retrieval_origin=safe_origin,
+                runtime_metadata={},
+                evidence_status="unavailable",
             )
 
         try:
@@ -55,16 +64,25 @@ class Stage2RAGAdapter:
                 normalized_query, scenario_context=scenario_context
             )
         except Exception:
-            return make_insufficient_evidence_bundle(
-                normalized_query, "Evidence retrieval failed."
+            return self._insufficient_bundle_with_metadata(
+                normalized_query,
+                "Evidence retrieval failed.",
+                retrieval_origin=safe_origin,
+                runtime_metadata={},
+                evidence_status="unavailable",
             )
 
+        runtime_metadata = self._extract_runtime_metadata(raw_result)
         candidates = self._iter_candidate_items(raw_result)
         citations: list[EvidenceCitation] = []
         supported_rows = 0
+        saw_synthetic_candidate = False
 
         for idx, candidate in enumerate(candidates):
             mapping = self._to_mapping(candidate)
+            origin = self._normalize_origin(self._safe_get(mapping, ("origin",), default=None))
+            if origin in {EvidenceOrigin.LLM_SYNTHESIS, EvidenceOrigin.HYDE_GENERATED}:
+                saw_synthetic_candidate = True
             if not self._candidate_passes_sufficiency(mapping, intent):
                 continue
             citation = self._candidate_to_citation(mapping, idx)
@@ -76,8 +94,14 @@ class Stage2RAGAdapter:
         citations = self._sort_and_annotate_citations(citations)
 
         if not citations or supported_rows < 1:
-            return make_insufficient_evidence_bundle(
-                normalized_query, "No sufficient evidence candidates passed retrieval safety checks."
+            synthetic_only = bool(saw_synthetic_candidate and not citations)
+            return self._insufficient_bundle_with_metadata(
+                normalized_query,
+                "No sufficient evidence candidates passed retrieval safety checks.",
+                retrieval_origin=safe_origin,
+                runtime_metadata=runtime_metadata,
+                evidence_status="synthetic_only" if synthetic_only else "insufficient",
+                synthetic=synthetic_only,
             )
 
         return self._make_supported_bundle(
@@ -85,6 +109,8 @@ class Stage2RAGAdapter:
             citations=citations,
             max_claims=max_claims,
             intent=intent,
+            retrieval_origin=safe_origin,
+            runtime_metadata=runtime_metadata,
         )
 
     async def _call_rag_core(
@@ -112,6 +138,66 @@ class Stage2RAGAdapter:
             free_text=query,
             ml_risk_score=None,
         )
+
+    def _normalize_retrieval_origin(self, value: str | None) -> str:
+        normalized = str(value or "").strip().lower().replace("-", "_")
+        if normalized in {"scenario_driven", "agent_requested", "fallback"}:
+            return normalized
+        return "scenario_driven"
+
+    def _extract_runtime_metadata(self, raw_result: Any) -> dict[str, JsonScalar]:
+        mapping = self._to_mapping(raw_result)
+        analysis = mapping.get("analysis") if isinstance(mapping, dict) else None
+        if not isinstance(analysis, dict):
+            return {}
+
+        reranker_status = analysis.get("reranker_status")
+        runtime_status = analysis.get("runtime_status")
+
+        meta: dict[str, JsonScalar] = {}
+        if isinstance(reranker_status, dict):
+            for key in ("reranker_configured", "reranker_available", "reranker_used", "reranker_reason"):
+                value = reranker_status.get(key)
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    meta[key] = value
+        if isinstance(runtime_status, dict):
+            for key in (
+                "reranker_configured",
+                "reranker_available",
+                "reranker_used",
+                "reranker_reason",
+                "corpus_coverage_status",
+                "expected_source_count",
+                "indexed_source_count",
+                "missing_sources",
+                "source_ids",
+                "source_titles",
+            ):
+                if key in meta:
+                    continue
+                value = runtime_status.get(key)
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    meta[key] = value
+        return meta
+
+    def _insufficient_bundle_with_metadata(
+        self,
+        query: str,
+        reason: str,
+        *,
+        retrieval_origin: str,
+        runtime_metadata: dict[str, JsonScalar],
+        evidence_status: str,
+        synthetic: bool = False,
+    ) -> EvidenceBundle:
+        bundle = make_insufficient_evidence_bundle(query, reason)
+        merged_meta: dict[str, JsonScalar] = {
+            "retrieval_origin": retrieval_origin,
+            "evidence_status": evidence_status,
+            "synthetic": bool(synthetic),
+        }
+        merged_meta.update(runtime_metadata)
+        return bundle.model_copy(update={"metadata": merged_meta})
 
     def _safe_get(self, obj: Any, names: tuple[str, ...], default: Any = None) -> Any:
         if obj is None:
@@ -218,6 +304,8 @@ class Stage2RAGAdapter:
             meta["rank"] = idx
             meta["retrieval_score"] = retrieval_score
             meta["top_score"] = retrieval_score
+            meta.setdefault("support_status", "grounded")
+            meta.setdefault("synthetic", False)
             meta["confidence_label"] = self._derive_confidence_label(
                 final_score=final_score,
                 dense_score=dense_score,
@@ -324,6 +412,9 @@ class Stage2RAGAdapter:
             "retrieval_score",
             "retrieval_method",
             "source_match_score",
+            "retrieval_origin",
+            "synthetic",
+            "support_status",
         ):
             value = mapping.get(key)
             if isinstance(value, (str, int, float, bool)) or value is None:
@@ -356,6 +447,8 @@ class Stage2RAGAdapter:
         citations: list[EvidenceCitation],
         max_claims: int,
         intent: dict[str, Any],
+        retrieval_origin: str,
+        runtime_metadata: dict[str, JsonScalar],
     ) -> EvidenceBundle:
         claim_count = min(max_claims, len(citations))
         claims: list[EvidenceClaim] = []
@@ -377,11 +470,24 @@ class Stage2RAGAdapter:
                     confidence=c_score,
                     limitations=[],
                     conflicts=[],
-                    metadata={"intent_name": intent.get("intent_name")},
+                    metadata={
+                        "intent_name": intent.get("intent_name"),
+                        "retrieval_origin": retrieval_origin,
+                        "evidence_status": "grounded",
+                        "synthetic": False,
+                    },
                 )
             )
 
         unique_citations = collect_unique_citations(claims)
+        bundle_meta: dict[str, JsonScalar] = {
+            "intent_name": intent.get("intent_name"),
+            "citation_count": len(unique_citations),
+            "retrieval_origin": retrieval_origin,
+            "evidence_status": "grounded",
+            "synthetic": False,
+        }
+        bundle_meta.update(runtime_metadata)
         return EvidenceBundle(
             bundle_id=f"bundle_{abs(hash(query)) % 10_000_000}",
             query=query,
@@ -390,5 +496,5 @@ class Stage2RAGAdapter:
             support_status=EvidenceSupportStatus.SUPPORTED,
             confidence=top_retrieval_score,
             no_evidence_reason=None,
-            metadata={"intent_name": intent.get("intent_name"), "citation_count": len(unique_citations)},
+            metadata=bundle_meta,
         )

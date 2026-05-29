@@ -223,6 +223,13 @@ class AsyncRAGCoreV3:
         )
 
         # Step 8: Build analysis
+        reranker_status = {}
+        if self.retriever is not None and hasattr(self.retriever, "get_reranker_status"):
+            try:
+                reranker_status = dict(self.retriever.get_reranker_status())
+            except Exception:
+                reranker_status = {}
+
         analysis = {
             "scenario_type": scenario_type,
             "complexity": scenario_analysis["complexity"],
@@ -234,7 +241,9 @@ class AsyncRAGCoreV3:
                 "total_docs": len(final_docs),
                 "avg_score": sum(float(getattr(d, "final_score", 0.0)) for d in final_docs) / len(final_docs) if final_docs else 0,
                 "top_score": float(getattr(final_docs[0], "final_score", 0.0)) if final_docs else 0
-            }
+            },
+            "reranker_status": reranker_status,
+            "runtime_status": dict(getattr(self, "_runtime_status", {}) or {}),
         }
 
         # Step 9: Record for learning

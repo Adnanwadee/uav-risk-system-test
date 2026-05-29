@@ -581,17 +581,94 @@ def _dedupe_action_items(items: list[AgentActionItem]) -> list[AgentActionItem]:
     return out
 
 
+
+
+def _is_supported_bundle(bundle: EvidenceBundle) -> bool:
+    return bundle.support_status in {EvidenceSupportStatus.SUPPORTED, EvidenceSupportStatus.PARTIALLY_SUPPORTED}
+
+
+def _bundle_query_texts(bundles: list[EvidenceBundle]) -> set[str]:
+    return {bundle.query.strip().lower() for bundle in bundles if bundle.query.strip()}
+
+
+def _supported_topics_from_bundles(bundles: list[EvidenceBundle]) -> set[str]:
+    topics: set[str] = set()
+    for bundle in bundles:
+        if not _is_supported_bundle(bundle):
+            continue
+        topics.add(_topic_from_bundle(bundle))
+    return topics
+
+
+def _build_agent_requested_query_plan(
+    agent_input: AgentInput,
+    existing_bundles: list[EvidenceBundle],
+    *,
+    max_queries: int,
+) -> tuple[list[AgentRAGQueryPlan], list[str]]:
+    candidate_plans = build_agent_query_plan(agent_input, max_queries=max_queries)
+    supported_topics = _supported_topics_from_bundles(existing_bundles)
+    existing_queries = _bundle_query_texts(existing_bundles)
+
+    selected: list[AgentRAGQueryPlan] = []
+    skipped: list[str] = []
+    selected_topics: set[str] = set()
+
+    for plan in candidate_plans:
+        query_l = plan.query_text.strip().lower()
+        topic = _topic_from_name(plan.query_text)
+
+        if query_l in existing_queries:
+            skipped.append(f"{plan.query_id}:already_retrieved")
+            continue
+        if topic in supported_topics:
+            skipped.append(f"{plan.query_id}:topic_already_supported")
+            continue
+        if topic in selected_topics:
+            skipped.append(f"{plan.query_id}:duplicate_topic")
+            continue
+
+        selected.append(plan)
+        selected_topics.add(topic)
+
+    return selected[:max_queries], skipped
+
+
+async def _retrieve_evidence_with_origin(
+    rag_adapter: Any,
+    *,
+    query_text: str,
+    scenario_context: dict[str, Any],
+    retrieval_origin: str,
+) -> EvidenceBundle:
+    try:
+        return await rag_adapter.retrieve_evidence(
+            query_text,
+            scenario_context=scenario_context,
+            retrieval_origin=retrieval_origin,
+        )
+    except TypeError:
+        return await rag_adapter.retrieve_evidence(
+            query_text,
+            scenario_context=scenario_context,
+        )
+
+
 class OperationalAgentV2:
     def __init__(
         self,
         *,
         rag_adapter: Any | None = None,
         max_queries: int = 5,
+        max_agent_queries: int = 3,
     ) -> None:
         if max_queries < 0:
             raise ValueError("max_queries must be >= 0")
+        if max_agent_queries < 0:
+            raise ValueError("max_agent_queries must be >= 0")
         self._rag_adapter = rag_adapter
         self._max_queries = max_queries
+        self._max_agent_queries = max_agent_queries
 
     async def run(self, agent_input: AgentInput) -> AgentResult:
         evidence_bundles = list(agent_input.evidence_bundles)
@@ -599,6 +676,7 @@ class OperationalAgentV2:
         limitations: list[str] = []
         errors: list[Stage2Error] = []
         plan_items: list[AgentRAGQueryPlan] = []
+        skipped_plan_reasons: list[str] = []
 
         if self._rag_adapter is None and not evidence_bundles:
             evidence_bundles.append(
@@ -609,24 +687,43 @@ class OperationalAgentV2:
             )
             limitations.append("No RAG adapter configured; evidence could not be expanded.")
         elif self._rag_adapter is not None:
-            plan_items = build_agent_query_plan(agent_input, self._max_queries)
-            checks_performed.append("query_rag_adapter")
+            planned_count = min(self._max_queries, self._max_agent_queries)
+            plan_items, skipped_plan_reasons = _build_agent_requested_query_plan(
+                agent_input,
+                evidence_bundles,
+                max_queries=planned_count,
+            )
+            checks_performed.append("agent_evidence_gap_detection")
+            checks_performed.append("agent_requested_rag_retrieval")
+
+            if skipped_plan_reasons:
+                limitations.append("Some agent-requested evidence queries were skipped due to existing coverage or dedupe constraints.")
+
             for plan in plan_items:
                 try:
-                    bundle = await self._rag_adapter.retrieve_evidence(
-                        plan.query_text,
+                    bundle = await _retrieve_evidence_with_origin(
+                        self._rag_adapter,
+                        query_text=plan.query_text,
                         scenario_context=agent_input.scenario_summary,
+                        retrieval_origin="agent_requested",
                     )
-                    evidence_bundles.append(_enrich_bundle_with_query_plan(bundle, plan))
+                    enriched_bundle = _enrich_bundle_with_query_plan(bundle, plan)
+                    enriched_meta = dict(enriched_bundle.metadata) if isinstance(enriched_bundle.metadata, dict) else {}
+                    enriched_meta["retrieval_origin"] = "agent_requested"
+                    enriched = enriched_bundle.model_copy(update={"metadata": enriched_meta})
+                    evidence_bundles.append(enriched)
                 except Exception:
-                    limitations.append("RAG adapter query failed for at least one query.")
+                    limitations.append("RAG adapter query failed for at least one agent-requested query.")
                     errors.append(
                         Stage2Error(
                             code="rag_query_failed",
                             message="RAG query execution failed.",
-                            details={"query": plan.query_text},
+                            details={"query": plan.query_text, "retrieval_origin": "agent_requested"},
                         )
                     )
+
+            if skipped_plan_reasons:
+                limitations.extend(skipped_plan_reasons[:6])
 
         findings: list[AgentFinding] = [summarize_ml_signal(agent_input)]
         evidence_findings, evidence_actions, evidence_limitations = build_findings_from_evidence(agent_input, evidence_bundles)
@@ -723,14 +820,19 @@ class OperationalAgentV2:
             ),
             AgentToolCall(
                 tool_name=AgentToolName.RAG_RETRIEVAL,
-                purpose="Retrieve source-grounded evidence bundles for planned agent queries.",
-                input_summary=f"query_count={len(plan_items)} adapter_configured={self._rag_adapter is not None}",
-                output_summary=f"evidence_bundles={len(evidence_bundles)}",
+                purpose="Retrieve source-grounded evidence bundles for agent-requested evidence gaps.",
+                input_summary=f"agent_requested_query_count={len(plan_items)} skipped_query_count={len(skipped_plan_reasons)} adapter_configured={self._rag_adapter is not None}",
+                output_summary=f"evidence_bundles={len(evidence_bundles)} selected_queries={len(plan_items)} skipped_queries={len(skipped_plan_reasons)}",
                 status="ok" if not errors else "partial",
                 related_query_ids=query_ids,
                 related_evidence_ids=evidence_ids,
                 related_finding_ids=[],
-                metadata={},
+                metadata={
+                    "retrieval_origin": "agent_requested",
+                    "max_agent_queries": self._max_agent_queries,
+                    "selected_queries": " | ".join([item.query_text for item in plan_items[:8]]),
+                    "skipped_queries": " | ".join(skipped_plan_reasons[:8]),
+                },
             ),
             AgentToolCall(
                 tool_name=AgentToolName.SCENARIO_PROFILE_INSPECTOR,

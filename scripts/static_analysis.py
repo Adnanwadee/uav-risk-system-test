@@ -8,6 +8,13 @@ Generates:
 
 Run this script from repo root: python3 scripts/static_analysis.py
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: STAGE6_STATIC_ANALYSIS_TOOLING_KEEP
+# Plan lineage: STAGE6_SUPPORT_TOOLING
+# Runtime status: Manual static analysis helper; not API/runtime.
+# Legacy signal: Heuristic scanner may include old risk keywords and compatibility symbols.
+# Replacement: No runtime replacement; use only as cleanup/audit support.
+# Action rule: Keep as manual tooling. Do not use as final readiness evidence.
 import ast
 import os
 import json

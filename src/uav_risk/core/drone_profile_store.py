@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+# STAGE6_CLEANUP_REVIEW:
+# Classification: LEGACY_PROFILE_STORE_REPLACED_BY_API_STORAGE
+# Plan lineage: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Not part of current FastAPI profile persistence path.
+# Legacy signal: Used by old stage2/pipeline.py profile/correction flow; current runtime uses api/storage.py.
+# Replacement: src/uav_risk/api/storage.py LocalProfileStorage and profile routes.
+# Action rule: Do not call from new code. Remove only after legacy pipeline.py is resolved.
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path

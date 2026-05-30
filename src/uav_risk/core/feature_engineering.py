@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+# STAGE6_CLEANUP_REVIEW:
+# Classification: MIXED_ACTIVE_LEGACY
+# Plan lineage: PLAN3_ACTIVE raw assembly plus PLAN1/PLAN2 legacy processed-feature compatibility.
+# Runtime status: generate_raw_feature_map() is the canonical production path.
+# Legacy signal: generate_all_features_map(), generate_all_features(), and split_primary_and_secondary_overrides()
+# remain compatibility helpers for old processed/mixed feature paths.
+# Removed legacy API: _normalize_primary_inputs and generate_secondary_features are not restored.
+# Action rule: Do not delete this file. Review legacy helpers function-by-function after raw-first tests remain green.
 import json
 import logging
 import math

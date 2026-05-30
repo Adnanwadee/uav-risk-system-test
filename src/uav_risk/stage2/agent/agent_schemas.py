@@ -1,4 +1,11 @@
 # File Path: src/uav_risk/stage2/agent/agent_schemas.py
+# STAGE6_CLEANUP_REVIEW:
+# Classification: COMPATIBILITY_BRIDGE_KEEP_NOW
+# Plan lineage: MIXED_ACTIVE_LEGACY
+# Runtime status: Compatibility bridge; new code should import canonical contracts from src/uav_risk/stage2/contracts.py.
+# Legacy signal: Contains old ACE dataclasses plus aliases to canonical Agent contracts.
+# Replacement: src/uav_risk/stage2/contracts.py
+# Action rule: Do not delete until all legacy ACE imports are removed and bridge consumers are migrated.
 
 
 from dataclasses import dataclass, field

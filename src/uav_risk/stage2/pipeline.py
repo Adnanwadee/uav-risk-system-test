@@ -1,4 +1,12 @@
 # File Path: src/uav_risk/stage2/pipeline.py
+# STAGE6_CLEANUP_REVIEW:
+# Classification: LEGACY_DO_NOT_USE
+# Plan lineage: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Not part of the canonical Smart Skies Stage2PipelineV2 backend path.
+# Replacement: src/uav_risk/stage2/pipeline_v2.py
+# Known legacy caller: scripts/simulate_run.py
+# Action rule: Do not call from API/production. Do not delete until simulate_run.py
+# and legacy tests/comments are reviewed.
 import asyncio
 import json
 import time

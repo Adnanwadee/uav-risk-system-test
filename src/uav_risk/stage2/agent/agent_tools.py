@@ -1,4 +1,11 @@
 # File Path: src/uav_risk/stage2/agent/agent_tools.py
+# STAGE6_CLEANUP_REVIEW:
+# Classification: MIXED_REVIEW_FUNCTION_LEVEL
+# Plan lineage: MIXED_ACTIVE_LEGACY
+# Runtime status: Not confirmed as canonical runtime; currently guarded by safety/static tests and used by legacy ACE path.
+# Legacy signal: Feature batch, physics, contextual sweep, and RAG helper functions originally support ACEReActAgent.
+# Replacement: OperationalAgentV2 / operational_inspector.py / current evidence-aware agent logic, where applicable.
+# Action rule: Do not delete as a whole. Review function-by-function after ACE cleanup.
 import math
 from typing import Any, Dict, List, Optional, Set
 from uav_risk.stage2.agent.agent_schemas import FeatureAssessment, ConditionalGoConstraint

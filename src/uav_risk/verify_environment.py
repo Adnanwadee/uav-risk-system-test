@@ -7,6 +7,13 @@ Features:
 - Verifies Python, key libraries, critical artifacts (feature mapping), and env vars.
 - Flexible: non-strict default (warnings for docs), `--strict` forces hard-fail on missing legal docs.
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: LEGACY_ENVIRONMENT_VERIFIER_REVIEW
+# Plan lineage: PLAN1_OR_PLAN2_TOOLING
+# Runtime status: Manual environment verifier only; not canonical Stage2 readiness validation.
+# Legacy signal: Checks old knowledge/vector_db paths, Streamlit, and GROQ_API_KEY as broadly required.
+# Replacement: Use README readiness commands, RAG diagnostics, backend trace validation, and stage2 smoke scripts.
+# Action rule: Review before demo docs. Do not use as final readiness gate without updating checks.
 
 import argparse
 import sys

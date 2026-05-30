@@ -5,6 +5,13 @@ Goals:
   into primitives (str, int, float, bool, list, dict).
 - Limit free-text lengths and remove suspicious control sequences.
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: MIXED_ACTIVE_LEGACY_SANITIZER
+# Plan lineage: PLAN3_ACTIVE public-safe API trace sanitizers plus PLAN1/PLAN2 legacy strict JSON sanitizer.
+# Runtime status: sanitize_system_work_trace_public(), sanitize_tool_trace_public(), and sanitize_working_memory_public() are active API safety paths.
+# Legacy signal: strict_aviation_json_sanitizer() remains for legacy ACE/report_writer callers.
+# Replacement: New public API exposure should use the explicit public-safe sanitizers below.
+# Action rule: Do not delete this file. Review strict_aviation_json_sanitizer only after ACE/report_writer legacy callers are removed.
 from typing import Any
 import dataclasses
 import math

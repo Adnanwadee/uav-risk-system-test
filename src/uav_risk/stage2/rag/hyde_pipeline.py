@@ -2,6 +2,13 @@
 HyDE Pipeline - Targeted Hypothetical Document Embedding
 Generates contextual hypothetical documents based on query features.
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: OPTIONAL_RAG_COMPONENT_KEEP_NOW
+# Plan lineage: PLAN3_OPTIONAL_RAG_SUPPORT
+# Runtime status: Imported by rag_core_v3.py as optional HyDE/query-expansion support.
+# Legacy signal: Not an evidence source by itself; keep while rag_core_v3 imports TargetedHyDE.
+# Replacement: None currently. Review only if rag_core_v3 no longer imports or uses TargetedHyDE.
+# Action rule: Do not delete now. Any cleanup must first update rag_core_v3 and RAG quality/runtime diagnostics.
 import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass

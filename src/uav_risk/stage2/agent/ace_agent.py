@@ -1,4 +1,11 @@
 # File Path: src/uav_risk/stage2/agent/ace_agent.py
+# STAGE6_CLEANUP_REVIEW:
+# Classification: LEGACY_DO_NOT_USE
+# Plan lineage: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Not part of canonical OperationalAgentV2 / Stage2PipelineV2 backend path.
+# Legacy signal: ACE/ReAct LLM loop using legacy agent memory, legacy schemas, stale rag_core import path, and reasoning_chain output.
+# Replacement: src/uav_risk/stage2/agent/operational_agent.py
+# Action rule: Do not call from production/API. Remove only after legacy pipeline and old simulation callers are resolved.
 import json
 import time
 import asyncio

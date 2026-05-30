@@ -1,6 +1,13 @@
 """
 Schemas - Data Models + Protocols for RAG System V3.1
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: COMPATIBILITY_BRIDGE_KEEP_NOW
+# Plan lineage: PLAN3_COMPATIBILITY_BRIDGE
+# Runtime status: RAG adapter/tests still import SearchResult and canonical evidence aliases from this module.
+# Legacy signal: Keeps old RAG schema import paths stable while re-exporting canonical stage2 contracts.
+# Replacement: Canonical evidence models live in src/uav_risk/stage2/contracts.py.
+# Action rule: Do not delete now. Review only after all RAG imports are migrated or compatibility tests are updated.
 from typing import Optional, List, Dict, Any, Protocol, runtime_checkable
 from dataclasses import dataclass, field
 from datetime import datetime

@@ -1,5 +1,22 @@
 from __future__ import annotations
 
+# STAGE6_CLEANUP_REVIEW:
+# Classification: LEGACY_PLAN1_PLAN2_TESTS
+# Runtime status: These tests target removed legacy feature-engineering APIs and are not
+# part of the canonical raw-first Smart Skies backend validation path.
+# Legacy signal: imports _normalize_primary_inputs or generate_secondary_features.
+# Replacement coverage: raw-first tests in test_raw_feature_generation.py,
+# test_raw_loader_integration.py, test_api_raw_assessment.py, and test_core_raw_contracts.py.
+# Action rule: Temporarily skipped during Stage 6 cleanup; later delete or rewrite explicitly.
+
+import pytest
+
+pytest.skip(
+    "STAGE6_CLEANUP_REVIEW: legacy PLAN1/PLAN2 feature-engineering tests "
+    "target removed APIs (_normalize_primary_inputs/generate_secondary_features).",
+    allow_module_level=True,
+)
+
 import warnings
 import numpy as np
 import pytest

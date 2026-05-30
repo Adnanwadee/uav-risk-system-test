@@ -14,7 +14,13 @@ from uav_risk.stage2.contracts import (
     collect_unique_citations,
     make_insufficient_evidence_bundle,
 )
-from uav_risk.stage2.rag.hybrid_retriever import HybridRetriever
+def _detect_source_intent(query: str) -> dict[str, object]:
+    """Lazily import HybridRetriever to keep uav_risk.stage2.rag package import lightweight."""
+    from uav_risk.stage2.rag.hybrid_retriever import HybridRetriever
+
+    return HybridRetriever.detect_source_intent(query)
+
+
 
 JsonScalar = str | int | float | bool | None
 
@@ -39,7 +45,7 @@ class Stage2RAGAdapter:
         if max_claims < 1:
             raise ValueError("max_claims must be >= 1")
 
-        intent = HybridRetriever.detect_source_intent(normalized_query)
+        intent = _detect_source_intent(normalized_query)
         safe_origin = self._normalize_retrieval_origin(retrieval_origin)
         if not intent.get("domain_match", False):
             return self._insufficient_bundle_with_metadata(

@@ -6,6 +6,12 @@ Canonical readiness commands are listed in README.md.
 Simple harness to simulate realistic API runs against the FastAPI app.
 Uses TestClient to call /api/flight/assemble and /v2/evaluate.
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: PLAN1_OR_PLAN2_RELIC / OLD_API_HARNESS
+# Runtime status: Manual old API simulation only; not part of current assessment/profile API contract.
+# Legacy signal: Uses old /api/flight/assemble and /v2/evaluate endpoints and loads artifacts at import time.
+# Replacement: tests/test_api_assessments_stage2.py and scripts/run_backend_trace_validation.py.
+# Action rule: Do not use as API readiness evidence. Review after current API endpoint contract is finalized.
 from pathlib import Path
 import json
 from fastapi.testclient import TestClient

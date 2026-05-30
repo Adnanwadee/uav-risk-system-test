@@ -1,3 +1,10 @@
+# STAGE6_CLEANUP_REVIEW:
+# Classification: LEGACY_CATALOG_HELPER_USED_BY_OLD_PIPELINE
+# Plan lineage: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Not part of current raw-profile API assessment path.
+# Legacy signal: Used by old stage2/pipeline.py to resolve UAV limits/catalog specs.
+# Replacement: Current API profile contract stores explicit DroneProfileRaw capability fields.
+# Action rule: Do not call from new code. Remove only after legacy pipeline.py is resolved.
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional

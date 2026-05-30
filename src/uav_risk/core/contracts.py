@@ -5,6 +5,13 @@ Purpose: API Input Contracts (Gate 1 - Reception). Defines strongly-typed Pydant
 Dependencies: Standalone data serialization layer aligned with ml.feature_defs constitution.
 Source References: FAA Part 107, EASA CS-23, ISO 12345:2020 Aviation Digital Standards.
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: MIXED_ACTIVE_LEGACY_CONTRACTS
+# Plan lineage: PLAN3_ACTIVE raw API contracts plus PLAN1/PLAN2 legacy nested payload contracts.
+# Runtime status: DroneProfileRaw, ScenarioRawInput, RawSecondaryOverrides, and AssessmentCoreInput are active API contracts.
+# Legacy signal: UAVSpecs, MissionParams, EnvironmentData, GPSData, OperatorData, and MasterFlightPayload remain compatibility contracts.
+# Replacement: Current frontend/API should use raw DroneProfileRaw + ScenarioRawInput + RawSecondaryOverrides.
+# Action rule: Do not delete this file. Review legacy nested contracts only after legacy scripts/pipeline callers are removed.
 
 import uuid
 import logging

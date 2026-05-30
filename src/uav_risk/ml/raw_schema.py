@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+# STAGE6_CLEANUP_REVIEW:
+# Classification: MIXED_ACTIVE_LEGACY_RAW_SCHEMA
+# Plan lineage: PLAN3_ACTIVE raw 197 schema plus processed/mixed compatibility helpers.
+# Runtime status: RAW_FEATURE_NAMES, profile/scenario partitions, override rules, and raw schema helpers are active.
+# Legacy signal: categorical_to_processed_flags(), infer_controls_action(), and build_raw_feature_map() support legacy processed/mixed bridges.
+# Replacement: Production path should assemble raw vectors directly through assemble_raw_feature_vector().
+# Action rule: Do not delete this file. Review legacy helper functions only after loader bridge and legacy tests are resolved.
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping
 

@@ -1,4 +1,11 @@
 # File Path: src/uav_risk/stage2/agent/fallback.py
+# STAGE6_CLEANUP_REVIEW:
+# Classification: DELETE_AFTER_ACE_REMOVAL
+# Plan lineage: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Fallback assessor for legacy ACEReActAgent only; not canonical Stage2 degraded-mode handling.
+# Legacy signal: Returns legacy AgentDecision from agent_schemas.py.
+# Replacement: AgentResultFacade, OperationalAgentV2 degraded result, Stage2PipelineV2 error handling, and LLMOrchestrator fallback.
+# Action rule: Keep only while ace_agent.py remains. Remove with ACE legacy group after caller/test review.
 import math
 import time
 from typing import Any, Dict, List

@@ -7,6 +7,13 @@ Canonical readiness commands are listed in README.md.
 Sparse Index Builder - Secure, Rebuildable, Corpus-aware.
 Builds sparse index (TF-IDF/BM25) from corpus with state tracking.
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: LEGACY_BUILD_TOOLING
+# Plan lineage: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Not canonical runtime; standalone sparse/BM25 builder superseded by current build_index.py flow.
+# Legacy signal: Builds sparse_index.pkl independently with local corpus state tracking.
+# Replacement: src/uav_risk/stage2/rag/build_index.py and scripts/rebuild_stage2_rag_index.py.
+# Action rule: Do not delete until rebuild/index validation paths are reviewed. Candidate for quarantine/removal later.
 import json
 import pickle
 import logging

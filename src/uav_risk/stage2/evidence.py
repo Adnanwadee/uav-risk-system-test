@@ -1,4 +1,11 @@
 # File Path: src/uav_risk/stage2/evidence.py
+# STAGE6_CLEANUP_REVIEW:
+# Classification: LEGACY_ACE_EVIDENCE_PACK
+# Plan lineage: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Not part of canonical Stage2 contracts/evidence bundle path.
+# Legacy signal: Builds AuditEvidencePack from legacy AgentDecision for old pipeline.py/report_writer.py flow.
+# Replacement: src/uav_risk/stage2/contracts.py evidence models and Stage2PipelineV2 result/reporting flow.
+# Action rule: Do not call from new code. Remove only after legacy report_writer.py and pipeline.py are resolved.
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 import json

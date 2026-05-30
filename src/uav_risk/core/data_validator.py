@@ -1,3 +1,10 @@
+# STAGE6_CLEANUP_REVIEW:
+# Classification: MIXED_ACTIVE_LEGACY_VALIDATION
+# Plan lineage: PLAN3_ACTIVE raw validation plus PLAN1/PLAN2 processed feature validator bridge.
+# Runtime status: validate_*_raw helpers and run_structural_hard_veto() are active API/Core validation paths.
+# Legacy signal: DataValidator validates processed/198-style feature maps and is marked compatibility-only.
+# Replacement: Use raw contract validators and run_structural_hard_veto() for API/production paths.
+# Action rule: Do not delete this file. Review DataValidator only after old processed-vector tests/callers are resolved.
 from __future__ import annotations
 """
 Module: uav_risk.core.data_validator

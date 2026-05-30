@@ -7,6 +7,12 @@ Canonical readiness commands are listed in README.md.
 Dependencies: uav_risk.core.contracts, uav_risk.core.data_validator,
               uav_risk.core.feature_router, uav_risk.ml.inference, ace_agent
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Manual forensic/demo harness only; not part of canonical Stage2PipelineV2 runtime.
+# Legacy signal: Uses FeatureRouter, mock ML/LLM/RAG objects, and ACEReActAgent.
+# Replacement: scripts/run_stage2_pipeline_v2_smoke.py and scripts/run_backend_trace_validation.py.
+# Action rule: Do not use as production/readiness evidence. Review with old simulation scripts before removal.
 
 import sys
 import os

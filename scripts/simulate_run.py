@@ -5,6 +5,13 @@ Canonical readiness commands are listed in README.md.
 
 Simulates a full pipeline run using the integration test payload.
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Manual legacy/demo harness only; not part of canonical backend validation.
+# Legacy dependency: imports src/uav_risk/stage2/pipeline.py::run_ace_pipeline.
+# Replacement: scripts/run_stage2_pipeline_v2_smoke.py and scripts/run_backend_trace_validation.py.
+# Action rule: Do not use as readiness evidence. Remove only after legacy pipeline
+# and old simulation scripts are reviewed together.
 import asyncio
 import json
 import os

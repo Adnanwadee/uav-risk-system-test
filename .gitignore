@@ -39,3 +39,6 @@ src/uav_risk/stage2/knowledge/cache/query_history.json
 src/uav_risk/stage2/knowledge/logs/*.jsonl
 src/uav_risk/stage2/knowledge/logs/evidence_*.jsonl
 
+
+# Local cleanup reports
+cleanup_reports/

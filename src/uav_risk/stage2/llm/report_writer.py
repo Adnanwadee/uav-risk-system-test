@@ -1,4 +1,11 @@
 # File Path: src/uav_risk/stage2/llm/report_writer.py
+# STAGE6_CLEANUP_REVIEW:
+# Classification: LEGACY_DO_NOT_USE
+# Plan lineage: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Not part of canonical deterministic reporting.py / LLMOrchestrator path.
+# Legacy signal: Depends on legacy GroqLLM, legacy AgentDecision, and old ACE AuditEvidencePack reporting flow.
+# Replacement: src/uav_risk/stage2/reporting.py and src/uav_risk/stage2/llm/orchestrator.py.
+# Action rule: Do not call from API/production. Remove only after legacy pipeline.py and simulate_run.py are resolved.
 import asyncio
 import time
 from typing import Dict, Any, List, Tuple, Optional

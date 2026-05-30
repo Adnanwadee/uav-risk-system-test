@@ -1,4 +1,11 @@
 # File Path: src/uav_risk/stage2/agent/agent_memory.py
+# STAGE6_CLEANUP_REVIEW:
+# Classification: DELETE_AFTER_ACE_REMOVAL
+# Plan lineage: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Memory subsystem for ACEReActAgent only; not canonical OperationalAgentV2 working memory.
+# Legacy signal: Stores reasoning_steps, tool_history, pending RAG queries, and LLM context for old ReAct loop.
+# Replacement: OperationalAgentV2 working-memory/system-work-trace logic.
+# Action rule: Keep only while ace_agent.py remains. Do not reuse for public-safe trace output.
 import hashlib
 import time
 from typing import Any, Dict, List, Optional, Set

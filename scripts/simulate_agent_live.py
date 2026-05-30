@@ -1,3 +1,9 @@
+# STAGE6_CLEANUP_REVIEW:
+# Classification: PLAN1_OR_PLAN2_RELIC / HIGH_RISK_LEGACY
+# Runtime status: Manual live Groq/ACE simulation only; not part of canonical backend validation.
+# Legacy signal: Uses ACEReActAgent, stale rag_core import path, live Groq client, and reasoning_chain output.
+# Replacement: OperationalAgentV2 + Stage2RAGAdapter + LLMOrchestrator validation paths.
+# Action rule: Do not run during cleanup/demo readiness. Review for deletion with ACE legacy cleanup group.
 # File Path: scripts/simulate_agent_live.py
 # Legacy/demo/manual-only harness.
 # Not canonical runtime and not final readiness evidence.

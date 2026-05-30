@@ -2,6 +2,13 @@
 Prompts V3 - Contextual, Structured, Feature-aware
 Production prompts with helper functions for LLM integration.
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: OPTIONAL_RAG_PROMPTS_KEEP_NOW
+# Plan lineage: PLAN3_OPTIONAL_RAG_SUPPORT
+# Runtime status: Used by rag_core_v3.py synthesis path and legacy GroqLLM/HyDE prompt helpers.
+# Legacy signal: Some prompt helpers support old groq_llm.py, but build_synthesis_prompt is still referenced by rag_core_v3.py.
+# Replacement: None currently. Consider splitting later only if needed.
+# Action rule: Do not delete now. Review function-by-function after RAG synthesis/HyDE usage is clarified.
 from typing import Dict, List, Any, Optional
 
 # ═══════════════════════════════════════════════════════════

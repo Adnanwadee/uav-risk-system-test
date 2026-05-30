@@ -4,6 +4,13 @@ Author: Elite Technical Partner + V3.1 Production Fix
 Description: Asynchronous API client wrapper for Groq LLM inference, 
              optimized for aviation compliance. Compatible with config_v3.
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: LEGACY_LLM_WRAPPER
+# Plan lineage: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Not part of current LLMOrchestrator provider path.
+# Legacy signal: Old Groq wrapper under RAG package; mainly retained by legacy report_writer.py and pipeline.py.
+# Replacement: src/uav_risk/stage2/llm/groq_client.py via src/uav_risk/stage2/llm/orchestrator.py.
+# Action rule: Do not use for new LLM synthesis. Remove after legacy report_writer.py and ACE pipeline callers are removed.
 
 import asyncio
 import logging

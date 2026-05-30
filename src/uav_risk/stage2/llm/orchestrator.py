@@ -5,6 +5,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any, Mapping, Protocol
 
 from uav_risk.stage2.contracts import (
@@ -69,8 +70,8 @@ class LLMOrchestratorConfig:
     max_quote_preview_chars: int = 280
 
 
-def build_llm_orchestrator_from_env() -> "LLMOrchestrator":
-    runtime = load_llm_runtime_config_from_env()
+def _build_llm_orchestrator_from_env_uncached(runtime: LLMRuntimeConfig | None = None) -> "LLMOrchestrator":
+    runtime = runtime or load_llm_runtime_config_from_env()
     config = LLMOrchestratorConfig(
         enabled=runtime.enabled,
         use_fallback_without_provider=runtime.use_fallback_on_error,
@@ -94,6 +95,55 @@ def build_llm_orchestrator_from_env() -> "LLMOrchestrator":
         return LLMOrchestrator(provider=provider, config=config)
     except Exception:
         return LLMOrchestrator(provider=None, config=config)
+
+
+_LLM_ORCHESTRATOR_CACHE_LOCK = Lock()
+_LLM_ORCHESTRATOR_CACHE: "LLMOrchestrator" | None = None
+_LLM_ORCHESTRATOR_CACHE_KEY: tuple[Any, ...] | None = None
+
+
+def _llm_orchestrator_cache_key(runtime: LLMRuntimeConfig) -> tuple[Any, ...]:
+    return (
+        runtime.enabled,
+        runtime.provider,
+        runtime.model_name,
+        runtime.temperature,
+        runtime.max_tokens,
+        runtime.timeout_seconds,
+        runtime.use_fallback_on_error,
+        runtime.allow_external_provider,
+    )
+
+
+def build_llm_orchestrator_from_env() -> "LLMOrchestrator":
+    global _LLM_ORCHESTRATOR_CACHE
+    global _LLM_ORCHESTRATOR_CACHE_KEY
+
+    runtime = load_llm_runtime_config_from_env()
+    cache_key = _llm_orchestrator_cache_key(runtime)
+
+    if _LLM_ORCHESTRATOR_CACHE is not None and _LLM_ORCHESTRATOR_CACHE_KEY == cache_key:
+        return _LLM_ORCHESTRATOR_CACHE
+
+    with _LLM_ORCHESTRATOR_CACHE_LOCK:
+        if _LLM_ORCHESTRATOR_CACHE is None or _LLM_ORCHESTRATOR_CACHE_KEY != cache_key:
+            _LLM_ORCHESTRATOR_CACHE = _build_llm_orchestrator_from_env_uncached(runtime=runtime)
+            _LLM_ORCHESTRATOR_CACHE_KEY = cache_key
+
+    return _LLM_ORCHESTRATOR_CACHE
+
+
+def get_cached_llm_orchestrator_from_env() -> "LLMOrchestrator":
+    return build_llm_orchestrator_from_env()
+
+
+def clear_llm_orchestrator_cache_for_tests() -> None:
+    global _LLM_ORCHESTRATOR_CACHE
+    global _LLM_ORCHESTRATOR_CACHE_KEY
+
+    with _LLM_ORCHESTRATOR_CACHE_LOCK:
+        _LLM_ORCHESTRATOR_CACHE = None
+        _LLM_ORCHESTRATOR_CACHE_KEY = None
 
 
 def _clean_text(value: Any, fallback: str) -> str:

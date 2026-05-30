@@ -86,3 +86,10 @@ def test_rebuild_script_defaults_to_canonical_build_not_legacy_repair() -> None:
     src = _read("scripts/rebuild_stage2_rag_index.py")
     assert "build_rag_index(force=args.force)" in src
     assert "--repair-from-existing" in src
+
+
+def test_backend_trace_validation_script_exists_and_emits_phase_contract() -> None:
+    src = _read("scripts/run_backend_trace_validation.py")
+    assert "phase_count" in src
+    assert "1. API input / request contract" in src
+    assert "15. API response contract" in src

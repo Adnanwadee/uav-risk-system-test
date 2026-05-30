@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import pytest
 
 from uav_risk.stage2.contracts import (
@@ -20,9 +23,18 @@ from uav_risk.stage2.contracts import (
 )
 
 
+def _load_smoke_module():
+    path = Path("scripts/run_stage2_pipeline_v2_smoke.py")
+    spec = importlib.util.spec_from_file_location("stage2_smoke_module", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 @pytest.mark.asyncio
 async def test_smoke_separates_global_quality_from_scenario_sufficiency(monkeypatch: pytest.MonkeyPatch) -> None:
-    import scripts.run_stage2_pipeline_v2_smoke as smoke
+    smoke = _load_smoke_module()
 
     insufficient = EvidenceBundle(
         bundle_id="b1",
@@ -132,6 +144,8 @@ async def test_smoke_separates_global_quality_from_scenario_sufficiency(monkeypa
 
     monkeypatch.setattr(smoke, "Stage2PipelineV2", FakePipeline)
     monkeypatch.setattr(smoke, "inspect_rag_index_provenance", lambda: FakeProv())
+    monkeypatch.setattr(smoke, "get_cached_runtime_rag_adapter", lambda: None)
+
     async def fake_run_diag(**kwargs):
         return FakeDiag()
 
@@ -192,7 +206,7 @@ async def test_smoke_separates_global_quality_from_scenario_sufficiency(monkeypa
 
 @pytest.mark.asyncio
 async def test_smoke_env_llm_path_selected_without_real_network_call(monkeypatch: pytest.MonkeyPatch) -> None:
-    import scripts.run_stage2_pipeline_v2_smoke as smoke
+    smoke = _load_smoke_module()
 
     class FakePipeline:
         def __init__(self, *args, **kwargs) -> None:
@@ -260,7 +274,7 @@ async def test_smoke_env_llm_path_selected_without_real_network_call(monkeypatch
 
     monkeypatch.setattr(smoke, "Stage2PipelineV2", FakePipeline)
     monkeypatch.setattr(smoke, "inspect_rag_index_provenance", lambda: FakeProv())
-    monkeypatch.setattr(smoke, "build_llm_orchestrator_from_env", lambda: object())
+    monkeypatch.setattr(smoke, "get_cached_llm_orchestrator_from_env", lambda: object())
 
     result = await smoke._run(use_real_rag=False, use_llm_fallback=False, use_env_llm=True)
     assert result["llm_synthesis_status"] == "generated"
@@ -271,7 +285,7 @@ async def test_smoke_env_llm_path_selected_without_real_network_call(monkeypatch
 
 @pytest.mark.asyncio
 async def test_smoke_rejects_conflicting_llm_flags() -> None:
-    import scripts.run_stage2_pipeline_v2_smoke as smoke
+    smoke = _load_smoke_module()
 
     with pytest.raises(ValueError, match="mutually exclusive"):
         await smoke._run(use_real_rag=False, use_llm_fallback=True, use_env_llm=True)

@@ -49,6 +49,9 @@ uvicorn uav_risk.api.main:app --host 0.0.0.0 --port 8000 --reload
   - corpus coverage (`expected_source_count`, `indexed_source_count`, missing sources)
   - reranker status fields (`reranker_configured`, `reranker_available`, `reranker_used`, `reranker_reason`)
 - Synthetic evidence is marked and must not be treated as grounded evidence.
+- Stage 5 runtime reuse path:
+  - process-local cache for runtime RAG adapter construction
+  - env-keyed cache for LLM orchestrator construction
 
 ## Current Validation Status
 
@@ -56,7 +59,8 @@ uvicorn uav_risk.api.main:app --host 0.0.0.0 --port 8000 --reload
 - RAG quality is proven by diagnostics harness.
 - Real RAG smoke succeeded independently.
 - Groq reachability succeeded independently.
-- Combined real-RAG + env-LLM smoke may terminate due to runtime memory/resource pressure.
+- Before Stage 5 cache/reuse, combined real-RAG + env-LLM smoke could terminate due to resource pressure.
+- Stage 5 adds runtime cache/reuse and a dedicated backend trace validation command for end-to-end closure checks.
 
 ## Known Limitations
 
@@ -64,11 +68,11 @@ uvicorn uav_risk.api.main:app --host 0.0.0.0 --port 8000 --reload
    - Default FAISS secret is insecure.
    - Set `UAV_FAISS_SECRET` outside git for production/release.
 2. Combined RAG + LLM runtime:
-   - Combined real-RAG + env-LLM smoke can terminate from resource pressure.
-   - Treat as runtime efficiency/loading limitation, not confirmed logic failure.
+   - Even with cache/reuse improvements, combined real-RAG + env-LLM smoke may still terminate under constrained resources.
+   - Treat this as runtime efficiency/loading limitation, not confirmed decision-logic failure.
 3. Runtime efficiency:
-   - Possible repeated loading of embedding/reranker/RAG/LLM resources.
-   - Future improvement: in-process caching/reuse.
+   - Process-local reuse is implemented for heavy adapter/orchestrator initialization.
+   - Additional tuning may still be needed for lower-memory environments.
 4. Legacy files:
    - ACE stack and older simulation scripts are not the current runtime path.
 5. Local JSON persistence:
@@ -89,9 +93,10 @@ python scripts/run_stage2_rag_diagnostic.py --run-quality
 python scripts/run_stage2_pipeline_v2_smoke.py --use-real-rag
 python scripts/check_groq_provider_reachability.py
 python scripts/run_stage2_pipeline_v2_smoke.py --use-real-rag --use-env-llm
+python scripts/run_backend_trace_validation.py
 ```
 
-Note: The combined `--use-real-rag --use-env-llm` smoke may terminate due to resource pressure until runtime caching is improved.
+Note: The combined `--use-real-rag --use-env-llm` smoke may still terminate in constrained environments.
 
 ## Security / Repo Hygiene
 
@@ -103,3 +108,7 @@ Note: The combined `--use-real-rag --use-env-llm` smoke may terminate due to res
 - [Frontend Handoff](docs/FRONTEND_HANDOFF.md)
 - [API Examples](docs/API_EXAMPLES.md)
 - [Stage2 RAG Readiness](docs/STAGE2_RAG_READINESS.md)
+
+## Next Planned Stage
+
+- Stage 6: legacy cleanup file-by-file, only after manual validation commands are confirmed.

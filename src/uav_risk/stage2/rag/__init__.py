@@ -22,6 +22,8 @@ from .quality import (
     RAGQualityReport,
     build_default_rag_quality_queries,
     build_runtime_rag_adapter_if_available,
+    get_cached_runtime_rag_adapter,
+    clear_runtime_rag_adapter_cache_for_tests,
     evaluate_rag_adapter_quality,
 )
 from .runtime_diagnostics import (
@@ -67,6 +69,8 @@ __all__ = [
     "build_default_rag_quality_queries",
     "evaluate_rag_adapter_quality",
     "build_runtime_rag_adapter_if_available",
+    "get_cached_runtime_rag_adapter",
+    "clear_runtime_rag_adapter_cache_for_tests",
     "RAGRuntimeResourceStatus",
     "RAGIndexProvenanceStatus",
     "RAGRuntimeDiagnosticResult",

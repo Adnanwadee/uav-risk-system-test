@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from threading import Lock
 
 from pydantic import BaseModel, Field
 
@@ -9,6 +10,10 @@ from uav_risk.stage2.contracts import EvidenceSupportStatus, Stage2Error, Stage2
 from uav_risk.stage2.rag.adapter import Stage2RAGAdapter
 
 JsonScalar = str | int | float | bool | None
+
+_RUNTIME_RAG_ADAPTER_SENTINEL = object()
+_RUNTIME_RAG_ADAPTER_CACHE: Stage2RAGAdapter | None | object = _RUNTIME_RAG_ADAPTER_SENTINEL
+_RUNTIME_RAG_ADAPTER_LOCK = Lock()
 
 
 class _AsyncEmbedderFromLangChain:
@@ -445,7 +450,7 @@ async def evaluate_rag_adapter_quality(
     return RAGQualityReport(status=status, cases=cases, errors=errors, metadata=metadata)
 
 
-def build_runtime_rag_adapter_if_available() -> Stage2RAGAdapter | None:
+def _build_runtime_rag_adapter_uncached() -> Stage2RAGAdapter | None:
     docs_dir = Path("src/uav_risk/stage2/docs")
     models_dir = Path("src/uav_risk/stage2/knowledge/models")
     if not docs_dir.exists() or not models_dir.exists():
@@ -505,3 +510,31 @@ def build_runtime_rag_adapter_if_available() -> Stage2RAGAdapter | None:
         return adapter
     except Exception:
         return None
+
+
+def build_runtime_rag_adapter_if_available() -> Stage2RAGAdapter | None:
+    """Return a process-local cached runtime adapter.
+
+    This caches only expensive runtime resources (embedder/index/reranker/adapter)
+    and does not cache assessment-specific inputs or retrieval results.
+    """
+    global _RUNTIME_RAG_ADAPTER_CACHE
+
+    if _RUNTIME_RAG_ADAPTER_CACHE is not _RUNTIME_RAG_ADAPTER_SENTINEL:
+        return _RUNTIME_RAG_ADAPTER_CACHE if isinstance(_RUNTIME_RAG_ADAPTER_CACHE, Stage2RAGAdapter) else None
+
+    with _RUNTIME_RAG_ADAPTER_LOCK:
+        if _RUNTIME_RAG_ADAPTER_CACHE is _RUNTIME_RAG_ADAPTER_SENTINEL:
+            _RUNTIME_RAG_ADAPTER_CACHE = _build_runtime_rag_adapter_uncached()
+
+    return _RUNTIME_RAG_ADAPTER_CACHE if isinstance(_RUNTIME_RAG_ADAPTER_CACHE, Stage2RAGAdapter) else None
+
+
+def get_cached_runtime_rag_adapter() -> Stage2RAGAdapter | None:
+    return build_runtime_rag_adapter_if_available()
+
+
+def clear_runtime_rag_adapter_cache_for_tests() -> None:
+    global _RUNTIME_RAG_ADAPTER_CACHE
+    with _RUNTIME_RAG_ADAPTER_LOCK:
+        _RUNTIME_RAG_ADAPTER_CACHE = _RUNTIME_RAG_ADAPTER_SENTINEL

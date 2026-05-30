@@ -9,6 +9,13 @@ Author: Elite Technical Partner + V3.1 Fix
 Description: Binds with RAGConfig paths to pull embedding and reranker weights offline.
              Updated for config_v3 with local model paths.
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: MANUAL_MODEL_BOOTSTRAP_TOOLING
+# Plan lineage: PLAN3_SUPPORT_TOOLING
+# Runtime status: Not part of API/runtime/readiness validation.
+# Legacy signal: Manual HuggingFace model bootstrap utility; should not run during normal tests or demos.
+# Replacement: Pre-provision local embedding/reranker model directories through documented setup.
+# Action rule: Keep as manual tooling only. Do not use as final readiness evidence.
 
 
 

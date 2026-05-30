@@ -2,6 +2,13 @@
 Aviation-Grade Structured Logging
 Ensures every log entry is tied to a specific request and flight ID for flawless auditing.
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: UNUSED_LOGGING_HELPER_DELETE_CANDIDATE
+# Plan lineage: PLAN1_OR_PLAN2_TOOLING
+# Runtime status: No active imports/callers found in current caller check.
+# Legacy signal: Defines structlog setup/context helpers, while current code calls structlog.get_logger directly.
+# Replacement: Direct module-level structlog.get_logger usage or future centralized logging setup if intentionally adopted.
+# Action rule: Do not call from new code. Candidate for deletion after final import/caller verification.
 
 from __future__ import annotations
 import contextvars

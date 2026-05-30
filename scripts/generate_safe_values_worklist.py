@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# STAGE6_CLEANUP_REVIEW:
+# Classification: PLAN3_SUPPORT_TOOLING_KEEP
+# Plan lineage: PLAN3_SUPPORT_TOOLING
+# Runtime status: Manual/support script for generating SAFE value SME worklists; not API/runtime.
+# Legacy signal: Outputs generated artifacts only and should not be treated as backend readiness evidence.
+# Replacement: No runtime replacement; keep as domain-review tooling.
+# Action rule: Keep as manual tooling. Do not run during normal API/demo validation unless SAFE value review is needed.
 """Generate a worklist of features that need vetted SAFE values.
 
 Output files:

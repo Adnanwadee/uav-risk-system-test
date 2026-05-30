@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# STAGE6_CLEANUP_REVIEW:
+# Classification: LEGACY_MANUAL_ROOT_TEST_SCRIPT
+# Plan lineage: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Manual root-level script; not pytest canonical validation.
+# Legacy signal: Uses generate_all_features_map(), DataValidator, and old processed/mixed feature flow.
+# Replacement: Raw-first tests under tests/ plus Stage2PipelineV2 smoke/backend validation scripts.
+# Action rule: Do not use as readiness evidence. Candidate for deletion after legacy test/script cleanup review.
 """
 اختبار شامل: Core Features -> ML Inference -> SHAP Interpretation
 """

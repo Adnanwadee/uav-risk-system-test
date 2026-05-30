@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+# STAGE6_CLEANUP_REVIEW:
+# Classification: PLAN3_COMPATIBILITY_BRIDGE_KEEP_NOW
+# Plan lineage: PLAN3_ACTIVE public-safe bridge for optional/legacy agent outputs.
+# Runtime status: Used by Stage2PipelineV2 as a canonical AgentResult fallback/normalizer.
+# Legacy signal: Accepts legacy/raw agent result shapes but strips private reasoning into public-safe AgentResult fields.
+# Replacement: OperationalAgentV2 is the preferred active agent; keep facade for fallback and compatibility until all tests/callers are migrated.
+# Action rule: Do not delete now. Review only after Stage2PipelineV2 no longer depends on AgentResultFacade.
 from dataclasses import asdict, is_dataclass
 from typing import Any
 

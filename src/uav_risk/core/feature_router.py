@@ -3,6 +3,13 @@ Feature Router (Gate 3 - Vectorization & Context Routing)
 Maps the validated 198-feature dictionary into a strictly ordered NumPy array for ML.
 Routes features into semantic categories for the ReAct Agent's context.
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: LEGACY_DO_NOT_USE
+# Plan lineage: PLAN1_OR_PLAN2_RELIC
+# Runtime status: Not part of canonical raw-first Stage1/Stage2 backend path.
+# Legacy signal: Routes historical processed 198-feature maps directly to vectors for old pipeline/ACE paths.
+# Replacement: src/uav_risk/ml/loader.py::assemble_raw_feature_vector plus run_stage1_inference preprocessing.
+# Action rule: Do not call from API/production. Remove only after legacy pipeline and old simulation callers are resolved.
 
 import logging
 import numpy as np

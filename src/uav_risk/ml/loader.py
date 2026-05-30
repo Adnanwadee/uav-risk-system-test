@@ -4,6 +4,13 @@ Purpose: High-integrity loader for Stage-1 production bundle and separate model/
          strictly aligned with feature_defs and schematized structures.
 Dependencies: uav_risk.ml.schemas, uav_risk.ml.feature_defs, uav_risk.core, uav_risk.ml.bundle_security
 """
+# STAGE6_CLEANUP_REVIEW:
+# Classification: MIXED_ACTIVE_LEGACY
+# Plan lineage: PLAN3_ACTIVE raw loader plus PLAN1/PLAN2 compatibility bridge.
+# Runtime status: load_stage1_bundle(), assemble_raw_feature_vector(), and transform_raw_vector are active/diagnostic paths.
+# Legacy signal: assemble_feature_vector_from_dict() remains a legacy processed/mixed bridge for compatibility tests only.
+# Replacement: Use assemble_raw_feature_vector() for production assessment paths.
+# Action rule: Do not delete this file. Review legacy bridge function only after raw-first tests and API guards remain green.
 
 import json
 import structlog

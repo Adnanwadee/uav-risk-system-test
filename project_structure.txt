@@ -1,6 +1,7 @@
 .
 ├── Dockerfile
 ├── Makefile
+├── README.md
 ├── artifacts
 │   ├── final_model.pkl
 │   ├── inspect_stage1.ipynb
@@ -32,9 +33,11 @@
 │   ├── my_current_uncommitted_changes.patch
 │   └── untracked_rag_v3_files.tar.gz
 ├── scripts
+│   ├── __init__.py
 │   ├── check_groq_provider_reachability.py
 │   ├── generate_safe_values_worklist.py
 │   ├── rebuild_stage2_rag_index.py
+│   ├── run_backend_trace_validation.py
 │   ├── run_production_simulation.py
 │   ├── run_stage2_pipeline_v2_smoke.py
 │   ├── run_stage2_rag_diagnostic.py
@@ -154,7 +157,20 @@
 │   │   │   │   │   ├── evidence_20260528_182541.jsonl
 │   │   │   │   │   ├── evidence_20260528_182618.jsonl
 │   │   │   │   │   ├── evidence_20260528_182806.jsonl
-│   │   │   │   │   └── evidence_20260528_182844.jsonl
+│   │   │   │   │   ├── evidence_20260528_182844.jsonl
+│   │   │   │   │   ├── evidence_20260529_175203.jsonl
+│   │   │   │   │   ├── evidence_20260529_175725.jsonl
+│   │   │   │   │   ├── evidence_20260529_175810.jsonl
+│   │   │   │   │   ├── evidence_20260529_180531.jsonl
+│   │   │   │   │   ├── evidence_20260529_180616.jsonl
+│   │   │   │   │   ├── evidence_20260529_181410.jsonl
+│   │   │   │   │   ├── evidence_20260529_181522.jsonl
+│   │   │   │   │   ├── evidence_20260529_182836.jsonl
+│   │   │   │   │   ├── evidence_20260529_201649.jsonl
+│   │   │   │   │   ├── evidence_20260529_234102.jsonl
+│   │   │   │   │   ├── evidence_20260529_234611.jsonl
+│   │   │   │   │   ├── evidence_20260529_235231.jsonl
+│   │   │   │   │   └── evidence_20260529_235821.jsonl
 │   │   │   │   ├── models
 │   │   │   │   │   ├── embedding
 │   │   │   │   │   │   ├── 1_Pooling
@@ -264,6 +280,7 @@
 │   ├── test_api_metadata.py
 │   ├── test_api_profiles.py
 │   ├── test_api_raw_assessment.py
+│   ├── test_api_storage.py
 │   ├── test_comprehensive_pipeline.py
 │   ├── test_core_ml_api_closure.py
 │   ├── test_core_raw_contracts.py
@@ -297,12 +314,14 @@
 │   ├── test_stage2_rag_index_integrity.py
 │   ├── test_stage2_rag_provenance_schema.py
 │   ├── test_stage2_rag_quality.py
+│   ├── test_stage2_rag_reranker_status.py
 │   ├── test_stage2_rag_retriever_source_aware.py
 │   ├── test_stage2_rag_runtime_diagnostics.py
 │   ├── test_stage2_rag_runtime_path_resolution.py
 │   ├── test_stage2_reporting.py
+│   ├── test_stage2_runtime_caching.py
 │   └── test_stage2_runtime_scripts_static.py
 └── ui
     └── app.py
 
-34 directories, 272 files
+34 directories, 291 files

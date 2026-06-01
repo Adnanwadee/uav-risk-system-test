@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Mapping, Protocol
 
+from uav_risk.core.env import load_project_env
+
+load_project_env()
+
 from uav_risk.stage2.contracts import (
     AgentActionItem,
     AgentFinding,

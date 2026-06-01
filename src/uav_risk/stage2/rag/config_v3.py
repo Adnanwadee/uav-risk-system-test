@@ -10,6 +10,10 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 
+from uav_risk.core.env import load_project_env
+
+load_project_env()
+
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════

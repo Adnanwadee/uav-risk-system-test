@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
+from uav_risk.core.env import load_project_env
+
+load_project_env()
+
 from fastapi import FastAPI
 
 from uav_risk.api.dependencies import load_cached_stage1_bundle

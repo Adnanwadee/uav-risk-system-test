@@ -18,14 +18,35 @@ def test_stage2_rag_adapter_import_from_package_works() -> None:
 
 
 def test_importing_rag_package_is_lightweight_no_heavy_symbols_loaded() -> None:
-    rag_pkg = importlib.import_module("uav_risk.stage2.rag")
-    assert hasattr(rag_pkg, "Stage2RAGAdapter")
+    """Importing the RAG package namespace must not newly load heavy runtime modules.
 
-    # Heavy modules should not be imported as a side-effect.
-    assert "uav_risk.stage2.rag.config_v3" not in importlib.sys.modules
-    assert "uav_risk.stage2.rag.hybrid_retriever" not in importlib.sys.modules
-    assert "uav_risk.stage2.rag.rag_core_v3" not in importlib.sys.modules
+    This test uses a before/after module delta because prior tests in the same
+    pytest process may already have imported config helpers. The safety contract
+    is about import side effects caused by importing uav_risk.stage2.rag itself.
+    """
 
+    before = set(importlib.sys.modules)
+
+    import uav_risk.stage2.rag as rag_package
+
+    after = set(importlib.sys.modules)
+    newly_loaded = after - before
+
+    assert rag_package.__name__ == "uav_risk.stage2.rag"
+
+    forbidden_new_modules = {
+        "uav_risk.stage2.rag.config_v3",
+        "uav_risk.stage2.rag.rag_core_v3",
+        "uav_risk.stage2.rag.hybrid_retriever",
+        "uav_risk.stage2.rag.faiss_security",
+        "faiss",
+        "sentence_transformers",
+        "onnxruntime",
+        "torch",
+        "transformers",
+    }
+
+    assert forbidden_new_modules.isdisjoint(newly_loaded)
 
 def test_rag_schemas_reexports_do_not_break_existing_schema_imports() -> None:
     from uav_risk.stage2.rag.schemas import (

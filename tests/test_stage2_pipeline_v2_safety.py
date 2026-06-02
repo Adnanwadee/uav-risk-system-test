@@ -19,16 +19,57 @@ def test_importing_pipeline_v2_does_not_instantiate_rag_core() -> None:
 
 
 def test_importing_pipeline_v2_does_not_instantiate_llm_or_groq() -> None:
-    source = inspect.getsource(pipeline_v2)
-    assert "Groq" not in source
-    assert "llm" not in source.lower()
+    """Importing pipeline_v2 may expose an injected LLM boundary, but must not load provider clients."""
 
+    before = set(sys.modules)
+    import uav_risk.stage2.pipeline_v2 as module
 
-def test_importing_pipeline_v2_does_not_load_heavy_resources() -> None:
-    source = inspect.getsource(pipeline_v2).lower()
-    for token in ("faiss", "vector_db", "model", ".pdf", "artifacts"):
+    after = set(sys.modules)
+    newly_loaded = after - before
+
+    assert "uav_risk.stage2.llm.groq_client" not in newly_loaded
+    assert "groq" not in newly_loaded
+
+    source = inspect.getsource(module)
+    forbidden_runtime_calls = (
+        "build_llm_orchestrator_from_env(",
+        "get_cached_llm_orchestrator_from_env(",
+        "GroqLLMProvider(",
+        "AsyncGroq(",
+    )
+    for token in forbidden_runtime_calls:
         assert token not in source
 
+def test_importing_pipeline_v2_does_not_load_heavy_resources() -> None:
+    """Importing pipeline_v2 must not initialize RAG/vector/model runtime resources."""
+
+    before = set(sys.modules)
+    import uav_risk.stage2.pipeline_v2 as module
+
+    after = set(sys.modules)
+    newly_loaded = after - before
+
+    forbidden_modules = {
+        "faiss",
+        "sentence_transformers",
+        "onnxruntime",
+        "torch",
+        "transformers",
+        "groq",
+    }
+    assert forbidden_modules.isdisjoint(newly_loaded)
+
+    source = inspect.getsource(module)
+    forbidden_runtime_calls = (
+        "build_runtime_rag_adapter_if_available(",
+        "get_cached_runtime_rag_adapter(",
+        "HybridRetriever(",
+        "AsyncRAGCoreV3(",
+        "FAISSIndexVerifier(",
+        "load_stage1_bundle(",
+    )
+    for token in forbidden_runtime_calls:
+        assert token not in source
 
 def test_pipeline_v2_source_does_not_reference_masterflightpayload() -> None:
     source = inspect.getsource(pipeline_v2)

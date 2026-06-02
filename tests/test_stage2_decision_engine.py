@@ -199,7 +199,7 @@ def test_agent_action_items_are_propagated_to_required_actions() -> None:
     assert "Verify airspace authorization before launch." in decision.required_actions
 
 
-def test_stage_contributions_include_required_stages_and_llm_placeholder() -> None:
+def test_stage_contributions_include_required_stages_and_required_post_decision_llm() -> None:
     decision = evaluate_stage2_decision(_input(), _result())
     stages = {item.stage for item in decision.stage_contributions}
     assert {
@@ -212,7 +212,12 @@ def test_stage_contributions_include_required_stages_and_llm_placeholder() -> No
     }.issubset(stages)
     llm = next(item for item in decision.stage_contributions if item.stage == DecisionStageName.LLM)
     assert llm.contribution == 0.0
-    assert llm.metadata["llm_called"] is False
+    assert llm.signal == "post_decision_required"
+    assert llm.contribution == 0.0
+    assert llm.metadata["llm_required"] is True
+    assert llm.metadata["llm_called_during_decision_scoring"] is False
+    assert llm.metadata["llm_scoring_authority"] is False
+    assert llm.metadata["llm_role"] == "post_decision_report_synthesis"
 
 
 def test_decision_engine_does_not_import_llm_or_groq_modules() -> None:

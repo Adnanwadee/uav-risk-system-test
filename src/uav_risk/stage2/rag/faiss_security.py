@@ -14,6 +14,10 @@ import pickle
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
+from uav_risk.core.env import load_project_env
+
+load_project_env()
+
 logger = logging.getLogger(__name__)
 
 

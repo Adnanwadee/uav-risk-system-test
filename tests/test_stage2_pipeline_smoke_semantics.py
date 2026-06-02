@@ -100,8 +100,8 @@ async def test_smoke_separates_global_quality_from_scenario_sufficiency(monkeypa
                             stage=DecisionStageName.LLM,
                             weight=0.05,
                             contribution=0.0,
-                            signal="not_configured",
-                            summary="LLM synthesis not evaluated in this patch.",
+                            signal="post_decision_required",
+                            summary="LLM synthesis is required after DecisionEngine for structured report narrative and consistency explanation; it does not override deterministic decision scoring.",
                         ),
                     ],
                     decision_reasons=["Decision requires caution."],
@@ -179,8 +179,8 @@ async def test_smoke_separates_global_quality_from_scenario_sufficiency(monkeypa
             "stage": "llm",
             "weight": 0.05,
             "contribution": 0.0,
-            "signal": "not_configured",
-            "summary": "LLM synthesis not evaluated in this patch.",
+            "signal": "post_decision_required",
+            "summary": "LLM synthesis is required after DecisionEngine for structured report narrative and consistency explanation; it does not override deterministic decision scoring.",
         },
     ]
 

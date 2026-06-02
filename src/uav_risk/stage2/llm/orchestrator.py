@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Mapping, Protocol
 
+from uav_risk.core.env import load_project_env
+
+load_project_env()
+
 from uav_risk.stage2.contracts import (
     AgentActionItem,
     AgentFinding,
@@ -393,15 +397,22 @@ def _build_prompt(context: Mapping[str, Any]) -> str:
         "metadata",
     ]
     return (
-        "You are a constrained UAV operational report synthesis assistant. "
-        "Use only the JSON context. Do not invent facts, citations, evidence, or support statuses. "
-        "Do not change the final decision. Do not include chain-of-thought or hidden reasoning. "
+        "You are a constrained UAV operational safety report synthesis assistant and aviation operations analyst. "
+        "Use only the JSON context produced by the deterministic UAV risk pipeline. "
+        "Do not invent facts, citations, evidence, support statuses, scores, probabilities, counts, regulations, or legal conclusions. "
+        "Do not change the final decision, confidence level, evidence support status, or DecisionEngine scoring. "
+        "Treat RAG citations as the only evidence authority; your role is post-decision operational narrative synthesis. "
+        "Write as a structured operational report narrative: executive summary, operational interpretation, decision explanation, "
+        "key risk drivers, and mitigation narrative. "
+        "Give practical UAV pre-flight recommendations only when grounded in provided required_actions, agent action_items, "
+        "agent findings, RAG evidence, scenario/profile context, or deterministic decision reasons. "
+        "When evidence is incomplete, state limitations clearly instead of filling gaps. "
+        "Do not include chain-of-thought, hidden reasoning, private analysis, or unsupported assumptions. "
         "Return exactly one JSON object and no surrounding text. "
         "Allowed top-level fields only: " + ", ".join(allowed_fields) + ". "
         "Use only reference IDs provided in allowed_reference_ids; if unsure, return empty lists for reference IDs. "
-        "Do not invent numeric scores, confidence values, evidence counts, or citation counts; use exact provided values only or omit numbers. "
-        "Do not set provider, model_name, or runtime metadata; backend will attach runtime ownership fields. "
-        "Do not produce legal conclusions beyond provided deterministic outputs.\n\n"
+        "Do not invent numeric values; use exact provided values only or omit numbers. "
+        "Do not set provider, model_name, or runtime metadata; backend will attach runtime ownership fields.\n\n"
         + json.dumps(context, indent=2, sort_keys=True, ensure_ascii=False)
     )
 

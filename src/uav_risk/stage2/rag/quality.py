@@ -490,12 +490,10 @@ def _build_runtime_rag_adapter_uncached() -> Stage2RAGAdapter | None:
             config_module=config_v3,
             embedder=embedder,
             reranker=reranker,
-            sparse_index_builder=None,
             index_dir=str(index_dir),
         )
 
         if sparse_index is not None:
-            rag_core.sparse_builder = None
             rag_core._preloaded_sparse_index = sparse_index  # type: ignore[attr-defined]
 
         rag_core._runtime_status = {  # type: ignore[attr-defined]

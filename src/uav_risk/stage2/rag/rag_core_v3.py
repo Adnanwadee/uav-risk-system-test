@@ -36,14 +36,12 @@ class AsyncRAGCoreV3:
                  embedder=None,
                  reranker=None,
                  dense_index=None,
-                 sparse_index_builder=None,
                  index_dir: Optional[str] = None):
         self.config = config_module
         self.llm = llm_client
         self.embedder = embedder
         self.reranker = reranker
         self.dense_index = dense_index
-        self.sparse_builder = sparse_index_builder
         self.index_dir = Path(index_dir).expanduser().resolve() if index_dir else None
 
         self.intelligence = None
@@ -122,12 +120,6 @@ class AsyncRAGCoreV3:
 
         # Build/load sparse index
         sparse_index = getattr(self, "_preloaded_sparse_index", None)
-        if sparse_index is None and self.sparse_builder:
-            try:
-                sparse_index = await self.sparse_builder.build_or_load()
-            except Exception as e:
-                logger.error(f"Failed to build/load sparse index: {e}")
-
         # Initialize retriever with reranker
         index_dir_for_retriever = self._resolve_index_dir()
         self.retriever = HybridRetriever(
@@ -481,8 +473,5 @@ class AsyncRAGCoreV3:
             "intelligence": self.intelligence.get_stats() if self.intelligence else {},
             "evidence": await self.evidence_log.get_stats() if self.evidence_log else {}
         }
-
-        if self.sparse_builder:
-            stats["sparse_index"] = self.sparse_builder.get_stats()
 
         return stats

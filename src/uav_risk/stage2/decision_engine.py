@@ -510,10 +510,22 @@ class WeightedDecisionEngine:
                 stage=DecisionStageName.LLM,
                 weight=self._weight(DecisionStageName.LLM),
                 contribution=0.0,
-                signal="not_configured",
-                summary="LLM synthesis not evaluated in this patch.",
-                reasons=["LLM contribution is a no-op placeholder for future synthesis consistency checks."],
-                metadata={"llm_called": False},
+                signal="post_decision_required",
+                summary=(
+                    "LLM synthesis is required after DecisionEngine for structured report "
+                    "narrative and consistency explanation; it does not override deterministic "
+                    "decision scoring."
+                ),
+                reasons=[
+                    "LLM synthesis is a required post-decision reporting step, not a scoring authority.",
+                    "Final GO/CAUTION/NO-GO scoring remains owned by the deterministic DecisionEngine.",
+                ],
+                metadata={
+                    "llm_required": True,
+                    "llm_called_during_decision_scoring": False,
+                    "llm_scoring_authority": False,
+                    "llm_role": "post_decision_report_synthesis",
+                },
             ),
             reasons=[],
             limitations=[],

@@ -271,10 +271,23 @@ async def _run(use_real_rag: bool, use_llm_fallback: bool = False, use_env_llm: 
     system_work_trace_entry_count, system_work_trace_stages = _system_trace_summary_from_agent(result.agent_result)
 
     report_section_names: list[str] = []
+    report_build_error: str | None = None
+    report_metadata = dict(metadata)
+    report_metadata.update(
+        {
+            "retrieval_usable": retrieval_usable,
+            "rag_quality_is_proven": rag_quality_is_proven,
+            "quality_is_proven": rag_quality_is_proven,
+            "scenario_evidence_complete": scenario_evidence_complete,
+            "scenario_evidence_status": scenario_evidence_status,
+        }
+    )
+    report_result = result.model_copy(update={"metadata": report_metadata})
     try:
-        report = build_operational_report(stage2_input, result)
+        report = build_operational_report(stage2_input, report_result)
         report_section_names = [section.title for section in report.sections]
-    except Exception:
+    except Exception as exc:
+        report_build_error = f"{type(exc).__name__}: {exc}"
         report_section_names = []
 
     return {
@@ -308,6 +321,7 @@ async def _run(use_real_rag: bool, use_llm_fallback: bool = False, use_env_llm: 
         "system_work_trace_entry_count": system_work_trace_entry_count,
         "system_work_trace_stages": system_work_trace_stages,
         "report_section_names": report_section_names,
+        "report_build_error": report_build_error,
         "evidence_bundle_details": bundle_details,
         "errors": [e.model_dump() for e in result.errors],
     } | decision_summary | llm_summary

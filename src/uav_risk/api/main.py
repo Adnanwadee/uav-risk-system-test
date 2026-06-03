@@ -7,6 +7,7 @@ from uav_risk.core.env import load_project_env
 load_project_env()
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from uav_risk.api.dependencies import load_cached_stage1_bundle
 from uav_risk.api.routes.assessments import (
@@ -16,6 +17,14 @@ from uav_risk.api.routes.assessments import (
 from uav_risk.api.routes.features import router as features_router
 from uav_risk.api.routes.health import router as health_router
 from uav_risk.api.routes.profiles import router as profiles_router
+
+
+LOCAL_FRONTEND_ORIGINS: list[str] = [
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
+    "http://127.0.0.1:3001",
+    "http://localhost:3001",
+]
 
 
 @asynccontextmanager
@@ -31,11 +40,21 @@ def create_app() -> FastAPI:
         description="Raw-first Core/ML API for UAV flight risk assessment.",
         lifespan=lifespan,
     )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=LOCAL_FRONTEND_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     app.include_router(health_router)
     app.include_router(features_router)
     app.include_router(profiles_router)
     app.include_router(assessments_router)
     app.include_router(assessment_history_router)
+
     return app
 
 

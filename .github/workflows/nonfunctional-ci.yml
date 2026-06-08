@@ -37,14 +37,12 @@ jobs:
             --select E9,F63,F7,F82 \
             --exclude "src/uav_risk/stage2/knowledge/models/**"
 
-      - name: Generate full Ruff report
-        continue-on-error: true
+      - name: Generate full Ruff report without failing pipeline
         run: |
           ruff check src \
             --exclude "src/uav_risk/stage2/knowledge/models/**" \
-            --output-format=github
+            --exit-zero
 
-      - name: Run Bandit security scan
-        continue-on-error: true
+      - name: Run Bandit security scan without failing pipeline
         run: |
-          bandit -r src -ll -x src/uav_risk/stage2/knowledge/models
+          bandit -r src -ll -x src/uav_risk/stage2/knowledge/models || true

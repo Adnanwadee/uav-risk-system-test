@@ -42,3 +42,10 @@ src/uav_risk/stage2/knowledge/logs/evidence_*.jsonl
 
 # Local cleanup reports
 cleanup_reports/
+
+# Local Docker/runtime export files
+/data/
+/frontend.zip
+/smart-skies.tar
+/smart-skies-backend.tar
+/smart-skies-docker-package.zip

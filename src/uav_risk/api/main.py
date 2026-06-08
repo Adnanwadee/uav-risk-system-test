@@ -20,13 +20,13 @@ from uav_risk.api.routes.profiles import router as profiles_router
 
 
 LOCAL_FRONTEND_ORIGINS: list[str] = [
+    "http://127.0.0.1",
+    "http://localhost",
     "http://127.0.0.1:3000",
     "http://localhost:3000",
     "http://127.0.0.1:3001",
     "http://localhost:3001",
 ]
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.stage1_bundle = load_cached_stage1_bundle()

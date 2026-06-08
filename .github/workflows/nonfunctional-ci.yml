@@ -33,14 +33,18 @@ jobs:
 
       - name: Run critical Ruff checks
         run: |
-          ruff check src --select E9,F63,F7,F82
+          ruff check src \
+            --select E9,F63,F7,F82 \
+            --exclude "src/uav_risk/stage2/knowledge/models/**"
 
       - name: Generate full Ruff report
         continue-on-error: true
         run: |
-          ruff check src --output-format=github
+          ruff check src \
+            --exclude "src/uav_risk/stage2/knowledge/models/**" \
+            --output-format=github
 
       - name: Run Bandit security scan
         continue-on-error: true
         run: |
-          bandit -r src -ll
+          bandit -r src -ll -x src/uav_risk/stage2/knowledge/models

@@ -45,7 +45,6 @@ def setup_logging(log_level: str = "INFO", environment: str = "development") -> 
     from structlog.processors import TimeStamper, JSONRenderer
     from structlog.dev import ConsoleRenderer
 
-    # المعالجات المشتركة
     processors = [
         TimeStamper(fmt="iso"),
         add_log_level,
@@ -53,7 +52,6 @@ def setup_logging(log_level: str = "INFO", environment: str = "development") -> 
         inject_tracing_vars,
     ]
 
-    # اختيار التنسيق بناءً على بيئة التشغيل
     if environment == "production":
         processors.append(JSONRenderer())
     else:

@@ -35,12 +35,10 @@ from uav_risk.ml.raw_schema import (
     SCENARIO_REQUIRED_RAW_FEATURES,
 )
 
-# إعداد اللوجر المركزي لطبقة فحص وإجازة البيانات
 logger = logging.getLogger(__name__)
 
 @dataclass
 class FeatureValidationRecord:
-    """سجل التوثيق الجنائي للميزة يوضح أصلها والتعديلات والقصاصات التي تمت عليها."""
     feature_name: str
     original_value: Any
     final_value: float
@@ -53,7 +51,6 @@ class FeatureValidationRecord:
 
 @dataclass
 class ValidationResult:
-    """الوعاء الحاظر لنتائج البوابة الثانية يحمل مصفوفة البيانات ورايات صلاحية الإقلاع."""
     validated_features: Dict[str, float] = field(default_factory=dict)
     validation_records: List[FeatureValidationRecord] = field(default_factory=list)
     missing_core_features: List[str] = field(default_factory=list)
@@ -432,7 +429,6 @@ class DataValidator:
         result.imputed_core_features = [r.feature_name for r in result.validation_records if r.is_core_feature and r.status == "IMPUTED"]
         result.missing_core_features = [name for name in self.core_feature_order if name not in user_provided_cores]
 
-        # تحقق القفل الصارم المتوافق مع فضاء أعمدة النموذج
         has_all_cores = all(name in user_provided_cores for name in self.core_features)
         has_critical_breach = False
         for name in self.core_features:
@@ -443,7 +439,6 @@ class DataValidator:
                 has_critical_breach = True
                 break
         
-        # احتساب درجة جودة مدخلات البيانات عيارياً بناء على الطول الحقيقي للمجموعات المتوفرة
         result.overall_data_quality_score = self._compute_quality_score(result.validation_records)
         result.is_usable = True if (has_all_cores and not has_critical_breach) else False
         # Enforce policy: if configured to fail on imputed core features, set unusable.
@@ -461,7 +456,6 @@ class DataValidator:
         return result
 
     def _process_single_feature(self, name: str, raw_value: Any) -> FeatureValidationRecord:
-        """تدقق جنائياً في جودة ونوع ومدى القيمة الممررة للميزة المفردة دون تعديلها."""
         defn = get_feature_definition(name) or {}
         is_core = name in self.core_features
 
@@ -533,7 +527,6 @@ class DataValidator:
         )
 
     def _compute_quality_score(self, records: List[FeatureValidationRecord]) -> float:
-        """حساب معيار جودة البيانات الممررة عبر أوزان مرجعية مرنة تعتمد على الحجم الفعلي للمجموعات المتقاطعة."""
         core_records = [r for r in records if r.is_core_feature]
         if not core_records:
             return 0.0

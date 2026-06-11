@@ -36,10 +36,8 @@ from uav_risk.ml.raw_schema import (
 logger = structlog.get_logger(__name__)
 
 class ModelLoadError(Exception):
-    """استثناء مخصص لانهيار دورة تجميع عناصر الحزمة."""
     pass
 
-# أسماء الملفات المعيارية
 BUNDLE_FILE = "stage1_production_bundle.pkl"
 MODEL_FILE = "final_model.pkl"
 PREPROCESSOR_FILE = "preprocessing_pipeline_final.pkl"
@@ -49,14 +47,9 @@ INFERENCE_CONFIG_FILE = "stage1_inference_config.json"
 
 
 def load_stage1_bundle(artifacts_dir: str) -> Stage1Bundle:
-    """
-    تحميل الحزمة المركزية من الملفات المنفصلة.
-    يتم تحميل النموذج والمعالج المسبق من ملفين منفصلين،
-    والميزات والبيانات الوصفية من حزمة الـ PKL الأساسية وملفات JSON.
-    """
+  
     artifacts_path = Path(artifacts_dir)
 
-    # --- تحميل المكوّنات الأساسية ---
     model_path = artifacts_path / MODEL_FILE
     preprocessor_path = artifacts_path / PREPROCESSOR_FILE
     bundle_path = artifacts_path / BUNDLE_FILE
@@ -66,10 +59,8 @@ def load_stage1_bundle(artifacts_dir: str) -> Stage1Bundle:
     if not bundle_path.exists():
         raise ModelLoadError(f"Bundle file not found: {bundle_path}")
 
-    # تحميل النموذج
     model = safe_load_bundle(str(model_path))
 
-    # تحميل المعالج المسبق إن وُجد (غير إلزامي - نستخدم الحزمة مباشرة)
     preprocessor = None
     if preprocessor_path.exists():
         try:
@@ -79,7 +70,6 @@ def load_stage1_bundle(artifacts_dir: str) -> Stage1Bundle:
     else:
         logger.info(f"Preprocessor not found, continuing without it: {preprocessor_path}")
 
-    # تحميل الحزمة الوصفية (تحتوي على feature_names, class_names, إلخ)
     bundle_data = safe_load_bundle(str(bundle_path))
     if not isinstance(bundle_data, dict):
         raise ModelLoadError("Bundle file must contain a dictionary with feature_names and class_names.")
@@ -90,7 +80,6 @@ def load_stage1_bundle(artifacts_dir: str) -> Stage1Bundle:
     if not feature_names or not class_names:
         raise ModelLoadError("Bundle is missing 'feature_names' or 'class_names'.")
 
-    # --- فحص التطابق الدستوري ---
     is_aligned, alignment_err = feature_defs.validate_feature_registry_against_artifact(feature_names)
     if not is_aligned:
         logger.critical(f"ALIGNMENT BREACH: {alignment_err}")
@@ -98,7 +87,6 @@ def load_stage1_bundle(artifacts_dir: str) -> Stage1Bundle:
 
     feature_mapping = {name: idx for idx, name in enumerate(feature_names)}
 
-    # --- تحميل البيانات الوصفية الإضافية (إن وُجدت) ---
     metadata = {}
     policy = {}
 

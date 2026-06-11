@@ -64,14 +64,10 @@ class FeatureImportance:
     rank: int = 0
     predicted_class: Optional[str] = None
     
-    # 🔴 معالجة ثغرة المتعدد الفئات: تمرير التوزيع الكامل للقيم عبر الطبقات الثلاث للـ ReAct Agent
     shap_values_all_classes: Dict[str, float] = field(default_factory=dict)
     
     def __post_init__(self):
-        """
-        اشتقاق دلالة إشارة قيمة شيب فيزيائياً بناءً على فئة التنبؤ الحالية النشطة.
-        الموجب مع High Risk يرفع الخطر، والموجب مع Low Risk يدعم أمان الرحلة (يخفض الخطر الكلي).
-        """
+       
         if self.predicted_class == "Low Risk":
             self.direction = "decreases_risk" if self.shap_value > 0 else "increases_risk"
         elif self.predicted_class == "High Risk":
@@ -114,13 +110,10 @@ class MLResult:
     )
     shap_expected_values: Optional[List[float]] = None
     
-    # 🔴 صمام أمان التوثيق والمراجعة الجنائية: الاحتفاظ بمخرجات الموديل الأصلية قبل أي معايرة تشغيلية يدوية
     raw_risk_class: Optional[str] = None
     raw_probabilities: Dict[str, float] = field(default_factory=dict)
     
     def __post_init__(self):
-        """فرض التحقق الصارم والكامل من النطاقات الرياضية وسلامة مجموع مصفوفة الاحتمالات."""
-        # حجز وتثبيت المخرجات الخام الأصلية عند لحظة الإنشاء لمنع طمس معالم البيانات
         if not self.raw_risk_class:
             self.raw_risk_class = self.risk_class.value
         if not self.raw_probabilities and self.probabilities:
@@ -129,30 +122,23 @@ class MLResult:
         self.validate_bounds()
 
     def validate_bounds(self) -> None:
-        """فحص النزاهة الرياضية والحدود القصوى والدنيا للمخرجات."""
         if not 0.0 <= self.risk_score <= 1.0:
             raise ValueError(f"Constraint Violation: risk_score must be in [0, 1], got {self.risk_score}")
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError(f"Constraint Violation: confidence must be in [0, 1], got {self.confidence}")
         if self.probabilities:
             prob_sum = sum(self.probabilities.values())
-            # تشديد الفحص البرميوم إلى 1e-4 لمنع الانحرافات الكينماتيكية الصامتة للبيانات
             if abs(prob_sum - 1.0) > 0.0001:
                 raise ValueError(f"Constraint Violation: Probabilities must sum to 1.0 with epsilon 1e-4, got {prob_sum}")
 
     def calibrate_probabilities(self, target_class: RiskClass) -> None:
-        """
-        درع حقن المعايرة الحية (Live Probability Rescaling Shield).
-        عند تدخل درع الانحياز لتخفيض التصنيف (مثلاً إلى Medium)، تعيد هذه الدالة توزيع أوزان 
-        المصفوفة الحية والـ Score بالتوازي حركياً لمنع حدوث التناقض والتضارب أمام الوكيل الذكي.
-        """
+    
         if self.risk_class == target_class or not self.probabilities:
             return
             
         old_class = self.risk_class.value
         new_class = target_class.value
         
-        # تبديل وتبادل الاحتمالات حياً لإعادة التوازن المعماري للمتجه
         old_prob = self.probabilities.get(old_class, 0.0)
         new_prob = self.probabilities.get(new_class, 0.0)
         
@@ -160,11 +146,9 @@ class MLResult:
             self.probabilities[new_class] = old_prob
             self.probabilities[old_class] = new_prob
             
-        # تحديث المؤشرات الداخلية لتتحدث بنفس لغة الحقيقة الرياضية للـ UI والوكيل الجنائي
         self.risk_class = target_class
         self.confidence = self.probabilities[new_class]
         
-        # إعادة حساب السكور الموزون حياً بناءً على مصفوفة الاحتمالات الجديدة المحدثة للرحلة
         self.risk_score = calculate_risk_score(self.probabilities)
         self.validate_bounds()
 
@@ -195,7 +179,7 @@ class Stage1Bundle:
     label_encoder: Any
     shap_explainer: Any
     feature_names: List[str]
-    feature_mapping: Dict[str, int]  # <--- تمت الإضافة هنا للحل الفوري
+    feature_mapping: Dict[str, int]  
     class_names: List[str]
     training_stats: Dict[str, Any]
     policy_config: Dict[str, Any]

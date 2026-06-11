@@ -15,15 +15,11 @@ from typing import List, Dict, Any, Optional
 from uav_risk.ml.schemas import FeatureImportance
 from uav_risk.ml.feature_defs import get_feature_definition
 
-# إعداد نظام التتبع واللوجر المنظم لطبقة التفسير الجنائي
 logger = structlog.get_logger(__name__)
 
 
 class ShapExplainer:
-    """
-    مفسر قيم شيب عالي الأداء مع تحصين ضد انزياح الأبعاد (Dimensional Drift).
-    يستخدم كاش ذاكرة للكائنات الحسابية لمنع الاستهلاك المفرط للموارد في الطلبات المتتالية.
-    """
+  
     _cache: Dict[int, shap.TreeExplainer] = {}
 
     def __init__(self, model: Any, feature_names: List[str]):
@@ -46,30 +42,17 @@ class ShapExplainer:
         top_n: int = 10,
         predicted_class_idx: int = 0,
         class_names: List[str] = None,
-        raw_values: Optional[np.ndarray] = None  # <-- المتجه الخام قبل المعالجة (فيزيائي)
+        raw_values: Optional[np.ndarray] = None  
     ) -> List[FeatureImportance]:
-        """
-        حساب مصفوفة مساهمات قيم شيب الحقيقية الحية مع فك تشفير اتجاه التأثير بناءً على الفئة النشطة.
-        
-        Parameters
-        ----------
-        X : np.ndarray
-            البيانات المعالجة (scaled) المستخدمة في حساب SHAP.
-        raw_values : np.ndarray, optional
-            المتجه الخام بقيم فيزيائية (كما أُدخل أو أُنتج من DAG) ليُعرض في feature_value.
-        """
+       
         if self.explainer is None:
             logger.warning("SHAP core uninitialized; returning empty attribution list.")
             return []
             
         try:
-            # حساب قيم التفسير الحركية لعينة الطلب الحالي الحية
-            # الملاحظة: shap_values في LightGBM Multiclass تعيد قائمة من المصفوفات لكل فئة
             shap_output = self.explainer.shap_values(X)
             
-            # 🔴 الدرع الجنائي: معالجة الأبعاد الثلاثية أو القوائم لمنع الانهيار الصامت
             if isinstance(shap_output, list):
-                # LightGBM يرجع قائمة مصفوفات؛ نختار مصفوفة الفئة التي تنبأ بها الموديل
                 shap_for_class = np.asarray(shap_output[predicted_class_idx])
             elif getattr(shap_output, 'ndim', 0) == 3:
                 shap_for_class = shap_output[0, :, predicted_class_idx]
@@ -78,7 +61,6 @@ class ShapExplainer:
             else:
                 shap_for_class = np.asarray(shap_output).flatten()
 
-            # تسوية الأبعاد للسطر الأول
             if shap_for_class.ndim > 1:
                 shap_for_class = shap_for_class.flatten()
 
@@ -87,14 +69,12 @@ class ShapExplainer:
                              shap_len=len(shap_for_class), target_len=len(self.feature_names))
                 return []
 
-            # الترتيب الحركي الحقيقي بناء على القيمة المطلقة للمساهمة
             abs_values = np.abs(shap_for_class)
             top_indices = np.argsort(abs_values)[-top_n:][::-1]
             
             output_drivers: List[FeatureImportance] = []
             target_class_name = class_names[predicted_class_idx] if class_names else None
             
-            # تحضير مصدر القيم الخام (إن وُجد) مع مراعاة أن يكون متجهًا أحادي البعد
             raw_flat = None
             if raw_values is not None:
                 raw_flat = np.asarray(raw_values).flatten()
@@ -103,7 +83,6 @@ class ShapExplainer:
                 feat_name = self.feature_names[idx]
                 shap_val = float(shap_for_class[idx])
                 
-                # استخدام القيمة الخام الفيزيائية إن وجدت، وإلا القيمة المعالجة
                 if raw_flat is not None and idx < len(raw_flat):
                     feat_val = float(raw_flat[idx])
                 else:
@@ -118,7 +97,6 @@ class ShapExplainer:
                     description=feat_def.get("description", feat_name),
                     rank=rank_idx,
                     predicted_class=target_class_name,
-                    # تمرير قيم شيب للفئات الأخرى للوكيل (اختياري للتحليل المتقدم)
                     shap_values_all_classes={
                         class_names[c]: float(shap_output[c][0, idx])
                         for c in range(len(class_names))

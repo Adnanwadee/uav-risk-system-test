@@ -32,7 +32,6 @@ from uav_risk.ml.raw_schema import (
     SCENARIO_REQUIRED_RAW_FEATURES,
 )
 
-# إعداد اللوجر المركزي لتوثيق عمليات معالجة وهندسة المصفوفات الجوية
 logger = logging.getLogger(__name__)
 
 # Legacy processed 68-feature contract. Production raw assembly uses raw_schema.py
@@ -42,7 +41,6 @@ PRIMARY_FEATURE_SET = set(PRIMARY_FEATURES)
 
 
 def _coerce_float(feature_name: str, value: Any) -> float:
-    """تحويل وتطهير المدخلات الخام إلى قيم عشرية مع كبح أخطاء البيانات المفقودة."""
     if value is None:
         raise ValueError(f"Missing required feature entry: {feature_name}")
     if isinstance(value, bool):
@@ -74,11 +72,9 @@ def generate_all_features_map(
     """
     logger.info("Initiating 8-Stage Deterministic DAG Feature Engineering Pipeline.")
     
-    # تحميل الترتيب الرسمي الحتمي المعتمد لمنع انزياح المؤشرات
     order = list(feature_order) if feature_order is not None else feature_defs.get_all_feature_names()
     overrides_map = dict(overrides) if overrides is not None else {}
 
-    # التحقق من اكتمال الـ 68 ميزة الأساسية بشكل صارم ومطابقتها للمدخلات
     normalized_primary: Dict[str, Any] = {}
     missing_primaries = [name for name in PRIMARY_FEATURES if name not in primary_dict or primary_dict[name] is None]
     if missing_primaries:
@@ -97,29 +93,20 @@ def generate_all_features_map(
             continue
         normalized_primary[name] = _coerce_float(name, primary_dict[name])
 
-    # بناء قاموس المعالجة المرحلية الموحد
     v: Dict[str, Any] = dict(normalized_primary)
 
-    # دالة مساعدة لحقن القيمة مع احترام أولوية الـ Override اليدوي 1:1
     def inject(key: str, computed_value: float) -> None:
         if key in overrides_map:
             v[key] = _coerce_float(key, overrides_map[key])
         else:
             v[key] = float(computed_value)
 
-    # ------------------------------------------------------------
-    # 🛑 المرحلة 0: ثوابت النظام المستقلة (4 ميزات)
-    # Requires: None -> Produces: sim_policy_frequency, counts, profiles
-    # ------------------------------------------------------------
+   
     inject("sim_policy_frequency", 10.0)
     inject("autofix_uav_physics_count", 0.0)
     inject("environment_thermal_plumes_count", 0.0)
     inject("environment_wind_profile_count", 1.0)
 
-    # ------------------------------------------------------------
-    # 🔴 المرحلة 1: مؤشرات النزاهة والعدادات (36 ميزة)
-    # Requires: primary counters -> Produces: _was_missing flags, _sample_count metrics
-    # ------------------------------------------------------------
     zero_flags = [
         "uav_rotorcraft_rotor_count_was_missing", "autofix_uav_physics_count_was_missing",
         "autofix_uav_physics_first_was_missing", "uav_aero_wing_area_m2_was_missing",
@@ -147,11 +134,7 @@ def generate_all_features_map(
     inject("comms__loss__windows__sample_count", float(v["comms_loss_windows_count"]))
     inject("environment__thermal__plumes__sample__ce_count", float(v["environment_thermal_plumes_count"]))
 
-    # ------------------------------------------------------------
-    # ⚙️ المرحلة 2: البوابات المنطقية والتحكم (7 ميزات)
-    # Requires: controls_mode_discrete, mission_waypoints_count, swarm_enabled, swarm_size
-    # Produces: action configurations, duration steps, runway thresholds
-    # ------------------------------------------------------------
+   
     discrete_mode = float(v["controls_mode_discrete"])
     wp_count = float(v["mission_waypoints_count"])
     swarm_on = float(v["swarm_enabled"])
@@ -167,11 +150,7 @@ def generate_all_features_map(
     inject("airspace_runway_threshold_count", float(v["mission_runway_required"]))
     inject("airspace__geofence__sample__points_count", float(v["airspace_no_fly_zones_count"]) * 4.0)
 
-    # ------------------------------------------------------------
-    # ✈️ المرحلة 3: الديناميكا الهوائية ونموذج الطاقة (12 ميزة)
-    # Requires: mass, payload, energy sources, rotor counts, tilt angle
-    # Produces: wing area, aspect ratio, cl_max, cd0, stall speed, hover power
-    # ------------------------------------------------------------
+    
     mass = float(v["uav_mass_kg"])
     payload = float(v["uav_payload_mass_kg"])
     fuel = float(v["uav_energy_source_fuel"])
@@ -185,7 +164,6 @@ def generate_all_features_map(
     inject("uav_aero_cl_max", 0.0 if w_area == 0.0 else 1.4)
     inject("uav_aero_cd0", 0.0 if w_area == 0.0 else 0.025)
     
-    # 🔴 تصحيح حرج: استهلاك القيمة المحقونة/المجاوزة لـ cl_max بدلاً من الثابت لضمان نزاهة الـ DAG
     cl_max_val = float(v["uav_aero_cl_max"])
     st_speed = 0.0 if (w_area == 0.0 or cl_max_val <= 0.0) else math.sqrt((2.0 * mass * 9.81) / (1.225 * w_area * cl_max_val))
     inject("uav_aero_stall_speed_mps", st_speed)
@@ -205,11 +183,7 @@ def generate_all_features_map(
     inject("mission_transition_profile_vtol_to_ff_t_s", 0.0 if w_area == 0.0 else 10.0)
     inject("mission_transition_profile_ff_to_vtol_t_s", 0.0 if w_area == 0.0 else 10.0)
 
-    # ------------------------------------------------------------
-    # 📐 المرحلة 4: المؤشرات المشتقة عالي المستوى feat_ (10 ميزات)
-    # Requires: Stage 3 aerodynamic outputs, weather primaries, comms states
-    # Produces: altitude ranges, ratios, redundancies, disk loading, comms/weather severities
-    # ------------------------------------------------------------
+  
     wind = float(v["environment_weather_wind_mps"])
     gust = float(v["environment_weather_gust_mps"])
     max_sp = float(v["uav_max_speed_mps"])
@@ -229,7 +203,6 @@ def generate_all_features_map(
     inject("feat_traffic_density", float(v["traffic_count"]) / max(t_budget, 1e-6))
     inject("feat_fault_risk", f_count * f_sev * (f_dur / max(t_budget, 1e-6)))
     
-    # 🟡 تحصين حرج: حماية المنظومة من الانفجار الرياضي الحركي في وضع الطيران الأفقي الخالص
     disk_area_val = float(v["uav_rotorcraft_disk_area_m2"])
     inject("feat_disk_loading", (mass / disk_area_val) if disk_area_val > 0.0 else 0.0)
     
@@ -237,11 +210,7 @@ def generate_all_features_map(
     inject("feat_comms_health", float(np.clip(comm_h, 0.0, 1.0)))
     inject("feat_weather_severity", (wind / 10.0 + gust / 15.0 + float(v["environment_weather_phenomena_count"])) / 3.0)
 
-    # ------------------------------------------------------------
-    # 📍 المرحلة 5: الهندسة المكانية - المراكز والانحرافات (22 ميزة)
-    # Requires: spawn_xyz_first triplet, counts, budgets, ceilings
-    # Produces: spatial means, deviations, supportive dynamic profiles
-    # ------------------------------------------------------------
+   
     spawn_raw = v["spawn_xyz_first"]
     if isinstance(spawn_raw, (list, tuple)):
         sx, sy, sz = float(spawn_raw[0]), float(spawn_raw[1]), float(spawn_raw[2])
@@ -313,11 +282,7 @@ def generate_all_features_map(
     inject("traffic_sample_heading_deg", 0.0)
     inject("airspace_runway_threshold_first", sx if runway_req == 1 else 0.0)
 
-    # ------------------------------------------------------------
-    # 📏 المرحلة 6: الحدود المكانية الدنيا والعليا (22 ميزة)
-    # Requires: Stage 5 Means and Standard Deviations
-    # Produces: 2-Sigma spatial envelopes (_min and _max bounds)
-    # ------------------------------------------------------------
+    
     def inject_bounds(prefix: str) -> None:
         mean_x, std_x = float(v[f"{prefix}_x_mean"]), float(v[f"{prefix}_x_std"])
         mean_y, std_y = float(v[f"{prefix}_y_mean"]), float(v[f"{prefix}_y_std"])
@@ -351,11 +316,7 @@ def generate_all_features_map(
     inject("comms_loss_windows_y_min", cy - (2.0 * sc_y))
     inject("comms_loss_windows_y_max", cy + (2.0 * sc_y))
 
-    # ------------------------------------------------------------
-    # 📏 المرحلة 7: المدى المكاني _range (11 ميزة)
-    # Requires: Stage 6 _max and _min dimensional vectors
-    # Produces: Absolute range spans (max - min)
-    # ------------------------------------------------------------
+   
     ranges = [
         "landing_preferred_sites_x", "landing_preferred_sites_y", "landing_preferred_sites_z",
         "landing_emergency_sites_x", "landing_emergency_sites_y", "landing_emergency_sites_z",
@@ -365,10 +326,6 @@ def generate_all_features_map(
     for r_key in ranges:
         inject(f"{r_key}_range", float(v[f"{r_key}_max"]) - float(v[f"{r_key}_min"]))
 
-    # ------------------------------------------------------------
-    # 🧩 المرحلة 8: متجهات السرعة المتبقية وعزل الـ Leakage (13 ميزة)
-    # Requires: None -> Produces: Zero-filled directional vectors to stop data leakage
-    # ------------------------------------------------------------
     inject("comms_loss_windows_x_range", 0.0)
     inject("comms_loss_windows_y_range", 0.0)
     
@@ -382,10 +339,8 @@ def generate_all_features_map(
     for v_feat in vel_features:
         inject(v_feat, 0.0)
 
-    # تجميع وترتيب مصفوفة الـ 198 ميزة النهائية بالتطابق الحتمي الصارم مع أعمدة الـ pkl
     ordered_map: OrderedDict[str, float] = OrderedDict()
     for name in order:
-        # 🔴 تصفية الثغرات الصامتة: رفع خطأ فادح فوراً في حال غياب الميزة عن حسابات الـ DAG
         if name not in v:
             logger.critical(f"CRITICAL DESIGN FLAW: Feature '{name}' missing from DAG execution stages!")
             raise KeyError(f"Feature '{name}' was not generated by any DAG stage. Pipeline corrupted.")

@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 from typing import Dict, Any, Optional, List, Tuple
 
-# تدوين اسم مستعار موحد لهياكل بيانات خصائص الميزات
 FeatureDefinition = Dict[str, Any]
 logger = logging.getLogger(__name__)
 
@@ -87,7 +86,6 @@ OFFICIAL_198_FEATURE_ORDER: List[str] = [
     "feat_fault_risk", "feat_weather_severity"
 ]
 
-# قاموس التعيين المسبق الصارم للوحدات غير القياسية لزيادة مناعة النظام
 EXPLICIT_UNIT_MAP: Dict[str, str] = {
     "swarm_inter_uav_sep_min_m": "meter",
     "comms_rssi_dbm_min": "dBm",
@@ -107,7 +105,6 @@ BOUNDS_REGISTRY: Dict[str, Dict[str, float]] = {
 
 
 def get_all_feature_names() -> list[str]:
-    """المصدر المطلق والجامد لأسماء وترتيب مصفوفة الـ 198 لمنع أي انزياح فهارس."""
     return list(OFFICIAL_198_FEATURE_ORDER)
 
 
@@ -145,13 +142,11 @@ def get_core_features() -> list[str]:
 
 
 def get_safe_value(feature_name: str) -> float:
-    """درع حظر التعبئة التلقائية. يمنع برمجياً فرض أي قيم وهمية خارج الـ DAG."""
     logger.critical(f"Deterministic Protocol Violation: Imputation is strictly disabled for feature '{feature_name}'.")
     raise ValueError(f"Feature '{feature_name}' must be explicitly resolved by the DAG or user. Safe value fallbacks are destroyed.")
 
 
 def is_critical_value(feature_name: str, value: float) -> bool:
-    """فحص ما إذا كانت قيمة الميزة تجاوزت حد الخطر الحرج (Hard Veto Trigger)."""
     if feature_name not in BOUNDS_REGISTRY:
         return False
     
@@ -166,11 +161,9 @@ def is_critical_value(feature_name: str, value: float) -> bool:
 
 
 def get_feature_definition(feature_name: str) -> FeatureDefinition:
-    """بناء الشروحات الفنية الدقيقة والوحدات الفيزيائية حركياً لجميع الـ 198 ميزة دون استثناء."""
     if feature_name not in OFFICIAL_198_FEATURE_ORDER:
         raise KeyError(f"Feature '{feature_name}' is outside the verified 198 model registry.")
 
-    # 1. الاستنباط من القاموس الصريح أولاً لضمان النقاء التشغيلي
     if feature_name in EXPLICIT_UNIT_MAP:
         unit = EXPLICIT_UNIT_MAP[feature_name]
     elif feature_name.endswith("_kg"): unit = "kg"
@@ -191,7 +184,6 @@ def get_feature_definition(feature_name: str) -> FeatureDefinition:
     else:
         unit = "dimensionless"
 
-    # 2. صياغة الشروح النصية الدلالية الموجهة لفهم وسياق الوكيل اللغوي المساعد ReAct
     if feature_name.endswith("_was_missing"):
         description = f"Data integrity metadata flag tracking if the feature asset '{feature_name.replace('_was_missing', '')}' was missing from the operator's telemetry input stream."
     elif "landing_preferred_sites_" in feature_name:
@@ -225,12 +217,10 @@ def get_feature_definition(feature_name: str) -> FeatureDefinition:
 
 
 def get_all_feature_definitions() -> Dict[str, FeatureDefinition]:
-    """تجميع وتصنيف القاموس الكامل لـ 198 ميزة دلالية متسقة بدون أي نقصان أو Placeholders."""
     return {name: get_feature_definition(name) for name in OFFICIAL_198_FEATURE_ORDER}
 
 
 def get_features_by_category(category: str) -> list[str]:
-    """تقسيم الميزات الـ 198 دلالياً لبناء فضاء سياق نظيف وعالي النزاهة لصالح الوكيل المساعد ReAct."""
     cat_clean = category.lower().strip()
     all_features = OFFICIAL_198_FEATURE_ORDER
     
@@ -249,12 +239,10 @@ def get_features_by_category(category: str) -> list[str]:
     if cat_clean == "operator":
         return [f for f in all_features if any(w in f for w in ["operator_", "traffic", "obstacles", "daa_"])]
         
-    # الباقي الصافي (مؤشرات الـ missing والأعلام الإحصائية البحتة لـ feat_) يحجز للـ Fallback منعاً لتلوث الحقول التشغيلية
     return [f for f in all_features if "feat_" in f or "_was_missing" in f]
 
 
 def validate_core_feature_ranges(feature_names: list[str], feature_vector: list[float], strict: bool = True) -> tuple[bool, str]:
-    """فحص المتجه عيار 198 والتأكد النيوتني التام من سلامة الحدود الصارمة لبيانات الحظر."""
     if len(feature_names) != len(feature_vector):
         return False, "Feature dimension and vector shape mismatch."
         
@@ -274,7 +262,6 @@ def validate_core_feature_ranges(feature_names: list[str], feature_vector: list[
 
 
 def validate_feature_registry_against_artifact(feature_names_from_bundle: List[str]) -> Tuple[bool, str]:
-    """إبطال مفعول القنبلة الموقوتة: فحص جنائي يكسر المنظومة فوراً إذا اختلف ترتيب الكود عن ملف الـ pkl الثنائي."""
     if len(feature_names_from_bundle) != len(OFFICIAL_198_FEATURE_ORDER):
         return False, f"Dimension Mismatch: Model expects {len(feature_names_from_bundle)} columns, code locks 198."
         

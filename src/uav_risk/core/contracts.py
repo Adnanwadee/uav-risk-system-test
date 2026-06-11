@@ -29,11 +29,9 @@ from uav_risk.ml.raw_schema import (
     SCENARIO_REQUIRED_RAW_FEATURES,
 )
 
-# إعداد محرك السجلات المركزي لطبقة العقود
 logger = logging.getLogger(__name__)
 
 def parse_flexible_float(v: Any) -> Optional[float]:
-    """يقبل قيماً نصية أو رقمية أو فارغة ويحولها بشكل آمن إلى float أو None."""
     if v is None:
         return None
     if isinstance(v, (float, int)):
@@ -50,7 +48,6 @@ def parse_flexible_float(v: Any) -> Optional[float]:
     return None
 
 def parse_flexible_bool(v: Any) -> Optional[bool]:
-    """محلل مرن وذكي للقيم المنطقية لحماية مدخلات واجهة المستخدم السيئة."""
     if v is None:
         return None
     if isinstance(v, bool):
@@ -200,7 +197,6 @@ class RawFeatureAssemblyResult(_RawStrictBase):
 
 
 class UAVSpecs(BaseModel):
-    """عقد مواصفات وهندسة الطائرة بدون طيار الحتمية والثنائية."""
     model_config = ConfigDict(extra="allow")
     
     mass_kg: FlexFloat = None
@@ -239,7 +235,6 @@ class UAVSpecs(BaseModel):
 
 
 class MissionParams(BaseModel):
-    """عقد معايير وتفاصيل المهمة ومسار الطيران والتحكم الديناميكي."""
     model_config = ConfigDict(extra="allow")
     
     altitude_m: FlexFloat = None
@@ -272,7 +267,6 @@ class MissionParams(BaseModel):
 
 
 class EnvironmentData(BaseModel):
-    """عقد بيانات المحيط البيئي والأرصاد الجوية والتشويش الكهرومغناطيسي."""
     model_config = ConfigDict(extra="allow")
     
     weather_wind_mps: FlexFloat = None
@@ -296,7 +290,6 @@ class EnvironmentData(BaseModel):
 
 
 class GPSData(BaseModel):
-    """عقد جودة واستقرار منظومة الملاحة الفضائية والإحداثيات الجغرافية."""
     model_config = ConfigDict(extra="allow")
     
     fix_quality: Optional[int] = None
@@ -308,7 +301,6 @@ class GPSData(BaseModel):
 
 
 class OperatorData(BaseModel):
-    """عقد ترخيص الطيار والقيود التشريعية للمجال الجوي والاتصالات والأسراب."""
     model_config = ConfigDict(extra="allow")
     
     license_type: Optional[str] = None
@@ -354,7 +346,6 @@ class OperatorData(BaseModel):
 
 
 class MasterFlightPayload(BaseModel):
-    """العقد المركزي الجامع الموحد لكافة المدخلات الحية والملفات الثانوية."""
     model_config = ConfigDict(extra="allow")
     
     flight_id: Optional[str] = None
